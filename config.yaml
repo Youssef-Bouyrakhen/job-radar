@@ -1,0 +1,292 @@
+# Job Radar settings. Restart the app after changing this file.
+# Personal values (your profile, your Gmail label, ...) go in config.local.yaml next to
+# this file: it is not in git, and everything in it overrides this file. Example:
+#   gemini:
+#     profile: |
+#       Computer science student at <your university> ...
+
+# How often every link is checked for new jobs.
+check_interval_minutes: 60
+
+# Built-in source: official job search of the Bundesagentur für Arbeit.
+# Every search is run for every location.
+arbeitsagentur:
+  enabled: true
+  searches:
+    - Werkstudent Informatik
+    - Werkstudent IT
+    - Werkstudent Software
+    - Werkstudent Entwickler
+    - Werkstudent Data
+  locations:
+    - Darmstadt
+    - Frankfurt am Main
+  radius_km: 25
+
+# Built-in source: job-alert emails (Indeed, StepStone, LinkedIn) from your Gmail.
+# Needs GMAIL_ADDRESS and GMAIL_APP_PASSWORD in .env (see README).
+# Job Radar ONLY opens this one label, read-only: it never reads other emails, never
+# marks emails as read, and never moves, changes or deletes anything.
+emails:
+  enabled: true
+  label: JobRadar               # your Gmail label (set your own in config.local.yaml)
+  # Look at alert emails from the last N days (each email is read only once).
+  days_back: 14
+  max_emails_per_check: 50
+
+# Layer 1 filter: decides which jobs show up in your job list.
+# Jobs that don't pass are still saved; you can see them under "Filtered out" in the dashboard.
+#
+# Keyword syntax:
+#   Software      the whole word only
+#   Software*     words starting with it  (Software, Softwareentwicklung)
+#   *entwickler   words ending with it    (Entwickler, Softwareentwickler)
+#   *informatik*  words containing it     (Informatik, Wirtschaftsinformatiker)
+#   Short words in CAPITALS (IT, KI, AI, SAP) only match in capitals, so IT never matches "mit".
+#
+# A job passes if:
+#   1. its title has none of the exclude_keywords, and
+#   2. it is a student / part-time job (a student keyword, or at most max_hours_per_week), and
+#   3. it is not full-time - unless it also says Werkstudent / Teilzeit, and
+#   4. it is IT-related (an IT keyword in the title, or at least
+#      min_it_words_in_description different IT keywords in the description).
+filter:
+  enabled: true
+  max_hours_per_week: 25
+  min_it_words_in_description: 2
+
+  student_keywords:
+    - Werkstudent*
+    - Working Student*
+    - Studentische* Hilfskraft
+    - Studentische* Mitarbeit*
+    - Studentische* Aushilfe*
+    - Student Assistant
+    - Student Worker
+    - Studentenjob*
+    - Teilzeit*
+    - Part-time
+    - Part time
+    - Parttime
+
+  it_keywords:
+    - IT
+    - "*informatik*"
+    - "*software*"
+    - "*entwickler*"
+    - Anwendungsentwicklung*
+    - Webentwicklung*
+    - Developer*
+    - Programmier*
+    - "*programmer*"
+    - Coding
+    - Data*
+    - "*daten*"
+    - Cloud*
+    - DevOps
+    - Backend*
+    - Frontend*
+    - Full Stack
+    - Fullstack
+    - Web*
+    - App
+    - Apps
+    - Python
+    - Java*
+    - TypeScript
+    - SQL
+    - KI
+    - AI
+    - Machine Learning
+    - Künstliche Intelligenz
+    - "*security*"
+    - Informationssicherheit
+    - Informationstechn*
+    - Business Intelligence
+    - BI
+    - Plattform*
+    - Platform*
+    - Cyber*
+    - "*netzwerk*"
+    - Network*
+    - System*
+    - Administrator*
+    - SAP
+    - Digital*
+    - Automatisierung*
+    - Automation
+    - Testing
+    - QA
+    - Tech
+    - Technolog*
+    - Engineering
+    - Software Engineer*
+
+  # Full-time signals. A job with one of these is dropped - unless it ALSO says
+  # Werkstudent / Teilzeit (a student keyword) or mentions at most max_hours_per_week.
+  fulltime_keywords:
+    - Vollzeit*
+    - Full-time
+    - Full time
+    - Fulltime
+    - 40 Stunden
+    - 40 Std*
+    - 40 h
+    - 40 hours
+    - 39 Stunden
+    - 38,5 Stunden
+
+  # Dropped if the TITLE contains one of these.
+  exclude_keywords:
+    - Senior*
+    - Head of
+    - Principal
+    - Director
+    - Teamleit*
+    - Team Lead*
+    - Abteilungsleit*
+    - Ausbildung*
+    - Azubi*
+    - Auszubildende*
+    - Duales Studium
+    - Dualer Student*
+    - Dual Student*
+    - Trainee*
+
+  # Dropped if the TITLE contains one of these and NOT also a student keyword
+  # (so "Praktikant / Werkstudent" stays, "Praktikum Software" goes).
+  exclude_unless_student_keywords:
+    - Praktik*
+    - Pflichtpraktik*
+    - Internship*
+    - Intern
+    - Abschlussarbeit*
+    - Masterarbeit*
+    - Bachelorarbeit*
+    - "*thesis"
+
+# Layer 2 filter: Google Gemini scores every job that passed the keyword filter (1-10).
+# Needs GEMINI_API_KEY in .env - without it, this part is skipped and all keyword matches are shown.
+gemini:
+  enabled: true
+  # A Gemini "Flash" model that is in the free tier. Tested on 2026-10-16:
+  # gemini-3.5-flash answers in ~2 s. (gemini-flash-latest was very slow at that time.)
+  model: gemini-3.5-flash
+  # How long the model "thinks" first: low = fast. Leave empty for the model's default.
+  thinking_level: low
+  # Jobs scoring below this go to "Low score" instead of your job list.
+  min_score: 7
+  # Jobs per request, and pause between requests (keeps us inside the free tier).
+  batch_size: 10
+  seconds_between_requests: 6
+  max_jobs_per_run: 40
+  # Load the full job ad before scoring if we only have a title / short teaser
+  # (so Gemini can e.g. check whether a "Vollzeit" label is real).
+  fetch_full_description: true
+  # Who you are - Gemini scores every job against this. Put your real profile in config.local.yaml.
+  profile: |
+    Computer science student at <your university>.
+    Looking for a Werkstudent (working student) job in IT / software.
+    Skills: <your skills>.
+    Can work at most 20 hours per week during the semester, so full-time jobs don't fit.
+    Can work in <your city> (and nearby), or remotely.
+    Languages: <your languages>.
+
+# Backup AI providers. When Gemini hits its limit (or Google's servers are busy), Job Radar
+# switches to Groq, then OpenRouter - same prompt, same 1-10 scores. Only providers with a
+# key in .env are used (GROQ_API_KEY, OPENROUTER_API_KEY). The rules above (min_score,
+# batch_size, profile, ...) apply to all of them.
+groq:
+  model: openai/gpt-oss-120b
+openrouter:
+  # Must be a free model (the name ends with ":free"), otherwise OpenRouter is skipped.
+  # Tested on 2026-10-16: laguna-s-2.1 scored correctly in ~4 s; free Gemma was overloaded.
+  model: poolside/laguna-s-2.1:free
+# Optional backups, only used if MISTRAL_API_KEY / CEREBRAS_API_KEY is in .env (same prompt, same scores)
+mistral:
+  model: mistral-small-latest
+cerebras:
+  model: gpt-oss-120b
+
+# AI requests per provider and day (counted by Job Radar; Settings shows used / left).
+# Set them to your free tier's limits. When a provider says its daily quota is gone,
+# it counts as used up until the next day (UTC).
+ai_budget:
+  daily_requests: {Gemini: 50, Groq: 50, OpenRouter: 50, Mistral: 300, Cerebras: 300}
+  # Priorities: 1. scoring jobs + Must apply blocker check (may use everything),
+  # 2. reading job lists / finding websites (stop when this % of today's requests is left),
+  # 3. categories, company sizes, Initiativ reasons (stop when this % is left)
+  keep_for_scoring: 30
+  keep_for_jobs: 60
+
+# Telegram: one message per good new job (score >= gemini.min_score, or every keyword
+# match if Gemini is off). Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env.
+# Jobs from the very first check of a newly added link are NOT sent (that would be a
+# flood); you find them in the dashboard.
+telegram:
+  enabled: true
+  # At most this many messages per round; the rest follow in the next round (5 min later).
+  max_messages_per_run: 15
+
+# 🔥 Must apply: a job goes in only if ALL are true (it leaves only when you mark it Applied or hide it)
+must_apply:
+  min_score: 8          # AI score at least this
+  max_days: 3           # posted in the last N days (no posting date: first seen); red after that if not applied
+  max_km: 30            # distance from `center` (remote / Homeoffice / Bundesweit always count)
+  center: Darmstadt     # one of companies.places
+  max_hours: 20         # Werkstudent, at most this many hours a week (if the ad says)
+  reminder_hours: 24    # one Telegram reminder after this long if not applied / hidden
+  # Low-competition sign (one is enough): the company's own careers page, a small / mid-size company,
+  # Werkstudent jobs from it before, or one of these categories
+  low_competition_categories: [insurance, finance, cloud, security]
+
+fetch:
+  # Seconds to wait before loading a page from the same website again (be polite).
+  delay_per_site_seconds: 5
+  # Shorter wait for official job feeds (Personio, Workday, ...), which are built for this.
+  delay_per_api_seconds: 2
+  # How long to wait for a website to answer.
+  timeout_seconds: 20
+  # If a normal download finds no jobs, try once more with a hidden Chrome browser
+  # (needed for pages that build their job list with JavaScript).
+  browser_fallback: true
+  browser_timeout_seconds: 90
+
+# Company Discovery Engine (Companies page)
+companies:
+  radius_km: 25
+  places:                        # name: [latitude, longitude]
+    Darmstadt: [49.8728, 8.6512]
+    Frankfurt am Main: [50.1109, 8.6821]
+  max_companies_per_run: 150     # websites + careers pages checked per run
+  workers: 6                     # companies checked at the same time (each site still max 1 request/s)
+  delay_per_site_seconds: 1
+  ai_batch_size: 25              # companies per AI request when looking up websites
+  # Phase B: jobs, fit score, auto-add, Initiativ list
+  max_job_reads_per_run: 120     # companies whose job list is read per run
+  recheck_after_days: 7          # read a company's jobs again after this long (never more than once a week)
+  max_ai_pages_per_run: 30       # job lists the AI reads per run (when there is no feed)
+  ai_seconds_between_requests: 12  # the free AI tiers also limit requests per minute
+  max_size_lookups_per_run: 200  # companies the AI sizes per run (40 per request)
+  max_auto_added_per_run: 10     # watched links added automatically per run
+  max_initiativ_reasons_per_run: 60
+  daily_run_hour: 3              # run discovery by itself once a day (German time); null = off
+  # Phase C
+  lookalikes_every_days: 7       # the daily run also asks the AI for look-alike companies this often (1 request)
+  max_lookalikes: 15             # look-alike companies asked for per request
+  import_max_ai_requests: 5      # AI requests to read the company names from one imported web page
+  weekly_summary:                # one Telegram message with the week's numbers; day: null = off
+    day: sun
+    hour: 19
+  # Categories (industry method): rules first, the AI only for unclear companies
+  max_category_ai_per_day: 2     # AI requests a night for categories (80 companies each, only companies with a careers page)
+  fit_bonus_categories: [insurance, finance, cloud]   # these categories get extra fit points
+  fit_category_bonus: 10
+  bank_postcodes: [60000, 65999]   # banks (head offices) from the Bundesbank bank code file
+  import_postcodes: [60000, 65999] # Import list: a pasted list WITH addresses (e.g. BaFin) keeps only these
+  category_searches:             # extra Arbeitsagentur searches (no AI); only IT jobs count
+    insurance: [Versicherung IT, Versicherung Informatik, Versicherung Daten]
+    finance: [Bank IT, Bank Informatik, Bank Daten, Finanz IT, Finanz Informatik, Finanz Daten]
+    cloud: [Rechenzentrum, Cloud, Netzwerk, Hosting, DevOps, Linux]
+    security: [IT-Sicherheit, Security, Pentest, SOC]
+    software: [Softwareentwicklung, IT-Dienstleister, Anwendungsentwicklung]

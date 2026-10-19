@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn>=0.29
+httpx>=0.27
+beautifulsoup4>=4.12
+PyYAML>=6.0
+python-dotenv>=1.0
+playwright>=1.44
+APScheduler>=3.10,<4
+pypdf>=4.0

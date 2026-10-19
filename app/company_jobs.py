@@ -1,0 +1,538 @@
+"""Company Discovery Engine, Phase B: read each company's jobs, rank the companies, act on them.
+
+1. Jobs: the applicant system's feed if there is one, else JobPosting structured data on the
+   page, else the AI reads the job list from the page text (only the job-related lines, to save
+   AI requests). Only jobs in the Darmstadt / Frankfurt area (or remote, or without a place) are
+   saved; they go through the normal flow: keyword filter, duplicates, AI score, Telegram.
+   The first time a company is read, its jobs don't go to Telegram (that would be a flood of
+   old jobs), except jobs posted in the last 7 days.
+2. Fit score (0-100): small / mid-size companies, distance, share of IT jobs, Werkstudent jobs
+   now or before (strong bonus), fresh jobs. Big companies get fewer points but stay visible.
+3. The best companies with good jobs become watched links (max 10 per run), marked "auto-added".
+4. Companies with IT jobs but no Werkstudent job go to the Initiativ list, with a one-line AI
+   reason why an Initiativbewerbung could fit you.
+"""
+import json
+import logging
+import re
+import threading
+import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
+from datetime import date, datetime, timedelta, timezone
+
+from bs4 import BeautifulSoup
+
+from . import ai, db, telegram
+from .config import CONFIG
+from .dedup import dedup_key
+from .discover import NEARBY, _is_known, _same, _watched_keys, _with_search, board_url, company_key
+from .extractors import Job, ats, clean, generic
+from .fetcher import fetch_polite
+from .filters import detect_hours, get_filter
+from .sources import check_url
+
+log = logging.getLogger("jobradar")
+
+FRESH_DAYS = 14         # "has fresh jobs" for the fit score
+NOTIFY_DAYS = 7         # on a company's first read, only jobs this new go to Telegram
+MAX_PART = 4000         # characters of a page sent to the AI
+# A real Werkstudent job. Stricter than the keyword filter, where "Teilzeit" also counts:
+# "Voll-/Teilzeit" senior jobs must not earn the Werkstudent bonus.
+WERKSTUDENT = re.compile(r"werk[\s-]*student|working student|studentische[nr]? (?:hilfskraft|mitarbeit|aushilfe)|"
+                         r"student assistant|studentenjob|student job|minijob f[üu]r studierende", re.I)
+MAX_JOBS = 150          # per company (Workday / SmartRecruiters return the newest 100 anyway)
+
+
+# ---- 1. reading the jobs -------------------------------------------------------------
+
+EXTRACT_SCHEMA = {
+    "type": "ARRAY",
+    "items": {"type": "OBJECT",
+              "properties": {"title": {"type": "STRING"}, "link": {"type": "INTEGER"},
+                             "location": {"type": "STRING"}, "employment": {"type": "STRING"}},
+              "required": ["title", "link", "location", "employment"]},
+}
+EXTRACT_PROMPT = """Below are the numbered links and the job-related text lines of the careers page of {company}.
+List the open job postings on this page.
+
+Rules:
+- Only real job postings listed here. Not menu items, "all jobs" buttons, benefits, events or blog posts.
+- title: the job title exactly as written.
+- link: the number of the link that opens this job ([3] -> 3), or 0 if there is none. Never make up links.
+- location and employment (e.g. Vollzeit, Teilzeit, Werkstudent): only if written next to the job, else "".
+- If the page lists no job postings, return [].
+
+{part}"""
+
+
+def _is_data(html: str) -> bool:
+    """A JSON or XML job list (e.g. d.vinci, rexx), not a web page."""
+    start = html.lstrip()[:5]
+    return start[:1] in "[{" or start.lower() == "<?xml"
+
+
+def relevant_part(html: str, page_url: str) -> tuple[str, list[str]]:
+    """The job-related links and lines of a page, numbered for the AI. ("", []) if nothing
+    on the page looks like a job, then the AI isn't asked at all."""
+    if _is_data(html):  # send the data as it is
+        return (html[:MAX_PART] if generic.JOB_WORD.search(html) else ""), []
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg", "header", "footer", "nav", "form"]):
+        tag.decompose()
+    links: list[str] = []
+    labels: list[str] = []
+    for a in soup.find_all("a", href=True):
+        label, url = clean(a.get_text(" "), 160), generic._resolve(a, page_url)
+        if (url and url not in links and len(label) >= 6 and label.lower() not in generic.NAV_TEXT
+                and (generic.GENDER.search(label) or generic.JOB_WORD.search(label))):
+            links.append(url)
+            labels.append(label)
+    lines = [clean(line, 200) for line in soup.get_text("\n").splitlines()]
+    lines = [line for line in lines if 3 <= len(line) <= 200]
+    keep = set()
+    for i, line in enumerate(lines):
+        if generic.GENDER.search(line) or generic.JOB_WORD.search(line):
+            keep |= {i - 1, i, i + 1, i + 2}  # the line around a title often has place / hours
+    text = [lines[i] for i in sorted(keep) if 0 <= i < len(lines)]
+    if not links and not text:
+        return "", []
+    part = "LINKS\n" + "\n".join(f"[{n}] {label}" for n, label in enumerate(labels, 1))
+    part += "\n\nTEXT\n" + "\n".join(dict.fromkeys(text))
+    return part[:MAX_PART], links
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:80]
+
+
+_last_ai = 0.0
+_ai_lock = threading.Lock()
+
+
+def _pace() -> None:
+    """The free AI tiers also limit requests and words per MINUTE: keep a gap between ours."""
+    global _last_ai
+    with _ai_lock:
+        wait = _last_ai + CONFIG["companies"]["ai_seconds_between_requests"] - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _last_ai = time.monotonic()
+
+
+def ai_extract(company: str, part: str, links: list[str], page_url: str) -> list[Job]:
+    _pace()
+    answer = ai.ask_json(EXTRACT_PROMPT.format(company=company, part=part), EXTRACT_SCHEMA, temperature=0.1, priority="jobs")
+    jobs, seen = [], set()
+    for a in answer if isinstance(answer, list) else []:
+        title = clean(a.get("title"))
+        if len(title) < 4 or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+        n = a.get("link")
+        # A job without its own link: the careers page itself, marked with the title (no made-up address)
+        url = links[n - 1] if isinstance(n, int) and 1 <= n <= len(links) else f"{page_url.split('#')[0]}#job-{_slug(title)}"
+        jobs.append(Job(title=title, url=url, company=company, location=clean(a.get("location")),
+                        employment=clean(a.get("employment"))))
+    return jobs[:MAX_JOBS]
+
+
+def read_without_ai(c: dict) -> dict:
+    """Feed or structured data. If neither works, returns the page part the AI should read."""
+    note = ""
+    if c["feed_url"] and (board := ats.detect(c["feed_url"])) and board.system in ats.FETCHERS:
+        try:
+            return {"jobs": ats.fetch_jobs(board, "")[:MAX_JOBS], "method": f"{board.system} feed"}
+        except Exception as e:
+            note = f"The {board.system} feed could not be read ({type(e).__name__})"
+    for url in dict.fromkeys(filter(None, [c["feed_url"], c["career_url"]])):
+        page = fetch_polite(url)
+        if not page.ok:
+            note = note or page.reason
+            continue
+        jobs = [] if _is_data(page.html) else generic._from_json_ld(BeautifulSoup(page.html, "html.parser"), page.url)
+        if jobs:
+            return {"jobs": jobs[:MAX_JOBS], "method": "Structured data (JobPosting)"}
+        part, links = relevant_part(page.html, page.url)
+        if part:
+            return {"ai_part": part, "ai_links": links, "page_url": page.url}
+        note = note or "The careers page shows no job titles (maybe they load with JavaScript)"
+    return {"jobs": [], "method": None, "note": note or "No careers page to read"}
+
+
+# ---- 2. saving them through the normal job flow ----------------------------------------
+
+def _posted_days(job: Job) -> int | None:
+    if not job.posted:
+        return None
+    try:
+        day = datetime.fromisoformat(job.posted).date() if "T" in job.posted else date.fromisoformat(job.posted[:10])
+    except ValueError:
+        return None
+    return (date.today() - day).days
+
+
+def save_jobs(c: dict, jobs: list[Job], first_read: bool) -> tuple[dict, list[dict]]:
+    """Run the jobs through filter + duplicates and save the ones in the area.
+    Returns (the company's job numbers, the new jobs)."""
+    jf = get_filter()
+    stats = Counter(total=len(jobs))
+    it_titles, rows = [], []
+    elsewhere, filtered = Counter(), Counter()  # for good_note: where the other jobs are, why they failed
+    for j in jobs:
+        if not j.url or not j.title:
+            continue
+        if not j.company or (j.company == j.company.lower() and " " not in j.company):  # "360t", a feed's id
+            j.company = c["name"]
+        days = _posted_days(j)
+        stats["fresh"] += days is not None and days <= FRESH_DAYS
+        if j.location and not NEARBY.search(j.location):
+            elsewhere[clean(j.location, 30)] += 1
+            continue
+        head = f"{j.title} | {j.employment}"
+        is_it = bool(jf.it.find(head)) or len(jf.it.find_all(j.description)) >= jf.min_it_words_in_description
+        verdict = jf.check(j.title, j.employment, j.description)
+        hours = detect_hours(f"{head} | {j.description}")
+        student = bool(WERKSTUDENT.search(head)) or bool(hours and hours.high <= jf.max_hours)
+        stats["near"] += 1
+        stats["it"] += is_it
+        stats["student"] += student
+        stats["good"] += verdict.passed and student  # a Werkstudent / part-time job that passes your filter
+        if student and not verdict.passed:
+            filtered[verdict.reason] += 1
+        if is_it and len(it_titles) < 5:
+            it_titles.append(j.title)
+        rows.append({**asdict(j), "dedup_key": dedup_key(j.title, j.company), "hours": verdict.hours,
+                     "filter_passed": verdict.passed, "filter_reason": verdict.reason,
+                     "baseline": first_read and not (days is not None and days <= NOTIFY_DAYS)})
+    source = {"id": None, "name": f"{c['name']} (Companies)", "url": c["career_url"] or ""}
+    new = db.insert_new_jobs(source, rows, baseline=False)
+    fields = {"jobs_total": stats["total"], "jobs_near": stats["near"], "it_jobs": stats["it"],
+              "student_jobs": stats["student"], "good_jobs": stats["good"], "fresh_jobs": stats["fresh"],
+              "it_titles": json.dumps(it_titles, ensure_ascii=False),
+              "good_note": good_note(stats, elsewhere, filtered)}
+    return fields, new
+
+
+def good_note(stats: Counter, elsewhere: Counter, filtered: Counter) -> str:
+    """Why a company's jobs are (not) good, e.g. "1 good · 1 Werkstudent job filtered out
+    (Not IT-related) · 3 not Werkstudent / part-time · 4 outside the area (Dortmund, Berlin)"."""
+    top = lambda counter: ", ".join(k for k, _ in counter.most_common(2))
+    not_student = stats["near"] - stats["student"]
+    parts = [f"{stats['good']} good"]
+    if filtered:
+        parts.append(f"{sum(filtered.values())} Werkstudent job{'s' * (sum(filtered.values()) > 1)} "
+                     f"filtered out ({top(filtered)})")
+    if not_student:
+        parts.append(f"{not_student} not Werkstudent / part-time")
+    if elsewhere:
+        parts.append(f"{sum(elsewhere.values())} outside the area ({top(elsewhere)})")
+    return " · ".join(parts)
+
+
+# ---- 3. fit score ----------------------------------------------------------------------
+
+def student_history(rows: list[dict]) -> dict[int, int]:
+    """{company id: Werkstudent jobs from it in your job history} (any source, also old ones)."""
+    from .companies import clean_name  # companies imports this module
+    keys = Counter(company_key(clean_name(co)) for co, title in db.employer_titles() if WERKSTUDENT.search(title))
+    by_prefix: dict[str, list[str]] = {}
+    for k in keys:
+        by_prefix.setdefault(k[:5], []).append(k)
+    found = {}
+    for c in rows:
+        n = keys.get(c["name_key"], 0) + sum(keys[k] for k in by_prefix.get(c["name_key"][:5], [])
+                                             if k != c["name_key"] and _same(k, c["name_key"]))
+        if n:
+            found[c["id"]] = n
+    return found
+
+
+SIZE_SCHEMA = {
+    "type": "ARRAY",
+    "items": {"type": "OBJECT",
+              "properties": {"id": {"type": "INTEGER"},
+                             "size": {"type": "STRING", "enum": ["big", "mid", "small", "unknown"]}},
+              "required": ["id", "size"]},
+}
+SIZE_PROMPT = """How big is each of these employers (in or near Darmstadt / Frankfurt am Main, Germany)?
+- big: more than about 1,000 employees, or a well-known national / international brand
+- mid: about 50 to 1,000 employees
+- small: fewer than about 50 employees
+- unknown: you don't know this company. Don't guess.
+Answer for each company by its number.
+
+{companies}
+"""
+
+
+def ai_sizes(rows: list[dict], limit: int) -> int:
+    """Ask the AI how big companies are (40 per request): famous names must not look "small"
+    just because they have few Arbeitsagentur ads. Companies with a careers page first."""
+    todo = sorted((c for c in rows if not c["size_ai"] and c["size_hint"] != "staffing agency"),
+                  key=lambda c: (not c["career_url"], -sum(json.loads(c["sources"] or "{}").values())))[:limit]
+    found = 0
+    for i in range(0, len(todo), 40):
+        batch = todo[i:i + 40]
+        lines = "\n".join(f"{n}. {c['name']}" + (f" ({c['website']})" if c["website"] else "")
+                          for n, c in enumerate(batch, 1))
+        _pace()
+        try:
+            answer = ai.ask_json(SIZE_PROMPT.format(companies=lines), SIZE_SCHEMA, temperature=0.1, priority="low")
+        except (ai.RateLimited, ai.Overloaded):
+            break
+        for a in answer if isinstance(answer, list) else []:
+            n = a.get("id")
+            if isinstance(n, int) and 1 <= n <= len(batch) and a.get("size") in ("big", "mid", "small", "unknown"):
+                db.update_company(batch[n - 1]["id"], {"size_ai": a["size"]})
+                found += 1
+    return found
+
+
+def size_of(c: dict) -> str | None:
+    """staffing agency / big / mid / small, or None if unknown."""
+    if c["size_hint"] == "staffing agency":
+        return "staffing agency"
+    if (c["jobs_total"] or 0) >= 40 or c["size_ai"] == "big":
+        return "big"
+    if c["size_ai"] in ("mid", "small"):
+        return c["size_ai"]
+    return c["size_hint"]  # from its number of Arbeitsagentur IT ads: big / mid / None
+
+
+def fit(c: dict) -> tuple[int, str]:
+    score, why = 0, []
+    size = size_of(c)
+    if size == "staffing agency":
+        score -= 20
+        why.append("staffing agency")
+    elif size == "big":
+        why.append("big company")
+    elif size == "mid":
+        score += 15
+        why.append("mid-size")
+    elif size == "small":
+        score += 20
+        why.append("small company")
+    else:
+        score += 10
+        why.append("size unknown")
+    d = c["distance_km"]
+    if d is None:
+        score += 5
+    else:
+        score += 20 if d <= 5 else 15 if d <= 15 else 8 if d <= 30 else 0
+        why.append(f"{round(d)} km away")
+    if c["jobs_near"]:
+        share = (c["it_jobs"] or 0) / c["jobs_near"]
+        score += round(20 * share)
+        why.append(f"{share:.0%} IT jobs")
+    if c["student_jobs"]:
+        score += 30
+        why.append("Werkstudent jobs now")
+    elif c["student_history"]:
+        score += 30
+        why.append("posted Werkstudent jobs before")
+    if c["fresh_jobs"]:
+        score += 10
+        why.append("fresh jobs")
+    if c.get("category") in CONFIG["companies"]["fit_bonus_categories"]:
+        score += CONFIG["companies"]["fit_category_bonus"]
+        why.append({"insurance": "insurance", "finance": "bank / finance", "cloud": "cloud / data center",
+                    "security": "cybersecurity"}.get(c["category"], c["category"]))
+    return max(0, min(100, score)), " · ".join(why)
+
+
+# ---- 4. auto-adding watched links --------------------------------------------------------
+
+def link_urls(c: dict) -> list[str]:
+    """Addresses to watch, best first: the applicant system's job list (searching for Werkstudent
+    on big Workday / SmartRecruiters boards, then without), else the page."""
+    board = ats.detect(c["feed_url"] or "")
+    if board and board.system in ats.FETCHERS and (url := board_url(board)):
+        return list(dict.fromkeys([_with_search(url), url]))
+    return [u for u in (c["feed_url"] or c["career_url"],) if u]
+
+
+def auto_add(rows: list[dict], limit: int, progress: dict) -> int:
+    watched = _watched_keys()
+    candidates = sorted((c for c in rows if c["good_jobs"] and c["status"] == "new"),
+                        key=lambda c: (-(c["fit_score"] or 0), -c["good_jobs"]))
+    added = 0
+    for c in candidates:
+        if added >= limit:
+            break
+        urls = link_urls(c)
+        if not urls:
+            continue
+        if _is_known(c["name_key"], watched) or any(db.find_link_by_url(u) for u in urls):
+            db.update_company(c["id"], {"status": "watched"})
+            continue
+        progress["step"] = f"Testing {c['name']} as a watched link…"
+        for url in urls:  # only add a link the normal hourly check can read
+            result = check_url(url, browser=False)
+            if result.status == "green":
+                break
+        if result.status != "green":
+            db.update_company(c["id"], {"jobs_note": f"Not auto-added: the hourly link check can't read "
+                                                     f"this page ({result.reason})"})
+            continue
+        link_id = db.add_link(url, name=c["name"])
+        db.mark_auto_added(link_id)
+        db.update_company(c["id"], {"status": "watched", "link_id": link_id})
+        log.info("Companies: auto-added %s as a watched link (%s)", c["name"], url)
+        added += 1
+    return added
+
+
+# ---- 5. the Initiativ list ---------------------------------------------------------------
+
+REASON_SCHEMA = {
+    "type": "ARRAY",
+    "items": {"type": "OBJECT", "properties": {"id": {"type": "INTEGER"}, "reason": {"type": "STRING"}},
+              "required": ["id", "reason"]},
+}
+REASON_PROMPT = """THE PERSON
+{profile}
+
+These companies near Darmstadt / Frankfurt have IT jobs open, but no Werkstudent job right now,
+so the person could send an unsolicited application (Initiativbewerbung).
+For each company (by its number) write ONE short English sentence (max 20 words) on why it could
+fit the person, based on its IT jobs. Concrete, no flattery, no made-up facts.
+
+{companies}
+"""
+
+
+def initiativ_reasons(rows: list[dict], limit: int) -> int:
+    # Also companies you put on the list yourself, as long as their IT jobs are known
+    todo = [c for c in rows if c["status"] == "initiativ" and not c["initiativ_reason"]
+            and json.loads(c["it_titles"] or "[]")][:limit]
+    written = 0
+    for i in range(0, len(todo), 20):
+        batch = todo[i:i + 20]
+        lines = "\n".join(
+            f"{n}. {c['name']} ({c['city'] or 'near Frankfurt'}"
+            + (f", {round(c['distance_km'])} km" if c["distance_km"] is not None else "")
+            + f"): IT jobs: {'; '.join(json.loads(c['it_titles'] or '[]')[:4])}" for n, c in enumerate(batch, 1))
+        _pace()
+        try:
+            answer = ai.ask_json(REASON_PROMPT.format(profile=ai.settings()["profile"].strip(), companies=lines),
+                                 REASON_SCHEMA, temperature=0.3, priority="low")
+        except (ai.RateLimited, ai.Overloaded):
+            break
+        for a in answer if isinstance(answer, list) else []:
+            n = a.get("id")
+            if isinstance(n, int) and 1 <= n <= len(batch) and a.get("reason"):
+                db.update_company(batch[n - 1]["id"], {"initiativ_reason": clean(a["reason"], 200)})
+                written += 1
+    return written
+
+
+# ---- the Phase B part of a run -----------------------------------------------------------
+
+NEARBY_RULE = "2"  # bump when NEARBY counts more places: companies with jobs "outside the area" are read again once
+
+
+def reread_after_area_change() -> int:
+    """One-time exception to the once-a-week rule: jobs outside the old area (e.g. "Bundesweit")
+    were never saved, so those companies are read again in this run."""
+    if db.get_setting("nearby_rule") == NEARBY_RULE:
+        return 0
+    todo = [c for c in db.company_rows() if c["jobs_read_at"] and (c["jobs_total"] or 0) > (c["jobs_near"] or 0)]
+    for c in todo:  # read again like the first time: old jobs found now don't go to Telegram
+        db.update_company(c["id"], {"jobs_read_at": None})
+    db.set_setting("nearby_rule", NEARBY_RULE)
+    log.info("Companies: %d companies had jobs outside the area: their jobs are read again once", len(todo))
+    return len(todo)
+
+
+def companies_to_read(limit: int, ids: set[int] | None = None) -> list[dict]:
+    """Companies with a careers page whose jobs weren't read in the last week; never read first.
+    ids: only these (an imported list, look-alikes)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(7, CONFIG["companies"]["recheck_after_days"]))  # never more often
+    rows = [c for c in db.company_rows() if c["career_url"] and c["status"] != "skipped"
+            and (ids is None or c["id"] in ids)
+            and (not c["jobs_read_at"] or datetime.fromisoformat(c["jobs_read_at"]) < cutoff)]
+    return sorted(rows, key=lambda c: (c["jobs_read_at"] or "", -(c["fit_score"] or 0)))[:limit]
+
+
+def run(progress: dict, ids: set[int] | None = None) -> None:
+    cfg = CONFIG["companies"]
+    todo = companies_to_read(cfg["max_job_reads_per_run"], ids)
+    progress.update(step="Reading job lists…", done=0, total=len(todo))
+    results: dict[int, dict] = {}
+
+    def read(c: dict) -> None:
+        try:
+            results[c["id"]] = read_without_ai(c)
+        except Exception as e:
+            log.warning("Companies: reading jobs of %s failed (%s)", c["name"], e)
+            results[c["id"]] = {"jobs": [], "method": None, "note": f"Reading failed: {e}"[:300]}
+        progress["done"] += 1
+
+    with ThreadPoolExecutor(cfg["workers"]) as pool:
+        list(pool.map(read, todo))
+
+    ai_budget = cfg["max_ai_pages_per_run"] if ai.enabled() else 0
+    new_good = 0
+    progress.update(step="Saving jobs…", done=0)
+    for c in todo:
+        r = results[c["id"]]
+        if "ai_part" in r:
+            if ai_budget <= 0:
+                continue  # read again next run, when there are AI requests left
+            ai_budget -= 1
+            progress["step"] = f"The AI reads the job list of {c['name']}…"
+            try:
+                r = {"jobs": ai_extract(c["name"], r["ai_part"], r["ai_links"], r["page_url"]), "method": "AI from page text"}
+            except (ai.RateLimited, ai.Overloaded) as e:
+                ai_budget = 0
+                progress["warnings"].append(ai.stop_note(e, "some job lists will be read next run"))
+                continue
+        fields, new = save_jobs(c, r["jobs"], first_read=not c["jobs_read_at"])
+        db.save_company_check(c["id"], {**fields, "jobs_method": r.get("method"), "jobs_note": r.get("note")},
+                              stamp="jobs_read_at")
+        new_good += sum(1 for j in new if j["filter_passed"])
+        progress["jobs_read"] += 1
+        progress["new_jobs"] += len(new)
+        progress["done"] += 1
+    log.info("Companies: read %d job lists, %d new jobs (%d match your filter)",
+             progress["jobs_read"], progress["new_jobs"], new_good)
+
+    mine = lambda rows: [c for c in rows if ids is None or c["id"] in ids]  # an import: AI only for its companies
+    if ai.enabled():
+        progress["step"] = "Asking the AI how big the companies are…"
+        ai_sizes(mine(db.company_rows()), cfg["max_size_lookups_per_run"])
+    rank(progress)
+    progress["auto_added"] = auto_add(db.company_rows(), cfg["max_auto_added_per_run"], progress)
+    if ai.enabled():
+        progress["step"] = "Writing Initiativ reasons…"
+        initiativ_reasons(mine(db.company_rows()), cfg["max_initiativ_reasons_per_run"])
+    if new_good:  # scored first, then sent to Telegram (like jobs from watched links)
+        if ai.enabled():
+            ai.score_in_background()
+        else:
+            telegram.notify_in_background()
+
+
+def rank(progress: dict) -> None:
+    """Fit score for every company, and the Initiativ list."""
+    progress["step"] = "Ranking companies…"
+    rows = db.company_rows()
+    history = student_history(rows)
+    for c in rows:
+        c["student_history"] = history.get(c["id"], 0)
+        c["fit_score"], c["fit_reasons"] = fit(c)
+        fields = {"student_history": c["student_history"], "fit_score": c["fit_score"], "fit_reasons": c["fit_reasons"]}
+        # Initiativ: IT jobs, but no Werkstudent job now or before. Back out of it once it posts one.
+        if c["status_by"] == "engine":
+            if c["status"] == "new" and c["it_jobs"] and not c["student_jobs"] and not c["student_history"] \
+                    and size_of(c) != "staffing agency":
+                fields["status"] = c["status"] = "initiativ"
+                fields["initiativ_at"] = db.now()
+                progress["initiativ"] += 1
+            elif c["status"] == "initiativ" and (c["student_jobs"] or c["student_history"]):
+                fields["status"] = c["status"] = "new"
+        db.update_company(c["id"], fields)

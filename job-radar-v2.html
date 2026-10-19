@@ -1,0 +1,992 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Radar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --canvas: #e9e9ea; --side: #f7f7f7; --panel: #ffffff;
+  --border: #ececec; --border-strong: #e1e1e3; --hover: #f7f7f8; --active: #ececed;
+  --text: #171717; --muted: #737373; --faint: #a3a3a3;
+  --accent: #ea580c; --accent-soft: #fff1e8;
+  --good: #16a34a; --maybe: #d97706; --weak: #a3a3a3; --danger: #dc2626;
+  --primary-bg: #171717; --primary-fg: #ffffff;
+  --btn-shadow: 0 1px 2px rgba(0, 0, 0, .04);
+  --skeleton: #efefef; --skeleton-hi: #f8f8f8;
+  --toast-bg: #171717; --toast-fg: #ffffff; --toast-accent: #fdba74;
+  --av-l: 93%; --av-s: 70%; --av-fg-l: 34%;
+  --font: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #080809; --side: #121214; --panel: #18181a;
+  --border: #252528; --border-strong: #303034; --hover: #1e1e21; --active: #26262a;
+  --text: #ededee; --muted: #9b9ba1; --faint: #6c6c72;
+  --accent: #fb7a37; --accent-soft: rgba(251, 122, 55, .12);
+  --good: #4ade80; --maybe: #fbbf24; --weak: #6c6c72; --danger: #f87171;
+  --primary-bg: #ededee; --primary-fg: #121214;
+  --btn-shadow: none; --skeleton: #222225; --skeleton-hi: #2c2c30;
+  --toast-bg: #ededee; --toast-fg: #121214; --toast-accent: #c2410c;
+  --av-l: 22%; --av-s: 35%; --av-fg-l: 78%;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--canvas); color: var(--text);
+  font-family: var(--font); font-size: 14px; -webkit-font-smoothing: antialiased;
+}
+button { font-family: inherit; color: inherit; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+svg { flex: none; }
+[hidden] { display: none !important; }
+
+.app { position: relative; flex: 1; min-height: 0; width: 100%; container-type: inline-size; container-name: app; overflow: hidden; }
+.shell { display: flex; gap: 12px; height: 100%; padding: 12px; }
+
+/* Sidebar */
+.sidebar { flex: none; width: 236px; display: flex; flex-direction: column; padding: 22px 12px 12px; border-radius: 22px; background: var(--side); border: 1px solid var(--border); }
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 22px; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.logo { width: 28px; height: 28px; color: var(--accent); }
+.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav-section { padding: 14px 12px 6px; font-size: 12px; font-weight: 500; color: var(--faint); }
+.nav-item { display: flex; align-items: center; gap: 12px; width: 100%; height: 38px; padding: 0 12px; border: 0; border-radius: 10px; background: none; cursor: pointer; color: var(--muted); font-size: 14px; font-weight: 500; text-align: left; }
+.nav-item svg { width: 18px; height: 18px; }
+.nav-item:hover { background: var(--hover); color: var(--text); }
+.nav-item.is-active { background: var(--active); color: var(--text); }
+.nav-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nav-count { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.nav-item.is-active .nav-count { color: var(--muted); }
+.nav-item[data-view="best"] .nav-count { color: var(--accent); font-weight: 600; }
+
+.side-foot { margin-top: auto; padding: 12px; border-radius: 14px; background: var(--panel); border: 1px solid var(--border); }
+.status-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
+.is-checking .status-dot { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+.is-checking { color: var(--text) !important; }
+.is-offline .status-dot { background: var(--weak); }
+@keyframes pulse { 50% { opacity: .25; transform: scale(.7); } }
+
+.tg-row { display: flex; align-items: center; gap: 10px; width: 100%; margin-top: 10px; padding: 0; border: 0; background: none; cursor: pointer; font-size: 13px; font-weight: 500; text-align: left; }
+.tg-row svg { width: 16px; height: 16px; color: var(--muted); }
+.switch { position: relative; width: 30px; height: 18px; border-radius: 999px; background: var(--border-strong); transition: background .15s; flex: none; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: transform .15s; }
+.tg-on .switch, .switch.is-on { background: var(--accent); }
+.tg-on .switch::after, .switch.is-on::after { transform: translateX(12px); }
+button.switch { border: 0; padding: 0; cursor: pointer; }
+
+/* Main */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; container-type: inline-size; container-name: main; background: var(--panel); border: 1px solid var(--border); border-radius: 22px; overflow: hidden; }
+.mobile-bar { display: none; }
+.toolbar { display: flex; align-items: center; gap: 8px; padding: 16px 20px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+.toolbar::-webkit-scrollbar { display: none; }
+.tb-spacer { flex: 1; }
+.tb-status { display: none; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.tbtn { flex: none; display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: var(--btn-shadow); cursor: pointer; font-size: 14px; font-weight: 500; white-space: nowrap; }
+.tbtn:hover { background: var(--hover); }
+.tbtn svg { width: 17px; height: 17px; color: var(--muted); }
+.tbtn.is-active { background: var(--active); border-color: var(--border-strong); }
+.tbtn--icon { width: 38px; padding: 0; justify-content: center; }
+.tbtn.is-spinning svg { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.tb-group { display: flex; gap: 6px; }
+
+.main-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.page-head { padding: 22px 20px 16px; }
+.page-title { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+.summary { display: flex; flex-wrap: wrap; margin-top: 4px; font-size: 13.5px; color: var(--muted); min-height: 20px; }
+.summary > span + span::before { content: "·"; margin: 0 8px; color: var(--faint); }
+.summary strong { color: var(--text); font-weight: 600; }
+.demo-note { color: var(--maybe); }
+.mobile-views { display: none; }
+
+/* Table */
+.table-head, .job-row { display: grid; grid-template-columns: minmax(0, 1fr) 172px 220px 150px 150px; align-items: center; }
+.table-head { position: sticky; top: 0; z-index: 4; background: var(--panel); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.th { padding: 0 12px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
+.th-search { padding: 10px 16px 10px 20px; border-right: 1px solid var(--border); align-self: stretch; display: flex; align-items: center; }
+.search { position: relative; flex: 1; display: flex; align-items: center; }
+.search > svg { position: absolute; left: 0; width: 19px; height: 19px; color: var(--muted); pointer-events: none; }
+.search-input { width: 100%; height: 38px; padding: 0 56px 0 30px; border: 0; background: none; color: var(--text); font: inherit; font-size: 14.5px; }
+.search-input::placeholder { color: var(--muted); }
+.search-input:focus { outline: none; }
+.kbd { position: absolute; right: 0; display: inline-flex; align-items: center; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; color: var(--faint); background: var(--panel); }
+
+.job { border-bottom: 1px solid var(--border); transition: opacity .18s, transform .18s; }
+.job.is-leaving { opacity: 0; transform: translateX(10px); }
+.job-row { min-height: 84px; cursor: pointer; }
+.job-row:hover, .job.is-open .job-row { background: var(--hover); }
+.job.is-focused .job-row { box-shadow: inset 3px 0 0 var(--accent); }
+.job.is-old .job-title, .job.is-old .avatar { opacity: .6; }
+
+.cell { padding: 14px 12px; min-width: 0; }
+.cell-who { display: flex; align-items: center; gap: 14px; align-self: stretch; padding: 14px 18px 14px 20px; border-right: 1px solid var(--border); }
+.avatar { flex: none; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: hsl(var(--h) var(--av-s) var(--av-l)); color: hsl(var(--h) 55% var(--av-fg-l)); font-size: 13px; font-weight: 600; letter-spacing: .02em; }
+.who-text { min-width: 0; flex: 1; }
+.job-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.job-title { margin: 0; font-size: 15px; font-weight: 500; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job.is-open .job-title { white-space: normal; }
+.new-mark { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--accent); }
+.new-mark::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.status-tag { flex: none; padding: 1px 7px; border-radius: 6px; background: var(--active); font-size: 11.5px; font-weight: 500; color: var(--muted); }
+.job-sub { margin-top: 2px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub-place, .sub-age { display: none; }
+.job-reason { margin: 3px 0 0; font-size: 13px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.chip { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 40px; padding: 0 14px 0 20px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); font-size: 13.5px; white-space: nowrap; overflow: hidden; }
+.chip::before { content: ""; position: absolute; left: 8px; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--bar, var(--border-strong)); }
+.chip--good { --bar: var(--good); }
+.chip--maybe { --bar: var(--maybe); }
+.chip--weak { --bar: var(--weak); }
+.chip--old { --bar: var(--maybe); color: var(--muted); }
+.chip--error { --bar: var(--danger); color: var(--muted); }
+.chip--muted { color: var(--muted); }
+.chip--pending .chip-text { color: var(--muted); }
+.chip--pending::before { animation: pulse 1s ease-in-out infinite; background: var(--accent); }
+.chip--warn-hours { --bar: var(--danger); }
+.score-num { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.chip--good .score-num { color: var(--good); }
+.chip--maybe .score-num { color: var(--maybe); }
+.chip--weak .score-num { color: var(--muted); }
+.score-of { color: var(--faint); font-size: 12px; margin-left: -3px; }
+.score-label { color: var(--muted); }
+.chip-text { overflow: hidden; text-overflow: ellipsis; }
+
+.cell-actions { display: flex; justify-content: flex-end; gap: 2px; padding-right: 16px; opacity: 0; transition: opacity .12s; }
+.job-row:hover .cell-actions, .job:focus-within .cell-actions, .job.is-focused .cell-actions, .job.is-open .cell-actions { opacity: 1; }
+@media (hover: none) { .cell-actions { opacity: 1; } }
+.act { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 9px; background: none; color: var(--muted); cursor: pointer; }
+.act:hover { background: var(--active); color: var(--text); }
+.act.is-on { color: var(--accent); }
+.act svg { width: 17px; height: 17px; }
+
+.job-details { display: none; padding: 4px 20px 20px 72px; background: var(--hover); }
+.job.is-open .job-details { display: block; }
+.details-reason { position: relative; margin: 0 0 14px; padding: 12px 16px 12px 24px; max-width: 720px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); font-size: 14px; line-height: 1.55; }
+.details-reason::before { content: ""; position: absolute; left: 10px; top: 12px; bottom: 12px; width: 3px; border-radius: 3px; background: var(--accent); }
+.details-label { display: block; margin-bottom: 3px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.details-facts { display: flex; flex-wrap: wrap; gap: 6px 24px; margin-bottom: 14px; font-size: 13px; color: var(--muted); }
+.details-facts b { color: var(--text); font-weight: 500; }
+.details-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 36px; padding: 0 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); box-shadow: var(--btn-shadow); font-size: 13.5px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.btn:hover { background: var(--active); }
+.btn svg { width: 16px; height: 16px; }
+.btn--primary { background: var(--primary-bg); color: var(--primary-fg); border-color: transparent; }
+.btn--primary:hover { background: var(--primary-bg); opacity: .88; }
+.btn.is-on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.btn--danger { color: var(--danger); }
+.btn--sm { height: 32px; padding: 0 12px; font-size: 13px; border-radius: 10px; }
+.btn[disabled] { opacity: .6; cursor: wait; }
+
+.skel-row { display: flex; align-items: center; gap: 14px; min-height: 84px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+.skel { border-radius: 6px; background: linear-gradient(90deg, var(--skeleton) 0%, var(--skeleton-hi) 50%, var(--skeleton) 100%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+.skel-av { width: 38px; height: 38px; border-radius: 50%; flex: none; }
+.skel-lines { flex: 1; }
+.skel-line { height: 11px; }
+.skel-line + .skel-line { margin-top: 9px; }
+.skel-chip { width: 120px; height: 40px; border-radius: 11px; flex: none; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+.empty { padding: 72px 24px; text-align: center; }
+.empty-icon { width: 48px; height: 48px; margin: 0 auto 16px; display: grid; place-items: center; border-radius: 14px; background: var(--accent-soft); color: var(--accent); }
+.empty-icon svg { width: 24px; height: 24px; }
+.empty-title { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+.empty-text { margin: 0 0 18px; font-size: 13.5px; color: var(--muted); }
+
+/* Watched links + settings */
+.add-bar { display: flex; gap: 8px; margin: 0 20px 6px; }
+.add-input { flex: 1; min-width: 0; height: 40px; padding: 0 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); font: inherit; font-size: 14px; }
+.add-input::placeholder { color: var(--faint); }
+.add-input:focus { outline: none; border-color: var(--accent); }
+.add-error { margin: 0 20px 12px; min-height: 18px; font-size: 12.5px; color: var(--danger); }
+.list-panel { margin: 0 20px 20px; border: 1px solid var(--border); border-radius: 14px; }
+.list-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; }
+.list-row + .list-row { border-top: 1px solid var(--border); }
+.list-main { display: flex; align-items: flex-start; gap: 12px; min-width: 0; flex: 1; }
+.link-dot { width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; flex: none; background: var(--weak); }
+.link-dot--ok { background: var(--good); }
+.link-dot--warn { background: var(--maybe); }
+.link-dot--error { background: var(--danger); }
+.list-title { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.list-sub { margin-top: 2px; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.list-msg { margin-top: 6px; font-size: 12.5px; color: var(--text); }
+.list-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; }
+.list-chips .chip { height: 32px; font-size: 12.5px; }
+.is-paused .list-title, .is-paused .list-sub { opacity: .55; }
+.profile-text { max-width: 520px; font-size: 12.5px; color: var(--muted); line-height: 1.55; white-space: pre-line; text-align: right; }
+
+.shortcuts { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 16px 20px 28px; font-size: 12px; color: var(--faint); }
+.shortcuts span { display: inline-flex; align-items: center; gap: 4px; }
+.shortcuts kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border: 1px solid var(--border); border-radius: 6px; font: 500 11px var(--font); color: var(--muted); }
+
+.toast { position: absolute; left: 50%; bottom: 28px; z-index: 30; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px); padding: 8px 8px 8px 16px; border-radius: 12px; background: var(--toast-bg); color: var(--toast-fg); font-size: 13.5px; box-shadow: 0 10px 30px rgba(0,0,0,.2); opacity: 0; transform: translate(-50%, 12px); pointer-events: none; transition: opacity .18s, transform .18s; }
+.toast.is-visible { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.toast-msg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 5px 0; }
+.toast-action { flex: none; border: 0; background: none; cursor: pointer; padding: 5px 10px; border-radius: 8px; color: var(--toast-accent); font-size: 13.5px; font-weight: 600; }
+
+@container app (max-width: 1000px) and (min-width: 641px) {
+  .sidebar { width: 68px; padding: 22px 10px 12px; align-items: center; }
+  .brand { padding: 0 0 22px; }
+  .brand-name, .nav-label, .nav-count, .nav-section, .status-line { display: none; }
+  .nav-item { width: 46px; height: 46px; justify-content: center; padding: 0; border-radius: 13px; }
+  .nav-item svg { width: 20px; height: 20px; }
+  .side-foot { padding: 8px; background: none; border: 0; }
+  .tg-row { margin: 0; justify-content: center; }
+  .tg-row .tg-label { display: none; }
+  .tb-status { display: flex; }
+}
+@container main (max-width: 900px) {
+  .table-head, .job-row { grid-template-columns: minmax(0, 1fr) 150px 120px 144px; }
+  .th-place, .cell-place { display: none; }
+  .sub-place { display: inline; }
+}
+@container app (max-width: 640px) {
+  .shell { padding: 0; gap: 0; }
+  .sidebar { display: none; }
+  .main { border: 0; border-radius: 0; }
+  .mobile-bar { display: flex; align-items: center; gap: 10px; padding: 18px 16px 6px; }
+  .mobile-bar .brand { padding: 0; flex: 1; font-size: 17px; }
+  .mobile-bar .tg-mini { position: relative; width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); cursor: pointer; }
+  .tg-mini svg { width: 17px; height: 17px; color: var(--muted); }
+  .tg-mini::after { content: ""; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--weak); }
+  .tg-mini.tg-on::after { background: var(--good); }
+  .toolbar { padding: 10px 16px; border-bottom: 0; }
+  .tbtn { height: 36px; padding: 0 12px; font-size: 13.5px; }
+  .tbtn .tb-text { display: none; }
+  .tbtn--sort .tb-text { display: inline; }
+  .tbtn.hide-mobile { display: none; }
+  .tb-status { display: none; }
+  .page-head { padding: 6px 16px 10px; }
+  .page-title { font-size: 20px; }
+  .mobile-status { display: flex !important; }
+  .mobile-views { display: flex; gap: 6px; padding: 0 16px 12px; overflow-x: auto; scrollbar-width: none; }
+  .mobile-views::-webkit-scrollbar { display: none; }
+  .mobile-views .nav-item { flex: none; width: auto; height: 34px; padding: 0 12px; gap: 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; }
+  .mobile-views .nav-item svg { display: none; }
+  .mobile-views .nav-item.is-active { background: var(--primary-bg); color: var(--primary-fg); border-color: transparent; }
+  .mobile-views .nav-item.is-active .nav-count { color: inherit; opacity: .7; }
+  .mobile-views .nav-label { overflow: visible; }
+  .shortcuts { display: none; }
+  .add-bar { margin: 0 16px 6px; }
+  .add-error { margin: 0 16px 10px; }
+}
+@container main (max-width: 600px) {
+  .table-head { grid-template-columns: 1fr; }
+  .th-search { border-right: 0; padding: 8px 16px; }
+  .th:not(.th-search) { display: none; }
+  .kbd { display: none; }
+  .job-row { display: flex; flex-wrap: wrap; align-items: center; min-height: 0; padding-bottom: 12px; }
+  .cell-who { flex-basis: 100%; border-right: 0; padding: 14px 16px 8px; align-items: flex-start; gap: 12px; }
+  .avatar { width: 36px; height: 36px; font-size: 12px; }
+  .job-title { white-space: normal; }
+  .job-reason { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .sub-age { display: inline; }
+  .job-sub { white-space: normal; }
+  .cell-score { padding: 0 0 0 64px; }
+  .cell-age { display: none; }
+  .cell-actions { margin-left: auto; padding: 0 10px 0 0; opacity: 1; }
+  .act { width: 36px; height: 36px; }
+  .chip { height: 34px; }
+  .job-details { padding: 4px 16px 16px; }
+  .details-actions .btn { flex: 1 1 auto; }
+  .list-panel { margin: 0 16px 16px; }
+  .list-row { flex-direction: column; align-items: flex-start; }
+  .list-chips { justify-content: flex-start; }
+  .profile-text { text-align: left; }
+}
+.mobile-status { display: none; margin-top: 6px; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="shell">
+
+    <aside class="sidebar">
+      <div class="brand"><svg class="logo" data-icon="logo"></svg><span class="brand-name">Job Radar</span></div>
+      <nav class="nav" aria-label="Main">
+        <div class="nav-section">Jobs</div>
+        <div class="nav" id="navViews"></div>
+        <div class="nav-section">App</div>
+        <button type="button" class="nav-item" data-tab="links" title="Watched links"><svg data-icon="link"></svg><span class="nav-label">Watched links</span><span class="nav-count" id="linksCount">–</span></button>
+        <button type="button" class="nav-item" data-tab="settings" title="Settings"><svg data-icon="sliders"></svg><span class="nav-label">Settings</span></button>
+      </nav>
+      <div class="side-foot">
+        <div class="status-line" data-check><span class="status-dot"></span><span data-check-text>Loading…</span></div>
+        <button type="button" class="tg-row" data-tg title="Telegram alerts">
+          <svg data-icon="send"></svg><span class="nav-label tg-label">Telegram alerts</span><span class="switch"></span>
+        </button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="mobile-bar">
+        <div class="brand"><svg class="logo" data-icon="logo"></svg><span>Job Radar</span></div>
+        <button type="button" class="tg-mini" data-tg title="Telegram alerts"><svg data-icon="send"></svg></button>
+        <button type="button" class="tbtn tbtn--icon" data-theme-toggle title="Light / dark"><svg data-icon="moon"></svg></button>
+      </div>
+
+      <div class="toolbar">
+        <div class="tb-group jobs-only">
+          <button type="button" class="tbtn tbtn--sort is-active" data-sort="score"><svg data-icon="star"></svg><span class="tb-text">Score</span></button>
+          <button type="button" class="tbtn tbtn--sort" data-sort="newest"><svg data-icon="calendar"></svg><span class="tb-text">Newest</span></button>
+        </div>
+        <button type="button" class="tbtn jobs-only" id="markSeen" title="Mark all as seen"><svg data-icon="checks"></svg><span class="tb-text">Mark all seen</span></button>
+        <button type="button" class="tbtn" id="checkNow" title="Check all sources now"><svg data-icon="refresh"></svg><span class="tb-text">Check now</span></button>
+        <span class="tb-spacer"></span>
+        <span class="tb-status" data-check><span class="status-dot"></span><span data-check-text>Loading…</span></span>
+        <button type="button" class="tbtn tbtn--icon hide-mobile" data-theme-toggle title="Light / dark"><svg data-icon="moon"></svg></button>
+      </div>
+
+      <div class="main-scroll" id="mainScroll">
+        <section id="tab-jobs">
+          <div class="page-head">
+            <h1 class="page-title" id="pageTitle">Best new</h1>
+            <div class="summary" id="summary"></div>
+            <div class="mobile-status" data-check><span class="status-dot"></span><span data-check-text>Loading…</span></div>
+          </div>
+          <div class="mobile-views" id="mobileViews"></div>
+          <div class="table-head">
+            <div class="th th-search">
+              <label class="search">
+                <svg data-icon="search"></svg>
+                <input class="search-input" id="search" type="search" placeholder="Search" autocomplete="off" aria-label="Search jobs">
+                <span class="kbd">Ctrl K</span>
+              </label>
+            </div>
+            <div class="th">AI score</div>
+            <div class="th th-place">Location &amp; hours</div>
+            <div class="th">Posted</div>
+            <div class="th"></div>
+          </div>
+          <div id="jobList" aria-live="polite"></div>
+          <div class="shortcuts">
+            <span><kbd>Ctrl K</kbd> search</span><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>↵</kbd> expand</span>
+            <span><kbd>o</kbd> open</span><span><kbd>s</kbd> save</span><span><kbd>a</kbd> applied</span><span><kbd>h</kbd> hide</span><span><kbd>c</kbd> copy</span>
+          </div>
+        </section>
+
+        <section id="tab-links" hidden>
+          <div class="page-head"><h1 class="page-title">Watched links</h1><div class="summary" id="linksSummary"></div></div>
+          <form class="add-bar" id="addForm" novalidate>
+            <input class="add-input" id="addInput" type="url" required placeholder="https://company.jobs.personio.de" aria-label="Career page or job search link">
+            <button type="submit" class="btn btn--primary" id="addBtn"><svg data-icon="plus"></svg>Add and test</button>
+          </form>
+          <p class="add-error" id="addError" role="alert"></p>
+          <div class="list-panel" id="linkList"></div>
+        </section>
+
+        <section id="tab-settings" hidden>
+          <div class="page-head"><h1 class="page-title">Settings</h1><div class="summary"><span>What Job Radar looks for</span></div></div>
+          <div class="list-panel" id="settingsList"></div>
+          <p class="shortcuts" style="padding-top:0">To change these, edit config.yaml (keys in .env) and restart Job Radar.</p>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status">
+    <span class="toast-msg" id="toastMsg"></span>
+    <button type="button" class="toast-action" id="toastAction">Undo</button>
+  </div>
+</div>
+
+<script>
+/* =========================================================
+   BACKEND CONNECTION — the only place to adapt to the real API.
+   If GET jobs fails (file opened directly), the page runs on demo data.
+   ========================================================= */
+const ENDPOINTS = {
+  jobs:        () => ['GET',    '/api/jobs'],
+  info:        () => ['GET',    '/api/info'],              // { checking, last_check, next_check, telegram_on }
+  links:       () => ['GET',    '/api/links'],
+  settings:    () => ['GET',    '/api/settings'],
+  setStatus:   id => ['POST',   `/api/jobs/${id}/status`], // { status: new|saved|applied|hidden }
+  markSeen:    () => ['POST',   '/api/jobs/seen'],         // { ids: [], seen: true|false }
+  checkAll:    () => ['POST',   '/api/check'],
+  telegram:    () => ['POST',   '/api/settings/telegram'], // { on: true|false }
+  addLink:     () => ['POST',   '/api/links'],             // { url } -> link
+  checkLink:   id => ['POST',   `/api/links/${id}/check`], // -> link
+  toggleLink:  id => ['POST',   `/api/links/${id}/active`],// { active }
+  deleteLink:  id => ['DELETE', `/api/links/${id}`]
+};
+async function api(name, arg, body) {
+  const [method, url] = ENDPOINTS[name](arg);
+  const res = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  if (!res.ok) { let msg = res.statusText; try { msg = (await res.json()).detail || msg; } catch (e) {} throw new Error(msg); }
+  return res.status === 204 ? null : res.json().catch(() => null);
+}
+
+/* Data shapes the page expects:
+   job:  { id, title, company, location, hours|null, max_hours|null, posted_at|null, first_seen,
+           ai_score|null (null = still scoring), ai_reason|null, status: new|saved|applied|hidden|filtered,
+           filter_reason|null, seen, source, url }
+   link: { id, name, url, builtin, active, status: ok|warn|error|unchecked, status_text, good, total, last_checked|null }
+   settings: { gemini_model, min_score, profile, interval_min, ba_searches: [], gmail_label, gmail_address, telegram_on } */
+
+/* ICONS */
+const P = (d, extra = '') => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
+const ICON = {
+  logo: P('<path d="M12 2.5c.7 5.2 3.6 8.3 9 9.5-5.4 1.2-8.3 4.3-9 9.5-.7-5.2-3.6-8.3-9-9.5 5.4-1.2 8.3-4.3 9-9.5z" stroke-width="1.9"/>'),
+  sparkle: P('<path d="M12 3.5c.6 4.4 2.9 6.9 7.5 8-4.6 1.1-6.9 3.6-7.5 8-.6-4.4-2.9-6.9-7.5-8 4.6-1.1 6.9-3.6 7.5-8z"/>'),
+  list: P('<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" stroke-width="2"/>'),
+  bookmark: P('<path d="M6.5 4h11v16.5L12 16.5l-5.5 4z"/>'),
+  bookmarkFill: P('<path d="M6.5 4h11v16.5L12 16.5l-5.5 4z" fill="currentColor"/>'),
+  checkCircle: P('<circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.3l2.4 2.4 4.6-4.9"/>'),
+  trendDown: P('<path d="M3.5 7.5l6 6 4-4 7 7M20.5 11v5.5H15"/>'),
+  eyeOff: P('<path d="M3 3l18 18M10.6 6.1A10 10 0 0 1 12 6c5 0 9 6 9 6a16 16 0 0 1-3 3.4M6.6 6.6C4.3 8.1 3 12 3 12s4 6 9 6a9 9 0 0 0 4.4-1.1M9.9 9.9a3 3 0 0 0 4.2 4.2"/>'),
+  eye: P('<path d="M3 12s4-6 9-6 9 6 9 6-4 6-9 6-9-6-9-6z"/><circle cx="12" cy="12" r="3"/>'),
+  link: P('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>'),
+  sliders: P('<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>'),
+  send: P('<path d="M21 3.5L3 10.5l7 2.6 2.6 7.4zM10 13.1l5-5"/>'),
+  moon: P('<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>'),
+  sun: P('<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>'),
+  star: P('<path d="M12 3.8l2.5 5.2 5.7.8-4.1 4 1 5.6L12 16.7l-5.1 2.7 1-5.6-4.1-4 5.7-.8z"/>'),
+  calendar: P('<rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M8 3v4M16 3v4M4 10h16"/>'),
+  checks: P('<path d="M3 12.5l4 4 8-9M13 15.5l1 1 8-9"/>'),
+  refresh: P('<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>'),
+  search: P('<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>'),
+  open: P('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'),
+  check: P('<path d="M5 12.5l4.5 4.5L19 7.5" stroke-width="2"/>'),
+  copy: P('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>'),
+  plus: P('<path d="M12 5v14M5 12h14" stroke-width="2"/>'),
+  trash: P('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
+  radar: P('<circle cx="12" cy="12" r="8.5" opacity=".45"/><circle cx="12" cy="12" r="4.5" opacity=".75"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><path d="M12 12l5.5-5.5"/>')
+};
+function hydrateIcons(root = document) {
+  root.querySelectorAll('svg[data-icon]').forEach(el => { el.outerHTML = ICON[el.dataset.icon].replace('<svg ', `<svg class="${el.getAttribute('class') || ''}" aria-hidden="true" `); });
+}
+
+/* DEMO DATA — only used when the backend can't be reached */
+const daysAgo = d => { const t = new Date(); t.setDate(t.getDate() - d); t.setHours(9, 0, 0, 0); return t.toISOString(); };
+const DEMO = {
+  jobs: [
+    { id: 1, title: 'Werkstudent Cloud Engineering (AWS)', company: 'Software AG', location: 'Darmstadt', hours: '15–20 h', max_hours: 20, posted_at: daysAgo(1), first_seen: daysAgo(1), ai_score: 9, ai_reason: 'AWS, Terraform, Linux · 15–20 h · Darmstadt. Builds internal cloud infrastructure, close to campus.', status: 'new', seen: false, source: 'Arbeitsagentur', url: 'https://example.com' },
+    { id: 2, title: 'Werkstudent Softwareentwicklung (m/w/d)', company: 'iteratec', location: 'Frankfurt am Main', hours: '12–20 h', max_hours: 20, posted_at: daysAgo(2), first_seen: daysAgo(2), ai_score: 8, ai_reason: 'Java, TypeScript, agile team · 12–20 h · Frankfurt. Real product work with code reviews.', status: 'new', seen: false, source: 'StepStone', url: 'https://example.com' },
+    { id: 3, title: 'Werkstudent IT-Security und Netzwerkkommunikation', company: 'Ratiodata SE', location: 'Frankfurt am Main', hours: null, max_hours: null, posted_at: null, first_seen: daysAgo(3), ai_score: 8, ai_reason: 'Networks, firewalls, Linux · Frankfurt. Hands-on network and security operations.', status: 'saved', seen: true, source: 'Indeed email', url: 'https://example.com' },
+    { id: 4, title: 'Werkstudent FinOps und Cloud Cost Management', company: 'Heraeus', location: 'Hanau', hours: 'bis 20 h', max_hours: 20, posted_at: daysAgo(43), first_seen: daysAgo(1), ai_score: 7, ai_reason: 'Azure, cloud costs, Python · 20 h · Hanau. Ad is over 30 days old, may be filled.', status: 'new', seen: false, source: 'Arbeitsagentur', url: 'https://example.com' },
+    { id: 5, title: 'Werkstudent Datenanalyse (m/w/d)', company: 'DZ BANK', location: 'Frankfurt am Main', hours: '20 h', max_hours: 20, posted_at: daysAgo(0), first_seen: daysAgo(0), ai_score: null, ai_reason: null, status: 'new', seen: false, source: 'DZ BANK', url: 'https://example.com' },
+    { id: 6, title: 'Werkstudent IT Service Desk', company: 'Deutsche Telekom', location: 'Darmstadt', hours: '20 h', max_hours: 20, posted_at: daysAgo(6), first_seen: daysAgo(6), ai_score: 5, ai_reason: 'Mostly support tickets, little coding · 20 h · Darmstadt.', status: 'new', seen: true, source: 'Indeed email', url: 'https://example.com' },
+    { id: 7, title: 'Werkstudent Testautomatisierung', company: 'Commerzbank', location: 'Frankfurt am Main', hours: '25–30 h', max_hours: 30, posted_at: daysAgo(5), first_seen: daysAgo(5), ai_score: 6, ai_reason: 'Selenium, Java · 25–30 h. More than your 20 h limit.', status: 'filtered', filter_reason: 'More than 20 h/week', seen: true, source: 'StepStone', url: 'https://example.com' },
+    { id: 8, title: 'Werkstudent Architekturmanagement', company: 'BWI', location: 'Frankfurt am Main', hours: null, max_hours: null, posted_at: daysAgo(4), first_seen: daysAgo(4), ai_score: null, ai_reason: null, status: 'applied', seen: true, source: 'Arbeitsagentur', url: 'https://example.com' }
+  ],
+  links: [
+    { id: 'gmail', name: 'Job-alert emails (Gmail)', url: 'Label "JobRadar" · read-only', builtin: true, active: true, status: 'ok', status_text: 'OK', good: 4, total: 21, last_checked: daysAgo(0) },
+    { id: 'ba', name: 'Bundesagentur für Arbeit', url: '5 searches · Darmstadt and Frankfurt', builtin: true, active: true, status: 'ok', status_text: 'OK', good: 10, total: 38, last_checked: daysAgo(0) },
+    { id: 3, name: 'stepstone.de', url: 'stepstone.de/jobs/werkstudent-informatik/in-darmstadt', builtin: false, active: true, status: 'ok', status_text: 'OK', good: 12, total: 24, last_checked: daysAgo(0) },
+    { id: 4, name: 'talents.studysmarter.de', url: 'talents.studysmarter.de/companies/…', builtin: false, active: true, status: 'warn', status_text: 'No good jobs in 7 days', good: 0, total: 6, last_checked: daysAgo(0) },
+    { id: 5, name: 'c24-recruiting.powerappsportals.com', url: 'c24-recruiting.powerappsportals.com', builtin: false, active: false, status: 'error', status_text: 'Not trackable', good: 0, total: 0, last_checked: daysAgo(1) }
+  ],
+  settings: { gemini_model: 'gemini-3.5-flash', min_score: 7, interval_min: 60, profile: 'Informatik student at <your university>.\nWerkstudent in IT / software, max 20 h/week.', ba_searches: ['Werkstudent Informatik', 'Werkstudent IT', 'Werkstudent Software', 'Werkstudent Data'], gmail_label: 'JobRadar', gmail_address: '', telegram_on: true },
+  info: { checking: false, last_check: null, next_check: null, telegram_on: true }
+};
+
+/* STATE */
+const state = {
+  tab: 'jobs', view: 'best', query: '', sort: 'score',
+  openId: null, focusId: null,
+  loading: true, demo: false, checking: false, telegramOn: true,
+  lastCheck: null, nextCheck: null, minScore: 7
+};
+let jobs = [], links = [], settings = null;
+
+const isActive = j => j.status !== 'hidden' && j.status !== 'filtered';
+const scored = j => typeof j.ai_score === 'number';
+const good = j => scored(j) && j.ai_score >= state.minScore;
+const VIEWS = {
+  best:     { label: 'Best new',     icon: 'sparkle',     test: j => (j.status === 'new' || j.status === 'saved') && good(j) && !isOld(j) },
+  all:      { label: 'All',          icon: 'list',        test: j => isActive(j) && j.status !== 'applied' },
+  saved:    { label: 'Saved',        icon: 'bookmark',    test: j => j.status === 'saved' },
+  applied:  { label: 'Applied',      icon: 'checkCircle', test: j => j.status === 'applied' },
+  low:      { label: 'Low score',    icon: 'trendDown',   test: j => isActive(j) && j.status !== 'applied' && scored(j) && j.ai_score < state.minScore },
+  filtered: { label: 'Filtered out', icon: 'eyeOff',      test: j => !isActive(j) }
+};
+
+/* HELPERS */
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const dateOf = j => j.posted_at || j.first_seen;
+const ageDays = iso => iso ? Math.max(0, Math.floor((Date.now() - new Date(iso)) / 864e5)) : 0;
+const isOld = j => !!j.posted_at && ageDays(j.posted_at) > 30;
+const fmtShort = iso => { const d = new Date(iso); const sameYear = d.getFullYear() === new Date().getFullYear(); return d.toLocaleDateString('en-GB', sameYear ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' }); };
+const fmtAge = iso => { if (!iso) return '–'; const d = ageDays(iso); return d === 0 ? 'today' : d <= 14 ? d + ' d ago' : fmtShort(iso); };
+const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '–';
+const fmtTime = iso => iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : null;
+const fmtAgo = iso => { if (!iso) return 'not checked yet'; const m = Math.round((Date.now() - new Date(iso)) / 6e4); return m < 1 ? 'checked just now' : m < 60 ? `checked ${m} min ago` : m < 1440 ? `checked ${Math.round(m / 60)} h ago` : `checked ${fmtShort(iso)}`; };
+const scoreTier = s => s >= state.minScore ? 'good' : s >= 4 ? 'maybe' : 'weak';
+const scoreLabel = s => s >= 9 ? 'Top match' : s >= state.minScore ? 'Good fit' : s >= 4 ? 'Maybe' : 'Weak';
+const shortReason = r => r ? r.split('. ')[0].replace(/\.$/, '') : '';
+const city = l => (l || '').replace(/ am Main/, '').replace(/, DE$/, '');
+const placeText = j => [city(j.location), j.hours].filter(Boolean).join(' · ') || '–';
+const initials = c => (c || '?').replace(/[^A-Za-zÄÖÜäöü ]/g, ' ').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
+const hue = s => [...(s || '?')].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+function visibleJobs() {
+  const q = state.query.trim().toLowerCase();
+  const byDate = (a, b) => new Date(dateOf(b) || 0) - new Date(dateOf(a) || 0);
+  const byScore = (a, b) => (b.ai_score ?? -1) - (a.ai_score ?? -1) || byDate(a, b);
+  return jobs.filter(VIEWS[state.view].test)
+    .filter(j => !q || [j.title, j.company, j.location, j.ai_reason].join(' ').toLowerCase().includes(q))
+    .sort(state.sort === 'score' ? byScore : byDate);
+}
+
+/* RENDER */
+function renderNav() {
+  const html = Object.entries(VIEWS).map(([key, v]) => {
+    const active = state.tab === 'jobs' && state.view === key;
+    const n = state.loading ? '–' : jobs.filter(v.test).length;
+    return `<button type="button" class="nav-item${active ? ' is-active' : ''}" data-view="${key}" title="${v.label}" aria-current="${active}">${ICON[v.icon]}<span class="nav-label">${v.label}</span><span class="nav-count">${n}</span></button>`;
+  }).join('');
+  $('#navViews').innerHTML = html;
+  $('#mobileViews').innerHTML = html;
+  $('#linksCount').textContent = state.loading ? '–' : links.length;
+  $$('.nav-item[data-tab]').forEach(b => b.classList.toggle('is-active', state.tab === b.dataset.tab));
+}
+
+function checkText() {
+  if (state.checking || state.loading) return state.loading ? 'Loading…' : 'Checking sources…';
+  const last = fmtTime(state.lastCheck), next = fmtTime(state.nextCheck);
+  if (!last) return state.demo ? 'Demo data' : 'Not checked yet';
+  return `Last check ${last}${next ? ' · next ' + next : ''}`;
+}
+function renderStatus() {
+  const checking = state.checking || state.loading;
+  $$('[data-check]').forEach(el => { el.classList.toggle('is-checking', checking); el.classList.toggle('is-offline', state.demo); });
+  $$('[data-check-text]').forEach(el => el.textContent = checkText());
+  $('#checkNow').classList.toggle('is-spinning', checking);
+  $$('[data-tg]').forEach(el => { el.classList.toggle('tg-on', state.telegramOn); el.title = state.telegramOn ? 'Telegram alerts on' : 'Telegram alerts off'; });
+}
+
+function renderHead() {
+  $('#pageTitle').textContent = VIEWS[state.view].label;
+  const el = $('#summary');
+  if (state.loading) { el.innerHTML = '<span class="skel" style="width:240px;height:12px;margin-top:5px"></span>'; return; }
+  const best = jobs.filter(VIEWS.best.test);
+  const pending = jobs.filter(j => isActive(j) && !scored(j)).length;
+  const parts = best.length
+    ? [`<span><strong>${plural(best.length, 'good job')}</strong> to look at</span>`,
+       `<span>${best.filter(j => (j.location || '').includes('Darmstadt')).length} in Darmstadt</span>`,
+       `<span>best score ${Math.max(...best.map(j => j.ai_score))}</span>`]
+    : [`<span>No new good jobs right now</span>`].concat(fmtTime(state.nextCheck) ? [`<span>next check ${fmtTime(state.nextCheck)}</span>`] : []);
+  if (pending) parts.push(`<span>${plural(pending, 'job')} still scoring</span>`);
+  if (state.query.trim()) parts.push(`<span>${visibleJobs().length} match “${esc(state.query.trim())}”</span>`);
+  if (state.demo) parts.push('<span class="demo-note">Demo data, backend not connected</span>');
+  el.innerHTML = parts.join('');
+}
+
+function scoreChip(j) {
+  if (!scored(j)) return `<span class="chip chip--pending" title="Gemini is scoring this job"><span class="chip-text">Scoring…</span></span>`;
+  const t = scoreTier(j.ai_score);
+  return `<span class="chip chip--${t}" title="AI score ${j.ai_score}/10"><span class="score-num">${j.ai_score}</span><span class="score-of">/10</span><span class="score-label">${scoreLabel(j.ai_score)}</span></span>`;
+}
+function postedChip(j) {
+  if (!j.posted_at) return `<span class="chip chip--muted" title="The source gave no posting date. This is when Job Radar first saw it."><span class="chip-text">first seen ${fmtShort(j.first_seen)}</span></span>`;
+  const days = ageDays(j.posted_at);
+  if (days > 30) return `<span class="chip chip--old" title="Posted ${fmtDate(j.posted_at)}, more than 30 days ago"><span class="chip-text">Old ad · ${fmtShort(j.posted_at)}</span></span>`;
+  return `<span class="chip"><span class="chip-text">${fmtAge(j.posted_at)}</span></span>`;
+}
+function postedPlain(j) { return !j.posted_at ? 'first seen ' + fmtShort(j.first_seen) : isOld(j) ? 'old ad · ' + fmtShort(j.posted_at) : fmtAge(j.posted_at); }
+
+function jobRow(j) {
+  const open = state.openId === j.id;
+  const saved = j.status === 'saved', applied = j.status === 'applied', hidden = !isActive(j);
+  const tooMany = j.max_hours && j.max_hours > 20;
+  const statusTag = saved && state.view !== 'saved' ? '<span class="status-tag">Saved</span>'
+                  : applied && state.view !== 'applied' ? '<span class="status-tag">Applied</span>' : '';
+  const reason = hidden && j.filter_reason ? j.filter_reason : shortReason(j.ai_reason);
+  return `
+  <article class="job${open ? ' is-open' : ''}${state.focusId === j.id ? ' is-focused' : ''}${isOld(j) ? ' is-old' : ''}" data-id="${j.id}">
+    <div class="job-row" data-action="toggle" aria-expanded="${open}">
+      <div class="cell cell-who">
+        <span class="avatar" style="--h:${hue(j.company)}">${esc(initials(j.company))}</span>
+        <div class="who-text">
+          <div class="job-head"><h3 class="job-title">${esc(j.title)}</h3>${!j.seen && !hidden ? '<span class="new-mark">New</span>' : ''}${statusTag}</div>
+          <div class="job-sub">${esc(j.company)}<span class="sub-place"> · ${esc(placeText(j))}</span><span class="sub-age"> · ${esc(postedPlain(j))}</span></div>
+          ${reason ? `<p class="job-reason">${esc(reason)}</p>` : ''}
+        </div>
+      </div>
+      <div class="cell cell-score">${scoreChip(j)}</div>
+      <div class="cell cell-place"><span class="chip${tooMany ? ' chip--warn-hours' : ''}"${tooMany ? ' title="More than 20 h per week"' : ''}><span class="chip-text">${esc(placeText(j))}</span></span></div>
+      <div class="cell cell-age">${postedChip(j)}</div>
+      <div class="cell cell-actions">
+        <button type="button" class="act" data-action="open" title="Open ad (o)" aria-label="Open ad">${ICON.open}</button>
+        <button type="button" class="act${saved ? ' is-on' : ''}" data-action="save" title="${saved ? 'Unsave' : 'Save'} (s)" aria-label="Save">${saved ? ICON.bookmarkFill : ICON.bookmark}</button>
+        <button type="button" class="act${applied ? ' is-on' : ''}" data-action="applied" title="Mark applied (a)" aria-label="Mark applied">${ICON.check}</button>
+        <button type="button" class="act" data-action="hide" title="${hidden ? 'Restore' : 'Hide'} (h)" aria-label="${hidden ? 'Restore' : 'Hide'}">${hidden ? ICON.eye : ICON.eyeOff}</button>
+      </div>
+    </div>
+    <div class="job-details">
+      <p class="details-reason"><span class="details-label">${scored(j) ? `AI assessment · ${j.ai_score}/10` : 'AI assessment'}</span>${esc(j.ai_reason || (scored(j) ? '' : 'Gemini is still scoring this job.'))}${hidden && j.filter_reason ? `<br><span class="details-label" style="margin-top:8px">Filtered because</span>${esc(j.filter_reason)}` : ''}</p>
+      <div class="details-facts">
+        <span>${j.posted_at ? 'Posted' : 'First seen'} <b>${fmtDate(dateOf(j))}</b></span>
+        <span>Source <b>${esc(j.source || '–')}</b></span>
+        <span>Location <b>${esc(j.location || '–')}</b></span>
+        <span>Hours <b>${j.hours ? esc(j.hours) + ' / week' : 'not stated'}</b></span>
+      </div>
+      <div class="details-actions">
+        <button type="button" class="btn btn--primary" data-action="open">${ICON.open}Open ad</button>
+        <button type="button" class="btn${saved ? ' is-on' : ''}" data-action="save">${saved ? ICON.bookmarkFill : ICON.bookmark}${saved ? 'Saved' : 'Save'}</button>
+        <button type="button" class="btn${applied ? ' is-on' : ''}" data-action="applied">${ICON.check}${applied ? 'Applied' : 'Mark applied'}</button>
+        <button type="button" class="btn" data-action="hide">${hidden ? ICON.eye : ICON.eyeOff}${hidden ? 'Show anyway' : 'Hide'}</button>
+        <button type="button" class="btn" data-action="copy">${ICON.copy}Copy for cover letter</button>
+      </div>
+    </div>
+  </article>`;
+}
+
+function emptyState() {
+  if (state.query.trim()) return `
+    <div class="empty"><div class="empty-icon">${ICON.search}</div>
+      <h3 class="empty-title">No jobs match “${esc(state.query.trim())}”</h3>
+      <p class="empty-text">Try another word, or look in All.</p>
+      <button type="button" class="btn" data-empty="clear">Clear search</button></div>`;
+  const next = fmtTime(state.nextCheck);
+  const m = {
+    best: ['You’re all caught up', next ? `No new good jobs right now. Next check at ${next}.` : 'No new good jobs right now.', 'Show all jobs', 'all'],
+    all: ['No jobs yet', 'Add a watched link or wait for the next check.'],
+    saved: ['Nothing saved yet', 'Save a job to come back to it later.', 'Show best new', 'best'],
+    applied: ['No applications yet', 'Jobs you mark as applied show up here.', 'Show best new', 'best'],
+    low: ['No low-score jobs', `Everything scores ${state.minScore} or higher.`],
+    filtered: ['Nothing filtered out', 'Hidden and keyword-filtered jobs appear here.']
+  }[state.view];
+  return `
+    <div class="empty"><div class="empty-icon">${ICON.radar}</div>
+      <h3 class="empty-title">${m[0]}</h3><p class="empty-text">${m[1]}</p>
+      ${m[2] ? `<button type="button" class="btn" data-empty="${m[3]}">${m[2]}</button>` : ''}</div>`;
+}
+
+function renderList() {
+  const el = $('#jobList');
+  if (state.loading) {
+    el.innerHTML = [62, 48, 70, 55, 66, 44].map(w => `
+      <div class="skel-row" aria-hidden="true"><div class="skel skel-av"></div>
+        <div class="skel-lines"><div class="skel skel-line" style="width:${w}%"></div><div class="skel skel-line" style="width:${w - 22}%"></div></div>
+        <div class="skel skel-chip"></div></div>`).join('');
+    return;
+  }
+  const list = visibleJobs();
+  el.innerHTML = list.length ? list.map(jobRow).join('') : emptyState();
+}
+
+function renderLinks() {
+  const active = links.filter(l => l.active).length;
+  $('#linksSummary').innerHTML = state.loading ? '' : `<span>${plural(links.length, 'source')}</span><span>${active} active</span><span>checked every ${settings?.interval_min || 60} min</span>`;
+  if (!links.length) { $('#linkList').innerHTML = `<div class="empty" style="padding:40px 24px"><h3 class="empty-title">No watched links yet</h3><p class="empty-text">Paste a career page or job search link above.</p></div>`; return; }
+  $('#linkList').innerHTML = links.map(l => {
+    const dot = !l.active ? '' : l.status === 'ok' ? 'link-dot--ok' : l.status === 'warn' ? 'link-dot--warn' : l.status === 'error' ? 'link-dot--error' : '';
+    const statusChip = !l.active ? `<span class="chip chip--muted"><span class="chip-text">Paused</span></span>`
+      : l.status === 'error' ? `<span class="chip chip--error"><span class="chip-text">${esc(l.status_text || 'Not trackable')}</span></span>`
+      : l.status === 'warn' ? `<span class="chip chip--maybe"><span class="chip-text">${esc(l.status_text || 'No good jobs lately')}</span></span>`
+      : l.status === 'unchecked' ? `<span class="chip chip--muted"><span class="chip-text">Not checked yet</span></span>`
+      : `<span class="chip chip--good"><span class="chip-text">${l.good} good · ${l.total} total</span></span>`;
+    return `
+    <div class="list-row${l.active ? '' : ' is-paused'}" data-link="${esc(l.id)}">
+      <div class="list-main"><span class="link-dot ${dot}"></span>
+        <div style="min-width:0"><div class="list-title">${esc(l.name)}${l.builtin ? ' <span class="status-tag">Built-in</span>' : ''}</div>
+          <div class="list-sub">${esc(l.url)} · ${esc(fmtAgo(l.last_checked))}</div>
+          <div class="list-msg" data-link-msg hidden></div></div></div>
+      <div class="list-chips">${statusChip}
+        <button type="button" class="btn btn--sm" data-link-action="check">${ICON.refresh}Check now</button>
+        ${l.builtin ? '' : `<button type="button" class="btn btn--sm btn--danger" data-link-action="delete">${ICON.trash}Delete</button>`}
+        <button type="button" class="switch${l.active ? ' is-on' : ''}" data-link-action="toggle" role="switch" aria-checked="${l.active}" title="${l.active ? 'Pause' : 'Resume'}"></button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderSettings() {
+  if (!settings) { $('#settingsList').innerHTML = ''; return; }
+  const s = settings;
+  const row = (t, sub, right) => `<div class="list-row"><div><div class="list-title">${t}</div><div class="list-sub">${sub}</div></div><div class="list-chips">${right}</div></div>`;
+  const chip = (txt, cls = '') => `<span class="chip ${cls}"><span class="chip-text">${esc(txt)}</span></span>`;
+  $('#settingsList').innerHTML = [
+    row('Telegram alerts', 'One message for every good new job', `<button type="button" class="switch${state.telegramOn ? ' is-on' : ''}" data-tg role="switch" aria-checked="${state.telegramOn}"></button>`),
+    row('Minimum score', `Lower scores go to Low score and are not sent`, chip(`Score ≥ ${s.min_score}`, 'chip--good')),
+    row('AI model', 'Scores every job that passes the filter', chip(s.gemini_model || '–')),
+    row('Checks', 'How often all sources are checked', chip(`Every ${s.interval_min} min`)),
+    row('Arbeitsagentur searches', 'Darmstadt and Frankfurt, 25 km', (s.ba_searches || []).map(x => chip(x)).join('')),
+    row('Job-alert emails', s.gmail_address ? esc(s.gmail_address) + ' · read-only' : 'Read-only, emails stay unread', chip(`Label "${s.gmail_label || 'JobRadar'}"`)),
+    `<div class="list-row"><div><div class="list-title">Your profile</div><div class="list-sub">What Gemini knows about you</div></div><div class="profile-text">${esc(s.profile || '')}</div></div>`
+  ].join('');
+}
+
+function render() { renderStatus(); renderNav(); renderHead(); renderList(); renderLinks(); renderSettings(); }
+
+/* TOAST */
+let toastTimer, toastFn;
+function toast(msg, action) {
+  $('#toastMsg').textContent = msg;
+  const btn = $('#toastAction');
+  btn.hidden = !action;
+  if (action) { btn.textContent = action.label || 'Undo'; toastFn = action.fn; }
+  $('#toast').classList.add('is-visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, 5000);
+}
+function hideToast() { $('#toast').classList.remove('is-visible'); toastFn = null; }
+$('#toastAction').addEventListener('click', () => { const fn = toastFn; hideToast(); if (fn) fn(); });
+
+/* LOAD */
+async function loadAll() {
+  try {
+    const [j, l, s, i] = await Promise.all([api('jobs'), api('links').catch(() => []), api('settings').catch(() => null), api('info').catch(() => ({}))]);
+    jobs = Array.isArray(j) ? j : (j?.jobs || []);
+    links = Array.isArray(l) ? l : (l?.links || []);
+    settings = s;
+    applyInfo(i);
+    state.demo = false;
+  } catch (e) {
+    jobs = DEMO.jobs.map(x => ({ ...x })); links = DEMO.links.map(x => ({ ...x })); settings = { ...DEMO.settings };
+    applyInfo(DEMO.info); state.demo = true;
+  }
+  if (settings?.min_score) state.minScore = settings.min_score;
+  if (settings && typeof settings.telegram_on === 'boolean') state.telegramOn = settings.telegram_on;
+  state.loading = false;
+  render();
+}
+function applyInfo(i) {
+  if (!i) return;
+  state.checking = !!i.checking;
+  state.lastCheck = i.last_check || state.lastCheck;
+  state.nextCheck = i.next_check || state.nextCheck;
+  if (typeof i.telegram_on === 'boolean') state.telegramOn = i.telegram_on;
+}
+async function refreshQuiet() {
+  if (state.demo) return;
+  try {
+    const [j, i] = await Promise.all([api('jobs'), api('info').catch(() => null)]);
+    jobs = Array.isArray(j) ? j : (j?.jobs || jobs);
+    applyInfo(i); renderStatus(); renderNav(); renderHead(); if (!state.openId) renderList();
+  } catch (e) {}
+}
+
+/* ACTIONS */
+const byId = id => jobs.find(j => String(j.id) === String(id));
+async function persist(name, arg, body) { if (state.demo) return; return api(name, arg, body); }
+
+async function setStatus(job, status, msg) {
+  const prev = job.status;
+  job.status = status;
+  const row = document.querySelector(`.job[data-id="${job.id}"]`);
+  if (row && !VIEWS[state.view].test(job)) { row.classList.add('is-leaving'); setTimeout(render, 180); } else render();
+  try {
+    await persist('setStatus', job.id, { status });
+    toast(msg, { label: 'Undo', fn: async () => { job.status = prev; render(); try { await persist('setStatus', job.id, { status: prev }); } catch (e) { toast('Could not undo: ' + e.message); } } });
+  } catch (e) { job.status = prev; render(); toast('Could not save: ' + e.message); }
+}
+
+async function markSeen(list, seen) {
+  list.forEach(j => j.seen = seen); render();
+  try { await persist('markSeen', null, { ids: list.map(j => j.id), seen }); }
+  catch (e) { list.forEach(j => j.seen = !seen); render(); toast('Could not save: ' + e.message); }
+}
+
+function doAction(id, action) {
+  const j = byId(id); if (!j) return;
+  if (action === 'toggle') {
+    state.openId = state.openId === j.id ? null : j.id; state.focusId = j.id;
+    if (!j.seen && state.openId) markSeen([j], true); else renderList();
+    return;
+  }
+  if (action === 'open') {
+    window.open(j.url, '_blank', 'noopener');
+    if (!j.seen) markSeen([j], true);
+    if (j.status !== 'applied') toast(`Opened ${j.company} ad`, { label: 'Mark applied', fn: () => setStatus(j, 'applied', 'Marked as applied') });
+    return;
+  }
+  if (action === 'save') return setStatus(j, j.status === 'saved' ? 'new' : 'saved', j.status === 'saved' ? 'Removed from saved' : 'Saved');
+  if (action === 'applied') return setStatus(j, j.status === 'applied' ? 'new' : 'applied', j.status === 'applied' ? 'Unmarked as applied' : 'Marked as applied');
+  if (action === 'hide') return isActive(j) ? setStatus(j, 'hidden', 'Job hidden') : setStatus(j, 'new', 'Moved back to your list');
+  if (action === 'copy') return copyForCoverLetter(j);
+}
+
+function copyForCoverLetter(j) {
+  const text = [`Position: ${j.title}`, `Company: ${j.company}`, `Location: ${j.location || '–'}`, j.hours ? `Hours: ${j.hours} per week` : null,
+    `${j.posted_at ? 'Posted' : 'First seen'}: ${fmtDate(dateOf(j))} (${j.source || '–'})`,
+    scored(j) ? `AI score: ${j.ai_score}/10` : null, j.ai_reason ? `Why it fits: ${j.ai_reason}` : null, `Link: ${j.url}`].filter(Boolean).join('\n');
+  const done = () => toast('Copied. Paste it into your cover letter chat.');
+  const fallback = () => {
+    const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { toast('Could not copy'); }
+    ta.remove();
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+}
+
+function markAllSeen() {
+  const unseen = jobs.filter(j => !j.seen && isActive(j));
+  if (!unseen.length) return toast('Everything is already seen');
+  markSeen(unseen, true);
+  toast(`Marked ${plural(unseen.length, 'job')} as seen`, { label: 'Undo', fn: () => markSeen(unseen, false) });
+}
+
+async function checkNow() {
+  if (state.checking || state.loading) return;
+  if (state.demo) return toast('Demo data: connect the backend to check sources');
+  const before = jobs.filter(VIEWS.best.test).length;
+  state.checking = true; renderStatus();
+  try {
+    const i = await api('checkAll'); applyInfo(i); state.checking = true; renderStatus();
+    for (let n = 0; n < 60; n++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const info = await api('info').catch(() => null);
+      if (info && !info.checking) { applyInfo(info); break; }
+    }
+  } catch (e) { toast('Check failed: ' + e.message); }
+  state.checking = false;
+  await refreshQuiet();
+  const gained = jobs.filter(VIEWS.best.test).length - before;
+  toast(gained > 0 ? `${plural(gained, 'new good job')} found` : 'Check done · no new good jobs');
+}
+
+async function toggleTelegram() {
+  const was = state.telegramOn;
+  state.telegramOn = !was; renderStatus(); renderSettings();
+  try {
+    await persist('telegram', null, { on: state.telegramOn });
+    toast(state.telegramOn ? 'Telegram alerts on' : 'Telegram alerts paused', { label: 'Undo', fn: toggleTelegram });
+  } catch (e) { state.telegramOn = was; renderStatus(); renderSettings(); toast('Could not change Telegram: ' + e.message); }
+}
+
+/* Watched links */
+function linkMsg(id, msg) {
+  const el = document.querySelector(`[data-link="${CSS.escape(String(id))}"] [data-link-msg]`);
+  if (!el) return;
+  el.textContent = msg; el.hidden = false;
+  clearTimeout(el._t); el._t = setTimeout(() => { el.hidden = true; }, 5000);
+}
+$('#addForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const input = $('#addInput'), err = $('#addError');
+  const url = input.value.trim();
+  if (!url) { err.textContent = 'Paste a career page URL first.'; input.focus(); return; }
+  try { new URL(url); } catch (x) { err.textContent = 'That doesn’t look like a link. It should start with https://'; input.focus(); return; }
+  if (links.some(l => l.url === url)) { err.textContent = 'This link is already on your list.'; return; }
+  err.textContent = '';
+  const btn = $('#addBtn'); btn.disabled = true; btn.lastChild.textContent = 'Testing…';
+  try {
+    const link = state.demo
+      ? { id: Date.now(), name: new URL(url).hostname, url, builtin: false, active: true, status: 'unchecked', status_text: '', good: 0, total: 0, last_checked: null }
+      : await api('addLink', null, { url });
+    links.push(link); input.value = ''; renderLinks(); renderNav();
+    toast(link.status === 'error' ? `Can’t track this link: ${link.status_text || 'no jobs found'}` : link.status === 'ok' ? `Trackable · ${plural(link.total || 0, 'job')} found` : 'Link added');
+  } catch (x) { err.textContent = x.message || 'Could not add this link.'; }
+  btn.disabled = false; btn.lastChild.textContent = 'Add and test';
+});
+$('#addInput').addEventListener('input', () => { $('#addError').textContent = ''; });
+
+$('#linkList').addEventListener('click', async e => {
+  const b = e.target.closest('[data-link-action]'); if (!b) return;
+  const rowEl = b.closest('[data-link]'); const id = rowEl.dataset.link;
+  const l = links.find(x => String(x.id) === id); if (!l) return;
+  const act = b.dataset.linkAction;
+  if (act === 'toggle') {
+    l.active = !l.active; renderLinks();
+    try { await persist('toggleLink', l.id, { active: l.active }); } catch (x) { l.active = !l.active; renderLinks(); toast('Could not save: ' + x.message); }
+    return;
+  }
+  if (act === 'check') {
+    if (state.demo) return linkMsg(l.id, 'Demo data: connect the backend to check this link.');
+    b.disabled = true;
+    try {
+      const updated = await api('checkLink', l.id);
+      if (updated) Object.assign(l, updated);
+      renderLinks(); linkMsg(l.id, l.status === 'error' ? `Not trackable: ${l.status_text}` : `Checked · ${l.good} good · ${l.total} total`);
+      refreshQuiet();
+    } catch (x) { b.disabled = false; linkMsg(l.id, 'Check failed: ' + x.message); }
+    return;
+  }
+  if (act === 'delete') {
+    if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.lastChild.textContent = 'Really delete?'; setTimeout(() => { if (b.isConnected) { b.dataset.confirm = ''; b.lastChild.textContent = 'Delete'; } }, 4000); return; }
+    try { await persist('deleteLink', l.id); links = links.filter(x => x !== l); renderLinks(); renderNav(); toast('Link deleted'); }
+    catch (x) { toast('Could not delete: ' + x.message); }
+  }
+});
+
+function setTab(tab) {
+  state.tab = tab;
+  ['jobs', 'links', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== tab);
+  $$('.jobs-only').forEach(el => el.hidden = tab !== 'jobs');
+  $('#mainScroll').scrollTop = 0;
+  renderNav();
+}
+
+/* EVENTS */
+document.addEventListener('click', e => {
+  const v = e.target.closest('.nav-item[data-view]');
+  if (v) { state.view = v.dataset.view; state.openId = null; state.focusId = null; setTab('jobs'); render(); v.scrollIntoView?.({ inline: 'nearest', block: 'nearest' }); return; }
+  const t = e.target.closest('.nav-item[data-tab]');
+  if (t) { setTab(t.dataset.tab); return; }
+  if (e.target.closest('[data-tg]')) { toggleTelegram(); return; }
+  if (e.target.closest('[data-theme-toggle]')) { toggleTheme(); return; }
+  const s = e.target.closest('[data-sort]');
+  if (s) { state.sort = s.dataset.sort; $$('[data-sort]').forEach(b => b.classList.toggle('is-active', b === s)); renderList(); }
+});
+
+$('#jobList').addEventListener('click', e => {
+  const emptyBtn = e.target.closest('[data-empty]');
+  if (emptyBtn) {
+    const v = emptyBtn.dataset.empty;
+    if (v === 'clear') { state.query = ''; $('#search').value = ''; } else state.view = v;
+    return render();
+  }
+  const actEl = e.target.closest('[data-action]'); if (!actEl) return;
+  const row = actEl.closest('.job'); if (!row) return;
+  e.stopPropagation();
+  doAction(row.dataset.id, actEl.dataset.action);
+});
+
+$('#search').addEventListener('input', e => { state.query = e.target.value; state.openId = null; renderHead(); renderList(); });
+$('#markSeen').addEventListener('click', markAllSeen);
+$('#checkNow').addEventListener('click', checkNow);
+
+/* Theme (only the theme is remembered, never the view) */
+const root = document.documentElement;
+function syncThemeIcons() { $$('[data-theme-toggle]').forEach(b => b.innerHTML = root.dataset.theme === 'dark' ? ICON.sun : ICON.moon); }
+function toggleTheme() {
+  root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem('jr-theme', root.dataset.theme); } catch (e) {}
+  syncThemeIcons();
+}
+try { const t = localStorage.getItem('jr-theme'); if (t) root.dataset.theme = t; else if (matchMedia('(prefers-color-scheme: dark)').matches) root.dataset.theme = 'dark'; } catch (e) {}
+
+/* Keyboard */
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setTab('jobs'); $('#search').focus(); return; }
+  if (state.tab !== 'jobs' || state.loading || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.matches('input')) { if (e.key === 'Escape') e.target.blur(); return; }
+  if (e.key === '/') { e.preventDefault(); $('#search').focus(); return; }
+  const list = visibleJobs(); if (!list.length) return;
+  let i = list.findIndex(j => j.id === state.focusId);
+  const move = d => {
+    i = i < 0 ? 0 : Math.min(list.length - 1, Math.max(0, i + d));
+    state.focusId = list[i].id; renderList();
+    document.querySelector(`.job[data-id="${CSS.escape(String(state.focusId))}"]`)?.scrollIntoView({ block: 'nearest' });
+  };
+  const k = e.key.toLowerCase();
+  if (k === 'j' || e.key === 'ArrowDown') { e.preventDefault(); return move(1); }
+  if (k === 'k' || e.key === 'ArrowUp') { e.preventDefault(); return move(-1); }
+  if (i < 0) return;
+  if (k === 'escape') { state.openId = null; renderList(); return; }
+  const map = { enter: 'toggle', o: 'open', s: 'save', a: 'applied', h: 'hide', c: 'copy' };
+  if (map[k]) { e.preventDefault(); doAction(state.focusId, map[k]); }
+});
+
+hydrateIcons();
+syncThemeIcons();
+render();
+loadAll();
+setInterval(refreshQuiet, 60000);
+</script>
+</body>
+</html>

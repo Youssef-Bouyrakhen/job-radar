@@ -1,0 +1,46 @@
+# Secrets (only .env.example, which has no values, is shared)
+.env
+.env.*
+!.env.example
+
+# Personal settings (copy the generic files and fill in your own)
+config.local.yaml
+deploy.local.bat
+
+# Database, backups and other data
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Personal documents (CV etc.)
+*.pdf
+Lebenslauf*
+CV*
+Resume*
+
+# Logs
+*.log
+logs/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Claude Code and scratch folders
+.claude/
+scratchpad/
+scratch/
+tmp/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

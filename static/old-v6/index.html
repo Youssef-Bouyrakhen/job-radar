@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Job Radar</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <h1>Job Radar</h1>
+      <div class="status">
+        <span id="last-check"></span>
+        <span id="tg-dot" class="tg-dot" role="img"></span>
+      </div>
+    </header>
+
+    <p id="restart-banner" class="banner" hidden>
+      Job Radar was updated, but the old version is still running. Close the black Job Radar
+      window, then double-click <b>start.bat</b> again.
+    </p>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="jobs">Jobs</button>
+      <button class="tab" role="tab" data-tab="links">Watched links</button>
+      <button class="tab" role="tab" data-tab="settings">Settings</button>
+    </nav>
+
+    <!-- Jobs ----------------------------------------------------------------->
+    <section id="panel-jobs" class="panel">
+      <div class="toolbar">
+        <div class="pills" role="group" aria-label="Show">
+          <button class="pill" data-view="best">Best new <span class="n" data-count="best"></span></button>
+          <button class="pill" data-view="all">All <span class="n" data-count="all"></span></button>
+          <button class="pill" data-view="saved">Saved <span class="n" data-count="saved"></span></button>
+          <button class="pill" data-view="applied">Applied <span class="n" data-count="applied"></span></button>
+          <button class="pill ai-only" data-view="low">Low score <span class="n" data-count="low"></span></button>
+          <button class="pill" data-view="filtered">Filtered out <span class="n" data-count="filtered"></span></button>
+        </div>
+        <button id="mark-all" class="text-button" type="button">Mark all as seen</button>
+      </div>
+      <div id="jobs" class="list"></div>
+      <p id="jobs-empty" class="empty" hidden></p>
+    </section>
+
+    <!-- Watched links -------------------------------------------------------->
+    <section id="panel-links" class="panel" hidden>
+      <form id="add-form" class="add">
+        <input id="url-input" type="text" autocomplete="off" aria-label="Link to watch"
+               placeholder="Paste a career page or job search link">
+        <button id="add-btn" class="primary" type="submit">Add &amp; test</button>
+      </form>
+      <p id="add-message" class="note" hidden></p>
+      <div id="links" class="list"></div>
+      <p id="links-empty" class="empty" hidden>No links yet. Paste your first career page above.</p>
+    </section>
+
+    <!-- Settings ------------------------------------------------------------->
+    <section id="panel-settings" class="panel" hidden>
+      <div class="section">
+        <h2>Telegram</h2>
+        <p id="tg-state" class="muted"></p>
+        <p class="muted">One message for every good new job: title, company, place, hours, score, reason and posting date.</p>
+        <div class="row-actions">
+          <button id="tg-test" class="secondary" type="button">Send test message</button>
+          <span id="tg-result" class="muted"></span>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Gemini scoring</h2>
+        <dl class="facts">
+          <dt>Status</dt><dd id="ai-state"></dd>
+          <dt>Model</dt><dd id="ai-model"></dd>
+          <dt>Minimum score</dt><dd id="ai-min"></dd>
+          <dt>Your profile</dt><dd><pre id="ai-profile" class="profile"></pre></dd>
+        </dl>
+      </div>
+
+      <div class="section">
+        <h2>Checks</h2>
+        <dl class="facts">
+          <dt>Interval</dt><dd id="set-interval"></dd>
+          <dt>Last check</dt><dd id="set-last"></dd>
+          <dt>Next check</dt><dd id="set-next"></dd>
+          <dt>Arbeitsagentur</dt><dd id="set-ba"></dd>
+          <dt>Job-alert emails</dt><dd id="set-emails"></dd>
+        </dl>
+      </div>
+
+      <p class="muted small">To change settings, edit <code>config.yaml</code> (keys: <code>.env</code>) with Notepad, then restart Job Radar.</p>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
