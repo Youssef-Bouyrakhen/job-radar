@@ -15,6 +15,11 @@ DEFAULTS = {
         "radius_km": 25,
     },
     "emails": {"enabled": True, "label": "JobRadar", "days_back": 14, "max_emails_per_check": 50},
+    "applications": {"enabled": True, "label": "Bewerbungen", "days_back": 60, "max_emails_per_check": 80,
+                     "check_every_minutes": 15, "telegram_max_age_days": 3,
+                     "ignore_senders": ["vaia.com", "studysmarter.de", "jobagent.stepstone.de", "shop-apotheke.com",
+                                        "freelance.de", "jobseeker.com", "match.indeed.com", "updates-noreply@linkedin.com",
+                                        "notifications-noreply@linkedin.com"]},
     "filter": {"enabled": True},
     "telegram": {"enabled": True, "max_messages_per_run": 15},
     "gemini": {

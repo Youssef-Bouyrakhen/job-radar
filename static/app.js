@@ -3,7 +3,7 @@
    If GET jobs fails (file opened directly), the page runs on demo data.
    ========================================================= */
 // Must match VERSION in app/__init__.py. If they differ, an old Job Radar is still running.
-const DASHBOARD_VERSION = '8.8';
+const DASHBOARD_VERSION = '9.0';
 
 const ENDPOINTS = {
   jobs:        () => ['GET',    '/api/jobs?view=everything'],
@@ -29,7 +29,11 @@ const ENDPOINTS = {
   importCompanies:() => ['POST', '/api/companies/import'],   // { text, label }
   lookalikes:  () => ['POST',   '/api/companies/lookalikes'],
   weeklySummary:() => ['POST',  '/api/companies/weekly-summary'],
-  setCompany:  id => ['PATCH',  `/api/companies/${id}`]     // { status } or { category }
+  setCompany:  id => ['PATCH',  `/api/companies/${id}`],    // { status } or { category }
+  applications:() => ['GET',    '/api/applications'],       // -> { jobs: {id: {timeline, category}}, stats, review, ... }
+  appCheck:    () => ['POST',   '/api/applications/check'],
+  assignEmail: id => ['POST',   `/api/applications/emails/${id}/assign`],   // { job_id|null, kind }
+  unassignEmail:id => ['POST',  `/api/applications/emails/${id}/unassign`]
 };
 async function api(name, arg, body) {
   const [method, url] = ENDPOINTS[name](arg);
@@ -74,6 +78,7 @@ function settingsFromApi(s) {
     ai_provider: s.ai_enabled ? s.ai_provider : null,
     ai_enabled: s.ai_enabled, min_score: s.min_score, interval_min: s.check_interval_minutes, profile: s.profile,
     ba_searches: s.arbeitsagentur_searches, emails: s.emails, gmail_label: s.gmail_label,
+    applications: s.applications, applications_label: s.applications_label,
     telegram_on: s.telegram_enabled, telegram_configured: s.telegram_configured, telegram_off_in_config: s.telegram_off_in_config
   };
 }
@@ -158,6 +163,7 @@ const state = {
   aiOn: true, version: DASHBOARD_VERSION
 };
 let jobs = [], links = [], settings = null;
+let apps = null; // application tracking: timelines, stats, Needs review (GET /api/applications)
 
 const isActive = j => j.status !== 'hidden' && j.status !== 'filtered';
 const scored = j => typeof j.ai_score === 'number';
@@ -231,7 +237,8 @@ const matchSource = (j, source) => source === 'all' || (j.site || 'other') === s
 const matchTime = (j, time) => time === 'any' || daysSince(j) < Number(time);
 function matchQuery(j) {
   const q = state.query.trim().toLowerCase();
-  return !q || [j.title, j.company, j.location, j.ai_reason].join(' ').toLowerCase().includes(q);
+  // The source too: "statworx (Companies)" is found by the company's name, whatever the ad calls it
+  return !q || [j.title, j.company, j.location, j.ai_reason, j.source].join(' ').toLowerCase().includes(q);
 }
 // Jobs that pass everything. Override one part to count "what if I clicked this pill".
 function filteredJobs({ view = state.view, source = state.source, time = state.time } = {}) {
@@ -339,7 +346,8 @@ function renderHead() {
     if (late) parts.push(`<span class="demo-note">${late} older than ${state.mustDays} days: apply now or hide</span>`);
     parts.push(`<span>leaves only when you mark it Applied or hide it</span>`);
   }
-  if (pending) parts.push(`<span>${plural(pending, 'job')} still scoring</span>`);
+  if (state.view === 'applied') parts.splice(0, parts.length, ...appSummary());
+  if (pending && state.view !== 'applied') parts.push(`<span>${plural(pending, 'job')} still scoring</span>`);
   if (state.query.trim()) parts.push(`<span>${visibleJobs().length} match “${esc(state.query.trim())}”</span>`);
   const timeOn = state.time !== 'any' && state.view !== 'must'; // Must apply ignores the time filter
   if (state.source !== 'all' || timeOn) parts.push(`<span>${[state.source !== 'all' ? SOURCES[state.source].label : null, timeOn ? TIMES[state.time].toLowerCase() : null].filter(Boolean).join(', ')}</span>`);
@@ -368,7 +376,7 @@ function jobRow(j) {
   const canHide = j.status !== 'filtered'; // keyword-filtered jobs can't be restored, the filter decides
   const tooMany = j.max_hours && j.max_hours > 20;
   const statusTag = saved && state.view !== 'saved' ? '<span class="status-tag">Saved</span>'
-                  : applied && state.view !== 'applied' ? '<span class="status-tag">Applied</span>' : '';
+                  : applied ? appTag(j.app_status) : '';
   const reason = hidden && j.filter_reason ? j.filter_reason : shortReason(j.ai_reason);
   const must = isMust(j), overdue = mustOverdue(j);
   const mustTag = must && state.view !== 'must' ? `<span class="status-tag status-tag--must">${ICON.flame}Must apply</span>` : '';
@@ -397,6 +405,7 @@ function jobRow(j) {
     </div>
     <div class="job-details">
       <p class="details-reason"><span class="details-label">${scored(j) ? `AI assessment · ${j.ai_score}/10` : 'AI assessment'}</span>${esc(j.ai_reason || (scored(j) ? '' : scoring(j) ? 'Gemini is still scoring this job.' : 'No AI score for this job.'))}${j.ai_full_time ? '<br>Gemini thinks this is really a full-time job.' : ''}${hidden && j.filter_reason ? `<br><span class="details-label" style="margin-top:8px">${j.keyword_out ? 'Keyword filter' : 'Filtered because'}</span>${esc(j.filter_reason)}` : ''}</p>
+      ${applied ? timeline(j) : ''}
       ${must ? `<div class="details-reason"><span class="details-label">Must apply · all 6 conditions met</span>${mustMet}</div>`
         : j.must_why_not && isActive(j) && j.status !== 'applied' ? `<p class="details-reason"><span class="details-label">Not in Must apply</span>${esc(j.must_why_not)}</p>` : ''}
       <div class="details-facts">
@@ -509,11 +518,12 @@ function renderSettings() {
     row('Checks', 'How often all sources are checked', chip(`Every ${s.interval_min} min`)),
     row('Arbeitsagentur searches', 'Darmstadt and Frankfurt, 25 km', (s.ba_searches || []).length ? s.ba_searches.map(x => chip(x)).join('') : chip('Turned off', 'chip--muted')),
     row('Job-alert emails', esc(s.emails || 'Read-only, emails stay unread'), chip(`Label "${s.gmail_label || 'JobRadar'}"`)),
+    row('Application emails', `${esc(s.applications || 'Read-only, emails stay unread')} · replies to your applications update the Applied page`, chip(`Label "${s.applications_label || 'Bewerbungen'}"`)),
     `<div class="list-row"><div><div class="list-title">Your profile</div><div class="list-sub">What Gemini knows about you</div></div><div class="profile-text">${esc(s.profile || '')}</div></div>`
   ].join('');
 }
 
-function render() { renderStatus(); renderNav(); renderHead(); renderFilters(); renderList(); renderLinks(); renderSettings(); }
+function render() { renderStatus(); renderNav(); renderHead(); renderAppPanel(); renderFilters(); renderList(); renderLinks(); renderSettings(); }
 
 // Browser tab shows how many good jobs you haven't opened yet, e.g. "(3) Job Radar"
 function renderTitle() {
@@ -555,6 +565,7 @@ async function loadAll() {
   render();
   loadSuggestions();
   loadCompanies();
+  loadApps();
 }
 function applyInfo(i) {
   if (!i) return;
@@ -582,6 +593,7 @@ async function refreshQuiet() {
     if (l && state.tab !== 'links') { links = l.map(linkFromApi); renderLinks(); }
     applyInfo(i); renderStatus(); renderNav(); renderHead(); renderFilters(); if (!state.openId) renderList();
   } catch (e) {}
+  loadApps(true);
 }
 
 /* ACTIONS */
@@ -914,7 +926,17 @@ function coJobs(c) {
   const title = `Read with: ${c.jobs_method}. ${c.jobs_total} jobs in total, ${near} in the Darmstadt / Frankfurt area (or remote / nationwide).`
     + (c.good_note ? ` Good = Werkstudent / part-time + passes your filter + in the area: ${c.good_note}.` : '')
     + (c.jobs_note ? ' ' + c.jobs_note : '');
-  return `<div class="co-sub" title="${esc(title)}">${parts.join(' · ')}</div>`;
+  const text = near ? `<a href="#" data-co-jobs="${c.id}">${parts.join(' · ')}</a>` : parts.join(' · ');
+  return `<div class="co-sub" title="${esc(title + (near ? ' Click to see these jobs.' : ''))}">${text}</div>`;
+}
+// Opens the company's jobs in the Jobs views: searched by its name, any source, any time
+// (its ads are often older than the time filter), in the first view that has some of them.
+function showCompanyJobs(c) {
+  state.query = c.name; $('#search').value = c.name;
+  setFilter('source', 'all'); setFilter('time', 'any');
+  state.view = ['all', 'low', 'filtered'].find(v => filteredJobs({ view: v }).length) || 'all';
+  state.openId = null; state.focusId = null;
+  setTab('jobs'); render();
 }
 function coCareer(c) {
   const link = (u, label) => u ? `<a href="${esc(u)}" target="_blank" rel="noopener" title="${esc(u)}">${label || esc(bareUrl(u))}</a>` : '';
@@ -1037,6 +1059,12 @@ $('#categoryBoxes').addEventListener('click', e => {
 });
 $('#companySearch').addEventListener('input', e => { state.coQuery = e.target.value; coShown = CO_PAGE; renderCompanies(); });
 $('#companiesMore').addEventListener('click', () => { coShown += CO_PAGE; renderCompanies(); });
+$('#companyList').addEventListener('click', e => {
+  const a = e.target.closest('[data-co-jobs]'); if (!a) return;
+  e.preventDefault();
+  const c = companies.find(x => String(x.id) === a.dataset.coJobs);
+  if (c) showCompanyJobs(c);
+});
 $('#companyList').addEventListener('change', async e => {
   const sel = e.target.closest('.co-select'); if (!sel) return;
   const c = companies.find(x => String(x.id) === sel.closest('[data-company]').dataset.company); if (!c) return;
@@ -1066,6 +1094,111 @@ function setTab(tab) {
   $('#mainScroll').scrollTop = 0;
   renderNav();
 }
+
+/* APPLICATION TRACKING (Applied page)
+   Replies in the Gmail label "Bewerbungen" move an applied job on: Confirmed / Test / Interview / Rejected.
+   Emails the backend can't match for sure wait in "Needs review" until you pick the job. */
+const APP_STATUS = {
+  confirmation: 'Confirmed', test: 'Test', interview: 'Interview', rejection: 'Rejected', other: 'Other'
+};
+const appTag = st => st ? `<span class="app-tag app-tag--${esc(st)}">${APP_STATUS[st] || esc(st)}</span>` : '<span class="app-tag" title="No reply yet">Applied</span>';
+const appliedJobs = () => jobs.filter(j => j.status === 'applied');
+
+async function loadApps(quiet) {
+  if (state.demo) return;
+  try { apps = await api('applications'); } catch (e) { if (!quiet) apps = null; return; }
+  if (state.view === 'applied' && state.tab === 'jobs') { renderHead(); renderAppPanel(); if (!state.openId || !quiet) renderList(); }
+}
+
+function statsText(s) {
+  const parts = [`<b>${s.applied}</b> applied`, `<b>${s.rejection}</b> rejected`, `<b>${s.interview}</b> interview${s.interview === 1 ? '' : 's'}`];
+  if (s.test) parts.push(`<b>${s.test}</b> test${s.test === 1 ? '' : 's'}`);
+  return parts.join(' · ');
+}
+// "X applied · Y rejected · Z interviews", counted from the jobs on your Applied list
+function appSummary() {
+  const list = appliedJobs();
+  if (!list.length) return ['<span>No applications yet</span>'];
+  const n = st => list.filter(j => j.app_status === st).length;
+  const parts = [`<span>${statsText({ applied: list.length, rejection: n('rejection'), interview: n('interview'), test: n('test') })}</span>`];
+  const waiting = list.filter(j => !j.app_status || j.app_status === 'confirmation').length;
+  if (waiting) parts.push(`<span>${waiting} waiting for an answer</span>`);
+  if (apps?.review?.length) parts.push(`<span class="demo-note">${plural(apps.review.length, 'email')} to review</span>`);
+  return parts;
+}
+
+function timeline(j) {
+  const info = apps?.jobs?.[j.id];
+  const items = [`<li><span class="tl-date">${j.applied_at ? fmtShort(j.applied_at) : '–'}</span>${appTag(null)}<span class="tl-subj">You marked it applied</span></li>`]
+    .concat((info?.timeline || []).map(t => `<li><span class="tl-date">${t.at ? fmtShort(t.at) : '–'}</span>${appTag(t.kind)}
+      <span class="tl-subj">${esc(t.subject || '(no subject)')}</span><span class="tl-from">${esc(t.sender || '')}${t.by === 'ai' ? ' · sorted by AI' : t.by === 'you' ? ' · by you' : ''}</span>
+      <button type="button" class="link-btn" data-unassign="${esc(t.gmail_id)}" title="This email is about another application: move it to Needs review">Not this job</button></li>`));
+  const cat = info?.category_label ? ` · ${esc(info.category_label)}` : '';
+  return `<div class="details-reason"><span class="details-label">Timeline${cat}</span><ol class="timeline">${items.join('')}</ol>
+    ${info?.timeline?.length ? '' : `<span class="list-sub">No reply yet in your Gmail label "${esc(apps?.label || 'Bewerbungen')}".</span>`}</div>`;
+}
+
+function renderAppPanel() {
+  const el = $('#appPanel');
+  const show = state.tab === 'jobs' && state.view === 'applied' && !state.loading && !state.demo && !!apps;
+  el.hidden = !show;
+  if (!show) return;
+  const labels = apps.category_labels || {};
+  const cats = Object.keys(labels).filter(k => apps.stats?.[k]?.applied);
+  const catLine = cats.length > 1 || (cats.length === 1 && cats[0] !== 'other')
+    ? `<div class="app-cats" aria-label="Per category">${cats.map(k => `<span>${esc(labels[k])}: ${statsText(apps.stats[k])}</span>`).join('')}</div>` : '';
+  const last = apps.last?.at ? `Emails checked ${fmtTime(apps.last.at)}${apps.last.ok === false ? ': ' + esc(apps.last.note || 'failed') : ''}`
+    : apps.enabled ? `Label "${esc(apps.label)}" is checked every few minutes` : 'Off: no Gmail login in .env';
+  const options = sel => ['<option value="">Pick the job…</option>'].concat(appliedJobs()
+    .sort((a, b) => (a.company || '').localeCompare(b.company || ''))
+    .map(j => `<option value="${j.id}"${String(j.id) === String(sel) ? ' selected' : ''}>${esc(((j.company || '?') + ' · ' + j.title).slice(0, 90))}</option>`)).join('');
+  const kinds = k => Object.entries(APP_STATUS).map(([v, l]) => `<option value="${v}"${v === k ? ' selected' : ''}>${l}</option>`).join('');
+  const rows = (apps.review || []).map(r => `
+    <div class="list-row" data-review="${esc(r.gmail_id)}">
+      <div class="list-main">
+        <div class="list-title">${esc(r.subject || '(no subject)')}</div>
+        <div class="list-sub">${r.at ? fmtDate(r.at) : '–'} · ${esc(r.sender)}${r.note ? ` · <b>${esc(r.note)}</b>` : ''}</div>
+        ${r.snippet ? `<div class="app-snippet">${esc(r.snippet)}</div>` : ''}
+      </div>
+      <div class="list-chips">
+        <select class="co-select" data-review-job aria-label="Job this email belongs to">${options(r.guess)}</select>
+        <select class="co-select" data-review-kind aria-label="What the email says">${kinds(r.kind)}</select>
+        <button type="button" class="btn btn--sm btn--primary" data-review-act="assign">Assign</button>
+        <button type="button" class="btn btn--sm" data-review-act="dismiss" title="Not about one of your applications">Dismiss</button>
+      </div>
+    </div>`).join('');
+  el.innerHTML = `${catLine}
+    <div class="app-review-head"><h2 class="section-title">Needs review${apps.review?.length ? ` (${apps.review.length})` : ''}</h2>
+      <button type="button" class="btn btn--sm" data-app-check>${ICON.mail}Check emails now</button><span class="list-sub" data-app-msg>${last}</span></div>
+    ${rows ? `<div class="list-panel">${rows}</div>` : `<p class="list-sub">Nothing to review: every reply found its job.</p>`}`;
+}
+
+async function unassignEmail(id) {
+  try { apps = await api('unassignEmail', id); } catch (e) { return toast('Could not save: ' + e.message); }
+  await refreshQuiet(); renderHead(); renderAppPanel(); renderList();
+  toast('Moved to Needs review');
+}
+
+$('#appPanel').addEventListener('click', async e => {
+  const check = e.target.closest('[data-app-check]');
+  if (check) {
+    check.disabled = true; $('[data-app-msg]').textContent = 'Reading new emails… (can take a minute)';
+    try { apps = await api('appCheck'); await refreshQuiet(); renderHead(); renderAppPanel(); renderList(); toast('Emails checked'); }
+    catch (err) { check.disabled = false; $('[data-app-msg]').textContent = err.message; }
+    return;
+  }
+  const act = e.target.closest('[data-review-act]'); if (!act) return;
+  const row = act.closest('[data-review]');
+  const assign = act.dataset.reviewAct === 'assign';
+  const jobId = row.querySelector('[data-review-job]').value, kind = row.querySelector('[data-review-kind]').value;
+  if (assign && !jobId) return toast('Pick the job this email belongs to first');
+  act.disabled = true;
+  try {
+    apps = await api('assignEmail', row.dataset.review, assign ? { job_id: Number(jobId), kind } : { job_id: null });
+    await refreshQuiet(); renderHead(); renderAppPanel(); renderList();
+    toast(assign ? 'Email added to the job’s timeline' : 'Email dismissed');
+  } catch (err) { act.disabled = false; toast('Could not save: ' + err.message); }
+});
 
 /* EVENTS */
 document.addEventListener('click', e => {
@@ -1101,6 +1234,8 @@ $('#jobList').addEventListener('click', e => {
     else state.view = v;
     return render();
   }
+  const un = e.target.closest('[data-unassign]');
+  if (un) { e.stopPropagation(); return unassignEmail(un.dataset.unassign); }
   const actEl = e.target.closest('[data-action]'); if (!actEl) return;
   const row = actEl.closest('.job'); if (!row) return;
   e.stopPropagation();

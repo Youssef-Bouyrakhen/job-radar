@@ -118,10 +118,11 @@ OPENAI_STYLE_URLS = {
 # ---- daily budget and priorities ---------------------------------------------------
 # Every request is counted per provider and day (data: ai_usage). Work that matters less only
 # runs while enough of today's requests are left, so scoring jobs never runs out:
+#   "mail":  replies to your applications (interview invites!) - always, even past a provider's daily budget
 #   "score": scoring jobs (incl. the Must apply blocker check) - may use everything
 #   "jobs":  reading job lists, finding websites, imports - stops when keep_for_scoring % is left
 #   "low":   categories, company sizes, Initiativ reasons - stops when keep_for_jobs % is left
-PRIORITIES = ("score", "jobs", "low")
+PRIORITIES = ("mail", "score", "jobs", "low")
 
 
 class BudgetSaved(RateLimited):
@@ -148,7 +149,7 @@ def usage() -> list[dict]:
 
 
 def _allowed(priority: str) -> bool:
-    if priority == "score":
+    if priority in ("mail", "score"):
         return True
     rows = usage()
     total, left = sum(r["budget"] for r in rows), sum(r["left"] for r in rows)
@@ -215,7 +216,7 @@ def ask_json(prompt: str, schema: dict, temperature: float, priority: str = "low
     for name in providers():
         if time.monotonic() < _paused.get(name, 0):
             continue
-        if db.ai_usage_today().get(name, 0) >= budget_of(name):
+        if db.ai_usage_today().get(name, 0) >= budget_of(name) and priority != "mail":
             continue  # this provider's free requests for today are used up
         db.count_ai_request(name)
         try:

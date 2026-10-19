@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import VERSION, ai, categories, companies, company_jobs, db, must_apply, discover, gmail, scheduler, telegram, weekly
+from . import VERSION, ai, applications, categories, companies, company_jobs, db, must_apply, discover, gmail, scheduler, telegram, weekly
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all,
                       ensure_builtin_sources, hide_old_duplicates, min_score, refilter_all_jobs)
 from .config import CONFIG, ROOT
@@ -39,6 +39,9 @@ async def lifespan(app: FastAPI):
     logging.getLogger("jobradar").info(
         "Job-alert emails: %s", f"on (Gmail label \"{gmail.label()}\", read-only)" if gmail.configured()
         else "off (GMAIL_ADDRESS / GMAIL_APP_PASSWORD missing in .env)")
+    logging.getLogger("jobradar").info(
+        "Application emails: %s", f"on (Gmail label \"{applications.settings()['label']}\", read-only)"
+        if applications.enabled() else "off")
     # JOBRADAR_NO_SCHEDULER=1: a test copy that never checks sources or sends alerts by itself
     background = os.environ.get("JOBRADAR_NO_SCHEDULER") != "1"
     if background:
@@ -116,6 +119,7 @@ def info():
 def check_all():
     """"Check now" in the dashboard: checks every active source in the background."""
     check_all_in_background()  # if one is already running, just report on that one
+    applications.check_in_background()
     return info()
 
 
@@ -128,6 +132,11 @@ def settings():
         "telegram_enabled": telegram.enabled(),
         "telegram_off_in_config": not CONFIG["telegram"].get("enabled", True),
         "gmail_label": gmail.label(),
+        "applications": "Turned off" if not CONFIG["applications"]["enabled"] else
+                        f"Label \"{applications.settings()['label']}\" (read-only, emails stay unread), checked every "
+                        f"{CONFIG['applications']['check_every_minutes']} min" if gmail.configured()
+                        else "Not set up: GMAIL_ADDRESS / GMAIL_APP_PASSWORD missing in .env",
+        "applications_label": applications.settings()["label"],
         "ai_enabled": ai.enabled(),
         "ai_key_present": bool(ai.providers()),
         "ai_model": g["model"],
@@ -350,7 +359,48 @@ def set_job_status(job_id: int, body: JobStatus):
     if body.status not in db.STATUSES:
         raise HTTPException(400, f"status must be one of {list(db.STATUSES)}")
     db.set_status(job_id, body.status)
+    if body.status == "applied":  # replies that came before you clicked Applied find their job now
+        applications.rematch_review()
     return db.count_jobs(min_score())
+
+
+# ---- application tracking (emails in the "Bewerbungen" label) ------------------------
+
+@app.get("/api/applications")
+def application_overview():
+    return applications.overview()
+
+
+@app.post("/api/applications/check")
+def check_applications():
+    """Read new emails in the label now (takes a few seconds, longer if the AI is needed)."""
+    applications.rematch_review()
+    result = applications.check()
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("note") or "Could not read the emails")
+    return applications.overview()
+
+
+class EmailAssign(BaseModel):
+    job_id: int | None = None   # None = dismiss (not about one of your applications)
+    kind: str | None = None     # confirmation / rejection / interview / test / other
+
+
+@app.post("/api/applications/emails/{gmail_id}/assign")
+def assign_email(gmail_id: str, body: EmailAssign):
+    if body.kind is not None and body.kind not in applications.KINDS:
+        raise HTTPException(400, f"kind must be one of {list(applications.KINDS)}")
+    if not applications.assign(gmail_id, body.job_id, body.kind):
+        raise HTTPException(404, "Email not found.")
+    return applications.overview()
+
+
+@app.post("/api/applications/emails/{gmail_id}/unassign")
+def unassign_email(gmail_id: str):
+    """"Not this job": the email goes back to Needs review."""
+    if not applications.unassign(gmail_id):
+        raise HTTPException(404, "Email not found.")
+    return applications.overview()
 
 
 @app.post("/api/jobs/{job_id}/seen")

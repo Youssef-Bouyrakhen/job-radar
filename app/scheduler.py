@@ -18,6 +18,11 @@ def start() -> None:
     scheduler.add_job(check_due_links, "interval", seconds=TICK.total_seconds(), id="check_due_links",
                       max_instances=1, coalesce=True, misfire_grace_time=None,
                       next_run_time=datetime.now() + timedelta(seconds=20))
+    apps = CONFIG["applications"]
+    if apps.get("enabled"):  # replies to your applications (the "Bewerbungen" label)
+        from . import applications
+        scheduler.add_job(applications.scheduled, "interval", minutes=apps["check_every_minutes"], id="applications",
+                          max_instances=1, coalesce=True, next_run_time=datetime.now() + timedelta(seconds=60))
     hour = CONFIG["companies"].get("daily_run_hour")
     if hour is not None:  # Company Discovery Engine once a day (German time), like pressing "Run discovery"
         from . import companies  # imported here: companies needs the checker's modules first

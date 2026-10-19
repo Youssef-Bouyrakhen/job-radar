@@ -34,6 +34,30 @@ emails:
   days_back: 14
   max_emails_per_check: 50
 
+# Application tracking: replies to your applications (confirmation, rejection, interview
+# invite, test) from a second Gmail label, read the same safe way as above (read-only,
+# emails stay unread, never replied to, moved or deleted). Each email is matched to a job
+# you marked Applied (company name + sender's domain); unsure ones go to "Needs review".
+applications:
+  enabled: true
+  label: Bewerbungen
+  days_back: 60                 # look at emails from the last N days (each one is read once)
+  max_emails_per_check: 80
+  check_every_minutes: 15
+  telegram_max_age_days: 3      # 🎉 interview / 📝 test messages only for emails this new
+  # Newsletters and job alerts that land in the label: skipped without reading further
+  # (a domain, or a full sender address)
+  ignore_senders:
+    - vaia.com
+    - studysmarter.de
+    - jobagent.stepstone.de
+    - shop-apotheke.com
+    - freelance.de
+    - jobseeker.com
+    - match.indeed.com
+    - updates-noreply@linkedin.com
+    - notifications-noreply@linkedin.com
+
 # Layer 1 filter: decides which jobs show up in your job list.
 # Jobs that don't pass are still saved; you can see them under "Filtered out" in the dashboard.
 #

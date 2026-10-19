@@ -105,6 +105,22 @@ CREATE TABLE IF NOT EXISTS places (
     lon  REAL
 );
 
+CREATE TABLE IF NOT EXISTS app_emails (
+    gmail_id    TEXT PRIMARY KEY,    -- an email from the "Bewerbungen" label (each is read once)
+    received_at TEXT,
+    sender      TEXT,
+    subject     TEXT,
+    body        TEXT,                -- start of the text (empty for emails that aren't about an application)
+    kind        TEXT,                -- confirmation / rejection / interview / test / other
+    kind_from   TEXT,                -- rules / ai / you
+    company     TEXT,                -- employer the AI read from the email
+    job_id      INTEGER,             -- the applied job it belongs to (while in review: the best guess)
+    state       TEXT NOT NULL,       -- matched / review / ignored (not about an application) / dismissed
+    note        TEXT,                -- why it needs review
+    notified    INTEGER NOT NULL DEFAULT 0,  -- 1 = the 🎉 / 📝 Telegram message went out
+    read_at     TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,      -- switches you flip in the dashboard, e.g. "telegram_paused"
     value TEXT NOT NULL
@@ -139,6 +155,9 @@ MIGRATIONS = {
         "must_at": "TEXT",              # when it went into the box
         "must_sent_at": "TEXT",         # when the "🔥 MUST APPLY" Telegram message went out
         "must_reminded": "INTEGER NOT NULL DEFAULT 0",  # 1 = the 24 h reminder went out
+        # Application tracking (applications.py)
+        "applied_at": "TEXT",           # when you marked it Applied
+        "app_status": "TEXT",           # from the emails: confirmation / test / interview / rejection (empty = no reply yet)
     },
 }
 
@@ -353,7 +372,7 @@ STATUSES = ("", "saved", "applied", "hidden")
 LIST_COLUMNS = """id, link_id, source, url, title, company, location, employment, hours,
                   posted_at, first_seen, seen, status, filter_passed, filter_reason,
                   ai_score, ai_reason, ai_full_time, ai_attempts, ai_blocker,
-                  must_apply, must_reasons, must_at, must_why_not"""
+                  must_apply, must_reasons, must_at, must_why_not, applied_at, app_status"""
 
 
 def list_jobs(view: str = "all", min_score: int | None = None, limit: int = 500) -> list[dict]:
@@ -381,7 +400,8 @@ def get_job(job_id: int) -> dict | None:
 def set_status(job_id: int, status: str) -> None:
     """saved / applied / hidden, or "" to undo. Marking a job also counts as having seen it."""
     with connect() as conn:
-        conn.execute("UPDATE jobs SET status = ?, seen = 1 WHERE id = ?", (status, job_id))
+        conn.execute("UPDATE jobs SET status = ?, seen = 1, applied_at = CASE WHEN ? = 'applied' "
+                     "THEN COALESCE(applied_at, ?) ELSE applied_at END WHERE id = ?", (status, status, now(), job_id))
 
 
 def count_jobs(min_score: int | None = None) -> dict:
@@ -594,6 +614,67 @@ def remember_emails(gmail_ids: list[str]) -> None:
     with connect() as conn:
         conn.executemany("INSERT OR IGNORE INTO emails (gmail_id, read_at) VALUES (?, ?)",
                          [(i, now()) for i in gmail_ids])
+
+
+# ---- application emails (applications.py) -----------------------------------------
+
+APP_EMAIL_COLUMNS = ("gmail_id", "received_at", "sender", "subject", "body", "kind", "kind_from", "company",
+                     "job_id", "state", "note", "notified")
+
+
+def known_app_emails(gmail_ids: list[str]) -> set[str]:
+    with connect() as conn:
+        rows = conn.execute("SELECT gmail_id FROM app_emails").fetchall()
+    return {r[0] for r in rows} & set(gmail_ids)
+
+
+def save_app_email(e: dict) -> None:
+    row = {c: e.get(c) for c in APP_EMAIL_COLUMNS}
+    row["notified"] = row["notified"] or 0
+    with connect() as conn:
+        conn.execute(f"""INSERT OR REPLACE INTO app_emails ({', '.join(APP_EMAIL_COLUMNS)}, read_at)
+                         VALUES ({', '.join(':' + c for c in APP_EMAIL_COLUMNS)}, :read_at)""", {**row, "read_at": now()})
+
+
+def app_email(gmail_id: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM app_emails WHERE gmail_id = ?", (gmail_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def app_emails(state: str) -> list[dict]:
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM app_emails WHERE state = ? ORDER BY received_at", (state,))]
+
+
+def update_app_email(gmail_id: str, fields: dict) -> None:
+    with connect() as conn:
+        conn.execute(f"UPDATE app_emails SET {', '.join(f'{k} = :{k}' for k in fields)} WHERE gmail_id = :gmail_id",
+                     {**fields, "gmail_id": gmail_id})
+
+
+def applied_jobs() -> list[dict]:
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT id, title, company, url, applied_at, app_status FROM jobs
+               WHERE status = 'applied' AND duplicate_of IS NULL""")]
+
+
+def set_app_statuses(statuses: dict[int, str]) -> None:
+    """job id -> its status from the emails; every other job has none."""
+    with connect() as conn:
+        conn.execute("UPDATE jobs SET app_status = NULL WHERE app_status IS NOT NULL")
+        conn.executemany("UPDATE jobs SET app_status = ? WHERE id = ?", [(s, i) for i, s in statuses.items()])
+
+
+def app_emails_to_notify(since: str) -> list[dict]:
+    """Interview invites and tests that came in after `since` and weren't sent to Telegram yet."""
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT e.*, j.title AS job_title, j.url AS job_url, j.company AS job_company
+               FROM app_emails e LEFT JOIN jobs j ON j.id = e.job_id AND e.state = 'matched'
+               WHERE e.kind IN ('interview', 'test') AND e.state IN ('matched', 'review') AND e.notified = 0
+               AND e.received_at >= ? ORDER BY e.received_at""", (since,))]
 
 
 # ---- duplicates ----------------------------------------------------------------

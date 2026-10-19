@@ -1,7 +1,8 @@
 """Built-in source: job-alert emails (Indeed, StepStone, LinkedIn) from your Gmail.
 
 What Job Radar does - and does NOT do - with your Gmail:
-- It opens ONLY the label set in config.yaml (default "JobRadar"). Never your inbox,
+- It opens ONLY the labels set in config.yaml: "JobRadar" for job alerts and
+  "Bewerbungen" for replies to your applications (see applications.py). Never your inbox,
   never any other label.
 - It opens that label read-only (IMAP "EXAMINE"), so it cannot move, label, archive or
   delete anything.
@@ -82,34 +83,68 @@ def _imap_name(name: str) -> str:
     return '"' + "".join(out).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def check() -> CheckResult:
-    cfg = settings()
-    name = label()
+class GmailError(Exception):
+    """Gmail could not be opened; the message says why in plain words."""
+
+
+def open_label(name: str) -> imaplib.IMAP4_SSL:
+    """Log in and open ONE label read-only (IMAP "EXAMINE": nothing in it can be changed).
+    The caller must call .logout(). Raises GmailError."""
     address, password = credentials()
     if not (address and password):
-        return red("Not set up: GMAIL_ADDRESS / GMAIL_APP_PASSWORD missing in .env (see README)", METHOD)
+        raise GmailError("Not set up: GMAIL_ADDRESS / GMAIL_APP_PASSWORD missing in .env (see README)")
     if not safe_label(name):
-        return red(f"For safety Job Radar only reads its own Gmail label, not \"{name}\". "
-                   "Set emails: label: in config.yaml", METHOD)
+        raise GmailError(f"For safety Job Radar only reads its own Gmail labels, not \"{name}\". "
+                         "Set the label in config.yaml")
     try:
         imap = imaplib.IMAP4_SSL(IMAP_HOST, timeout=30)
     except Exception as e:
-        return red(f"Could not reach Gmail ({type(e).__name__})", METHOD)
+        raise GmailError(f"Could not reach Gmail ({type(e).__name__})") from e
     try:
-        try:
-            imap.login(address, password)
-        except imaplib.IMAP4.error:
-            return red("Gmail refused the login. Check GMAIL_ADDRESS and GMAIL_APP_PASSWORD in .env "
-                       "(it must be an app password, not your normal password)", METHOD)
-        # readonly=True -> IMAP "EXAMINE": nothing in this label can be changed
+        imap.login(address, password)
         status, _ = imap.select(_imap_name(name), readonly=True)
-        if status != "OK":
-            return red(f"Gmail label \"{name}\" not found. Create it, and in Gmail settings > Labels "
-                       f"make sure \"Show in IMAP\" is ticked for it", METHOD)
-        since = date.today() - timedelta(days=cfg["days_back"])
-        status, data = imap.uid("search", None, "SINCE", f"{since.day}-{MONTHS[since.month - 1]}-{since.year}")
-        uids = data[0].split() if status == "OK" and data and data[0] else []
-        ids = _gmail_ids(imap, uids)
+    except imaplib.IMAP4.error as e:
+        _logout(imap)
+        raise GmailError("Gmail refused the login. Check GMAIL_ADDRESS and GMAIL_APP_PASSWORD in .env "
+                         "(it must be an app password, not your normal password)") from e
+    if status != "OK":
+        _logout(imap)
+        raise GmailError(f"Gmail label \"{name}\" not found. Create it, and in Gmail settings > Labels "
+                         f"make sure \"Show in IMAP\" is ticked for it")
+    return imap
+
+
+def _logout(imap: imaplib.IMAP4_SSL) -> None:
+    try:
+        imap.logout()
+    except Exception:
+        pass
+
+
+def ids_since(imap: imaplib.IMAP4_SSL, days_back: int) -> dict[bytes, str]:
+    """Emails of the open label from the last N days: UID -> Gmail's own message id."""
+    since = date.today() - timedelta(days=days_back)
+    status, data = imap.uid("search", None, "SINCE", f"{since.day}-{MONTHS[since.month - 1]}-{since.year}")
+    uids = data[0].split() if status == "OK" and data and data[0] else []
+    return _gmail_ids(imap, uids)
+
+
+def fetch(imap: imaplib.IMAP4_SSL, uid: bytes) -> bytes | None:
+    """The whole email. BODY.PEEK = read it without marking it as read."""
+    status, data = imap.uid("fetch", uid, "(BODY.PEEK[])")
+    raw = next((part[1] for part in data or [] if isinstance(part, tuple)), None)
+    return raw if status == "OK" else None
+
+
+def check() -> CheckResult:
+    cfg = settings()
+    name = label()
+    try:
+        imap = open_label(name)
+    except GmailError as e:
+        return red(str(e), METHOD)
+    try:
+        ids = ids_since(imap, cfg["days_back"])
         known = db.known_emails(list(ids.values()))
         new = [(uid, gid) for uid, gid in ids.items() if gid not in known][-cfg["max_emails_per_check"]:]
 
@@ -117,10 +152,8 @@ def check() -> CheckResult:
         read = []
         resolver = Resolver()
         for uid, gid in new:
-            # BODY.PEEK = read the email without marking it as read
-            status, data = imap.uid("fetch", uid, "(BODY.PEEK[])")
-            raw = next((part[1] for part in data or [] if isinstance(part, tuple)), None)
-            if status != "OK" or raw is None:
+            raw = fetch(imap, uid)
+            if raw is None:
                 continue
             try:
                 found_jobs = jobs_from_email(raw, resolver)
@@ -132,10 +165,7 @@ def check() -> CheckResult:
     except (imaplib.IMAP4.error, OSError) as e:
         return red(f"Reading Gmail failed ({type(e).__name__}: {str(e)[:120]})", METHOD)
     finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+        _logout(imap)
 
     if not read:
         return CheckResult("green", f"No new emails in the label \"{name}\" "
