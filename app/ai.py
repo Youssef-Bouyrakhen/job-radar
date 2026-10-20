@@ -1,7 +1,8 @@
 """Layer 2 filter: an AI scores each job 1-10 for how well it fits you.
 
 Only jobs that passed the keyword filter are sent. Free providers only: Gemini first, then
-Groq, OpenRouter (free models) and GitHub Models. Without any of their keys in .env this
+Groq, Cloudflare Workers AI (free 10,000 neurons a day) and OpenRouter (free models).
+Without any of their keys in .env this
 layer is skipped and every keyword-filtered job is shown.
 """
 import json
@@ -107,6 +108,7 @@ def enabled() -> bool:
 PROVIDERS = (  # name, key in .env, section in config.yaml
     ("Gemini", "GEMINI_API_KEY", "gemini"),
     ("Groq", "GROQ_API_KEY", "groq"),
+    ("Cloudflare", "CLOUDFLARE_API_TOKEN", "cloudflare"),  # also needs CLOUDFLARE_ACCOUNT_ID
     ("OpenRouter", "OPENROUTER_API_KEY", "openrouter"),
     ("GitHub", "GITHUB_MODELS_TOKEN", "github"),   # off: GitHub Models was retired on 2026-07-30
     ("Mistral", "MISTRAL_API_KEY", "mistral"),     # off (enabled: false): they need a payment method
@@ -118,7 +120,12 @@ OPENAI_STYLE_URLS = {
     "GitHub": "https://models.github.ai/inference/chat/completions",
     "Mistral": "https://api.mistral.ai/v1/chat/completions",
     "Cerebras": "https://api.cerebras.ai/v1/chat/completions",
+    "Cloudflare": "https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1/chat/completions",
 }
+# Cloudflare's free limit is 10,000 "neurons" a day (its unit of AI work), not a number of requests.
+# Job Radar counts the neurons each answer reports and stops at cloudflare.daily_neurons (below 10,000),
+# so it never needs the Workers Paid plan.
+NEURONS = {"Cloudflare"}
 
 # ---- daily budget and priorities ---------------------------------------------------
 # Every request is counted per provider and day (data: ai_usage). Work that matters less only
@@ -143,16 +150,24 @@ def stop_note(e: Exception, later: str) -> str:
 
 
 def budget_of(name: str) -> int:
-    """Estimated free requests a day. A config.yaml without a provider (e.g. GitHub) gets the default."""
+    """Estimated free requests a day (Cloudflare: neurons). A config.yaml without a provider (e.g. GitHub) gets the default."""
+    if name in NEURONS:
+        return int(_section(name)["daily_neurons"])
     limits = {**DEFAULTS["ai_budget"]["daily_requests"], **(CONFIG["ai_budget"].get("daily_requests") or {})}
     return int(limits.get(name, 0))
 
 
+def used_today() -> dict[str, int]:
+    """Requests used today per provider (Cloudflare: neurons)."""
+    neurons = db.ai_neurons_today()
+    return {**db.ai_usage_today(), **{p: math.ceil(neurons.get(p, 0)) for p in NEURONS}}
+
+
 def usage() -> list[dict]:
-    """Per provider with a key: requests used today, the daily budget, how many are left."""
-    used = db.ai_usage_today()
-    return [{"name": p, "used": used.get(p, 0), "budget": budget_of(p), "left": max(0, budget_of(p) - used.get(p, 0))}
-            for p in providers()]
+    """Per provider with a key: requests (or neurons) used today, the daily budget, how many are left."""
+    used = used_today()
+    return [{"name": p, "used": used.get(p, 0), "budget": budget_of(p), "left": max(0, budget_of(p) - used.get(p, 0)),
+             "unit": "neurons" if p in NEURONS else "requests"} for p in providers()]
 
 
 def _keep(priority: str) -> int:
@@ -164,9 +179,10 @@ def _allowed(priority: str) -> bool:
     keep = _keep(priority)
     if not keep:
         return True
-    rows = usage()
-    total, left = sum(r["budget"] for r in rows), sum(r["left"] for r in rows)
-    return left > total * keep / 100
+    rows = [r for r in usage() if r["budget"]]
+    # Each provider counts the same (Cloudflare's budget is in neurons, the others' in requests)
+    left = sum(r["left"] / r["budget"] for r in rows)
+    return left > len(rows) * keep / 100
 _paused: dict[str, float] = {}   # provider -> time.monotonic() when it may be used again
 _active: str | None = None       # the provider that answered last
 _warned: set[str] = set()
@@ -190,7 +206,7 @@ def providers() -> list[str]:
     """Providers with a key in .env, in order. OpenRouter only with a free model."""
     found = []
     for name, key, section in PROVIDERS:
-        if not os.environ.get(key):
+        if not os.environ.get(key) or (name == "Cloudflare" and not os.environ.get("CLOUDFLARE_ACCOUNT_ID")):
             continue
         if name != "Gemini" and not CONFIG[section].get("enabled", True):  # gemini: enabled = AI on/off
             continue
@@ -210,7 +226,7 @@ def _ready(name: str, used: dict[str, int]) -> bool:
 
 def next_provider() -> str | None:
     """The provider the next request goes to, None if all are paused or used up."""
-    used = db.ai_usage_today()
+    used = used_today()
     return next((p for p in providers() if _ready(p, used)), None)
 
 
@@ -268,7 +284,7 @@ def ask_json(prompt: str, schema: dict, temperature: float, priority: str = "low
         raise BudgetSaved("AI requests left today are kept for more important work")
     error = None
     for name in providers():
-        if not _ready(name, db.ai_usage_today()):
+        if not _ready(name, used_today()):
             continue  # paused, or this provider's free requests for today are used up
         if (prompt_limit(name) or len(prompt)) < len(prompt):
             continue  # too long for this provider's free tier
@@ -277,8 +293,11 @@ def ask_json(prompt: str, schema: dict, temperature: float, priority: str = "low
             answer = _ask_gemini_api(prompt, schema, temperature) if name == "Gemini" \
                 else _ask_openai_style(name, prompt, schema, temperature)
         except (RateLimited, Overloaded) as e:
-            if isinstance(e, RateLimited) and "day" in str(e).lower():
-                db.use_up_ai(name, budget_of(name))  # its daily quota is gone: skip it until tomorrow
+            if isinstance(e, RateLimited) and "day" in str(e).lower():  # its daily quota is gone: skip it until tomorrow
+                if name in NEURONS:
+                    db.count_ai_neurons(name, budget_of(name))
+                else:
+                    db.use_up_ai(name, budget_of(name))
             minutes = 10 if isinstance(e, RateLimited) else 3
             _paused[name] = time.monotonic() + minutes * 60
             log.warning("%s: %s, pausing it for %d min and using the next AI provider (%s)",
@@ -298,19 +317,26 @@ def ask_json(prompt: str, schema: dict, temperature: float, priority: str = "low
 
 
 def _ask_openai_style(name: str, prompt: str, schema: dict, temperature: float) -> list | dict:
-    """Groq and OpenRouter speak the OpenAI format. Same prompt; the JSON shape is described
+    """Groq, Cloudflare and OpenRouter speak the OpenAI format. Same prompt; the JSON shape is described
     in words because they only promise "some JSON object" (so a list goes under "items")."""
     wrapped = schema["type"] == "ARRAY"
     shape = {"type": "OBJECT", "properties": {"items": schema}} if wrapped else schema
     text = (f"{prompt}\n\nAnswer ONLY with JSON in exactly this shape (JSON schema):\n"
-            f"{json.dumps(shape)}")
+            f"{json.dumps(shape)}{_section(name).get('prompt_suffix', '')}")
     key = dict((p[0], p[1]) for p in PROVIDERS)[name]
-    r = httpx.post(OPENAI_STYLE_URLS[name], headers={"Authorization": f"Bearer {os.environ[key]}"},
-                   json={"model": model_of(name), "temperature": temperature,
-                         "messages": [{"role": "user", "content": text}],
-                         "response_format": {"type": "json_object"}},
-                   timeout=180)
+    body = {"model": model_of(name), "temperature": temperature, "messages": [{"role": "user", "content": text}],
+            "response_format": {"type": "json_object"}}
+    if _section(name).get("max_tokens"):
+        body["max_tokens"] = _section(name)["max_tokens"]
+    url = OPENAI_STYLE_URLS[name].format(account=os.environ.get("CLOUDFLARE_ACCOUNT_ID", ""))
+    r = httpx.post(url, headers={"Authorization": f"Bearer {os.environ[key]}"}, json=body, timeout=180)
     data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    if name in NEURONS:
+        _count_neurons(name, data)
+    if not data.get("error") and data.get("errors"):  # Cloudflare's own error format
+        data["error"] = {"message": "; ".join(str(e.get("message", e) if isinstance(e, dict) else e) for e in data["errors"])}
+    if "daily free allocation" in str((data.get("error") or {}).get("message", "")).lower():
+        raise RateLimited("day: Cloudflare's free neurons for today are used up")
     status = r.status_code
     code = (data.get("error") or {}).get("code")
     if status == 200 and isinstance(code, int):  # OpenRouter sometimes reports errors inside a 200
@@ -328,6 +354,17 @@ def _ask_openai_style(name: str, prompt: str, schema: dict, temperature: float) 
         lists = [v for v in answer.values() if isinstance(v, list)]
         return answer.get("items") or (lists[0] if lists else [])
     return answer
+
+
+def _count_neurons(name: str, data: dict) -> None:
+    """Cloudflare reports the neurons of each answer. Without that number: the price from config.yaml."""
+    u = data.get("usage") or {}
+    neurons = u.get("neurons")
+    if neurons is None:
+        cfg = _section(name)
+        neurons = (u.get("prompt_tokens", 0) * cfg["neurons_per_m_input"]
+                   + u.get("completion_tokens", 0) * cfg["neurons_per_m_output"]) / 1e6
+    db.count_ai_neurons(name, float(neurons))
 
 
 def _ask_gemini_api(prompt: str, schema: dict, temperature: float) -> list | dict:

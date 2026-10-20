@@ -217,13 +217,26 @@ gemini:
     Languages: <your languages>.
 
 # Backup AI providers, all free. When Gemini hits its limit (or Google's servers are busy),
-# Job Radar switches to Groq, then OpenRouter, then GitHub Models - same prompt, same 1-10
-# scores. Only providers with a key in .env are used (GROQ_API_KEY, OPENROUTER_API_KEY,
-# GITHUB_MODELS_TOKEN). The rules above (min_score, batch_size, profile, ...) apply to all.
+# Job Radar switches to Groq, then Cloudflare, then OpenRouter - same prompt, same 1-10
+# scores. Only providers with a key in .env are used (GROQ_API_KEY, CLOUDFLARE_ACCOUNT_ID +
+# CLOUDFLARE_API_TOKEN, OPENROUTER_API_KEY). The rules above (min_score, batch_size, profile, ...) apply to all.
 # max_prompt_chars: the free tier only takes short requests, so fewer jobs go into one request.
 groq:
   model: openai/gpt-oss-120b
   max_prompt_chars: 18000
+cloudflare:
+  # Cloudflare Workers AI, free plan: 10,000 "neurons" a day (needs CLOUDFLARE_ACCOUNT_ID and
+  # CLOUDFLARE_API_TOKEN in .env). Job Radar counts the neurons and stops at daily_neurons, so
+  # the paid plan is never used. Tested on 2026-10-21: qwen3-30b with " /no_think" scored 3 jobs
+  # correctly in 2 s for 19 neurons (~7 per job). Only models WITHOUT "needs a paid plan" on
+  # https://developers.cloudflare.com/workers-ai/platform/pricing/ ; the two prices come from there.
+  model: "@cf/qwen/qwen3-30b-a3b-fp8"
+  prompt_suffix: " /no_think"    # qwen3: answer without "thinking" first (5x fewer neurons, same scores)
+  max_tokens: 3000               # longest answer: a request never costs more than ~170 neurons
+  max_prompt_chars: 60000
+  daily_neurons: 9000            # stop here: 1,000 below the free 10,000 for requests running at the same time
+  neurons_per_m_input: 4625      # only used if an answer doesn't say its neurons
+  neurons_per_m_output: 30475
 openrouter:
   # Must be a free model (the name ends with ":free"), otherwise OpenRouter is skipped.
   # Tested on 2026-10-16: laguna-s-2.1 scored correctly in ~4 s; free Gemma was overloaded.
@@ -243,7 +256,7 @@ cerebras:
   model: gpt-oss-120b
 
 # AI requests per provider and day (counted by Job Radar, shown in the AI bar at the top).
-# Estimates of the free limits. When a provider says its daily quota is gone, it counts as
+# Estimates of the free limits (Cloudflare: cloudflare.daily_neurons). When a provider says its daily quota is gone, it counts as
 # used up until the next day (00:00 UTC).
 ai_budget:
   daily_requests: {Gemini: 50, Groq: 50, OpenRouter: 50, GitHub: 150}
@@ -305,6 +318,7 @@ companies:
   max_auto_added_per_run: 10     # watched links added automatically per run
   max_initiativ_reasons_per_run: 60
   daily_run_hour: 3              # run discovery by itself once a day (German time); null = off
+  night_end_hour: 7              # a night run stops starting new companies 15 min before this (German time); the rest waits
   # Phase C
   lookalikes_every_days: 7       # the daily run also asks the AI for look-alike companies this often (1 request)
   max_lookalikes: 15             # look-alike companies asked for per request
@@ -334,6 +348,6 @@ region:
     Darmstadt:
       ags: "06411000"            # official municipality key: the city boundary on OpenStreetMap
       postcodes: [64283, 64285, 64287, 64289, 64291, 64293, 64295, 64297]   # all districts
-  max_checks_per_run: 80         # town companies whose website + careers page are checked per night (extra)
+  max_checks_per_run: 300        # town companies whose website + careers page are checked per night (extra)
   max_contacts_per_run: 60       # small IT companies without a careers page: Impressum emails read per night
   offeneregister: true           # read the company register (2019, 260 MB) once, keep a small extract in data/

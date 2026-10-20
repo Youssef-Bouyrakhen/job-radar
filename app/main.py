@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
     ai.requeue_unscored()  # once: jobs the AI gave up on wait for a score again
     logging.getLogger("jobradar").info(
         "AI scoring: %s", f"on ({' -> '.join(ai.providers())}, min. score {CONFIG['gemini']['min_score']})"
-        if ai.enabled() else "off (no GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY / GITHUB_MODELS_TOKEN in .env)")
+        if ai.enabled() else "off (no GEMINI_API_KEY / GROQ_API_KEY / CLOUDFLARE_API_TOKEN / OPENROUTER_API_KEY in .env)")
     logging.getLogger("jobradar").info(
         "Telegram: %s", "on" if telegram.enabled() else "off (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing in .env)")
     logging.getLogger("jobradar").info(

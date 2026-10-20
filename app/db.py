@@ -161,6 +161,9 @@ MIGRATIONS = {
     },
 }
 
+# Cloudflare's free limit is counted in "neurons" (its own unit of AI work), not requests
+MIGRATIONS["ai_usage"] = {"neurons": "REAL NOT NULL DEFAULT 0"}
+
 # When a column is first added, run this once. Jobs found before Telegram existed
 # count as "already notified", so you don't get a flood of old jobs.
 # Company Discovery Engine, Phase B: the jobs read from each company and its fit score
@@ -568,6 +571,18 @@ def count_ai_request(provider: str) -> None:
     with connect() as conn:
         conn.execute("INSERT INTO ai_usage (day, provider, requests) VALUES (?, ?, 1) "
                      "ON CONFLICT(day, provider) DO UPDATE SET requests = requests + 1", (_today(), provider))
+
+
+def ai_neurons_today() -> dict[str, float]:
+    with connect() as conn:
+        return dict(conn.execute("SELECT provider, neurons FROM ai_usage WHERE day = ?", (_today(),)).fetchall())
+
+
+def count_ai_neurons(provider: str, neurons: float) -> None:
+    with connect() as conn:
+        conn.execute("INSERT INTO ai_usage (day, provider, neurons) VALUES (?, ?, ?) "
+                     "ON CONFLICT(day, provider) DO UPDATE SET neurons = neurons + excluded.neurons",
+                     (_today(), provider, neurons))
 
 
 def use_up_ai(provider: str, budget: int) -> None:

@@ -21,6 +21,8 @@ import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -355,6 +357,8 @@ def ask_ai_for_websites(companies: list[dict]) -> dict[int, str]:
             log.warning("Companies: AI website lookup stopped (%s)", type(e).__name__)
             _progress["warnings"].append(ai.stop_note(e, "some companies were checked without a website guess"))
             break
+        for c in batch:
+            c["ai_asked"] = True  # the AI answered for it (maybe "don't know"): no need to wait for the next night
         for a in answer if isinstance(answer, list) else []:
             n = a.get("id")
             if isinstance(n, int) and 1 <= n <= len(batch) and a.get("website"):
@@ -439,6 +443,8 @@ def recheck_career_pages() -> int:
 
 # ---- the run -----------------------------------------------------------------------
 
+GERMANY = ZoneInfo("Europe/Berlin")
+NIGHT_MARGIN_MINUTES = 15  # stop starting new companies this long before night_end_hour (the running ones finish)
 COUNTERS = {"done": 0, "total": 0, "collected": 0, "new": 0, "websites": 0, "careers": 0, "feeds": 0,
             "jobs_read": 0, "new_jobs": 0, "auto_added": 0, "initiativ": 0}
 # kind: "run" (the full discovery run), "import" (a list you gave it) or "lookalikes"
@@ -464,9 +470,25 @@ def start(kind: str = "run", text: str = "", label: str = "") -> bool:
     return True
 
 
+def night_deadline() -> float | None:
+    """A run that starts at night stops starting new companies a bit before the morning
+    (companies.night_end_hour, German time): what is left waits for the next night.
+    A run started during the day has no deadline."""
+    end = CONFIG["companies"].get("night_end_hour")
+    now = datetime.now(GERMANY)
+    if end is None or now.hour >= end:
+        return None
+    return (now.replace(hour=end, minute=0, second=0, microsecond=0) - timedelta(minutes=NIGHT_MARGIN_MINUTES)).timestamp()
+
+
+def too_late(progress: dict) -> bool:
+    return bool(progress.get("stop_at")) and time.time() >= progress["stop_at"]
+
+
 def _run(kind: str = "run", text: str = "", label: str = "") -> None:
     from . import company_import  # it imports this module
     started = time.monotonic()
+    _progress["stop_at"] = night_deadline()
     try:
         ids = None  # None = all companies that are due
         recheck_career_pages()
@@ -550,6 +572,8 @@ def _check(ids: set[int] | None = None) -> None:
             c["hint_note"] = f"{'OSM' if c['hint_from'] == 'osm' else 'Known'} website: {note}"
 
     def guess(c: dict) -> None:
+        if too_late(_progress):
+            return
         if home := region.guess_website(c):
             homes[c["id"]], c["hint_from"] = _trim(home), "guess"
 
@@ -561,9 +585,20 @@ def _check(ids: set[int] | None = None) -> None:
     with ThreadPoolExecutor(cfg["workers"]) as pool:
         list(pool.map(guess, [c for c in todo if c["town"] and not homes.get(c["id"])]))
     # Look-alikes came with the AI's website already: don't ask it twice
-    ai_sites = ask_ai_for_websites([c for c in todo if not homes.get(c["id"]) and c["hint_from"] != "ai"])
+    need_ai = [c for c in todo if not homes.get(c["id"]) and c["hint_from"] != "ai"]
+    ask = not too_late(_progress)
+    ai_sites = ask_ai_for_websites(need_ai) if ask else {}
+    # The free AI ran out before it could look for their website: they wait for the next night
+    # (not saved, so they stay unchecked) instead of ending as "No website found"
+    waiting = {c["id"] for c in need_ai if not c.get("ai_asked")} if ai.enabled() and ask else set()
+    postponed = Counter()
 
     def finish(c: dict) -> None:
+        if c["id"] in waiting or too_late(_progress):
+            with _lock:
+                postponed["ai" if c["id"] in waiting else "time"] += 1
+                _progress["done"] += 1
+            return
         try:
             fields = check_company(c, ai_sites.get(c["id"]), homes.pop(c["id"], None), watched)
             if c.get("hint_note"):
@@ -584,4 +619,13 @@ def _check(ids: set[int] | None = None) -> None:
     with ThreadPoolExecutor(cfg["workers"]) as pool:
         list(pool.map(finish, todo))
     log.info("Companies: checked %d: %d websites, %d careers pages, %d job feeds",
-             len(todo), _progress["websites"], _progress["careers"], _progress["feeds"])
+             len(todo) - sum(postponed.values()), _progress["websites"], _progress["careers"], _progress["feeds"])
+    companies = lambda n: f"{n} compan{'y' if n == 1 else 'ies'}"
+    if postponed["ai"]:
+        _progress["notes"].append(f"{companies(postponed['ai'])} need the AI to find their website, but its free "
+                                  f"requests are used up (scoring jobs comes first): they wait for the next night")
+    if postponed["time"]:
+        _progress["notes"].append(f"{companies(postponed['time'])} wait for the next night: the run stops before "
+                                  f"{CONFIG['companies']['night_end_hour']}:00")
+    if postponed:
+        log.info("Companies: %d wait for the AI, %d for time: checked next night", postponed["ai"], postponed["time"])

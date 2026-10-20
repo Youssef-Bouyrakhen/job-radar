@@ -535,9 +535,14 @@ function renderAiBar() {
   const boxes = ai.providers.map(p => {
     const pct = Math.min(100, Math.round(100 * p.used / Math.max(1, p.budget)));
     const tag = p.status === 'paused' && p.paused_minutes ? `Paused ${p.paused_minutes} min` : AI_STATUS[p.status];
-    return `<div class="ai-box ai-box--${p.status}" title="${esc(p.name)} · ${esc(p.model)}: ${p.used} of about ${p.budget} free requests used today">
+    // Cloudflare counts "neurons" (its unit of AI work), the others requests
+    const neurons = p.unit === 'neurons', n = x => x.toLocaleString('en-US');
+    const k = x => x < 1000 ? `${x}` : `${+(x / 1000).toFixed(1)}k`;  // 4.2k: fits the small box
+    const title = neurons ? `${n(p.used)} of ${n(p.budget)} free neurons used today (Cloudflare's daily limit: 10,000)`
+      : `${p.used} of about ${p.budget} free requests used today`;
+    return `<div class="ai-box ai-box--${p.status}" title="${esc(p.name)} · ${esc(p.model)}: ${title}">
       <div class="ai-box-head"><span class="ai-name">${esc(p.name)}</span><span class="ai-tag">${esc(tag)}</span></div>
-      <div class="ai-count">${p.used} / ~${p.budget}</div>
+      <div class="ai-count">${neurons ? `${k(p.used)} / ${k(p.budget)} neurons` : `${p.used} / ~${p.budget}`}</div>
       <div class="ai-meter"><span style="width:${pct}%"></span></div>
     </div>`;
   }).join('');

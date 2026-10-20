@@ -35,6 +35,9 @@ DEFAULTS = {
     },
     "groq": {"model": "openai/gpt-oss-120b", "max_prompt_chars": 18000},
     "openrouter": {"model": "poolside/laguna-s-2.1:free"},
+    "cloudflare": {"model": "@cf/qwen/qwen3-30b-a3b-fp8", "prompt_suffix": " /no_think", "max_tokens": 3000,
+                   "max_prompt_chars": 60000, "daily_neurons": 9000,
+                   "neurons_per_m_input": 4625, "neurons_per_m_output": 30475},
     "github": {"enabled": False, "model": "openai/gpt-4.1-mini", "max_prompt_chars": 18000},
     "mistral": {"enabled": False, "model": "mistral-small-latest"},
     "cerebras": {"enabled": False, "model": "gpt-oss-120b"},
@@ -57,6 +60,7 @@ DEFAULTS = {
         "ai_seconds_between_requests": 12,
         "max_size_lookups_per_run": 200,
         "daily_run_hour": 3,
+        "night_end_hour": 7,
         "lookalikes_every_days": 7,
         "max_lookalikes": 15,
         "import_max_ai_requests": 5,
@@ -77,7 +81,7 @@ DEFAULTS = {
     "region": {
         # ags: the town's official municipality key (OpenStreetMap boundary); postcodes: all of its districts
         "towns": {"Darmstadt": {"ags": "06411000", "postcodes": [64283, 64285, 64287, 64289, 64291, 64293, 64295, 64297]}},
-        "max_checks_per_run": 80,
+        "max_checks_per_run": 300,
         "max_contacts_per_run": 60,
         "offeneregister": True,
     },

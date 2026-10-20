@@ -476,6 +476,10 @@ def run(progress: dict, ids: set[int] | None = None) -> None:
     results: dict[int, dict] = {}
 
     def read(c: dict) -> None:
+        from .companies import too_late  # companies imports this module
+        if too_late(progress):  # morning: read next night
+            progress["done"] += 1
+            return
         try:
             results[c["id"]] = read_without_ai(c)
         except Exception as e:
@@ -490,7 +494,9 @@ def run(progress: dict, ids: set[int] | None = None) -> None:
     new_good = 0
     progress.update(step="Saving jobs…", done=0)
     for c in todo:
-        r = results[c["id"]]
+        r = results.get(c["id"])
+        if r is None:
+            continue  # not read before the morning deadline
         if "ai_part" in r:
             if ai_budget <= 0:
                 continue  # read again next run, when there are AI requests left
