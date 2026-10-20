@@ -108,7 +108,7 @@ PROVIDERS = (  # name, key in .env, section in config.yaml
     ("Gemini", "GEMINI_API_KEY", "gemini"),
     ("Groq", "GROQ_API_KEY", "groq"),
     ("OpenRouter", "OPENROUTER_API_KEY", "openrouter"),
-    ("GitHub", "GITHUB_MODELS_TOKEN", "github"),
+    ("GitHub", "GITHUB_MODELS_TOKEN", "github"),   # off: GitHub Models was retired on 2026-07-30
     ("Mistral", "MISTRAL_API_KEY", "mistral"),     # off (enabled: false): they need a payment method
     ("Cerebras", "CEREBRAS_API_KEY", "cerebras"),
 )

@@ -3,7 +3,7 @@
    If GET jobs fails (file opened directly), the page runs on demo data.
    ========================================================= */
 // Must match VERSION in app/__init__.py. If they differ, an old Job Radar is still running.
-const DASHBOARD_VERSION = '9.1';
+const DASHBOARD_VERSION = '9.2';
 
 const ENDPOINTS = {
   jobs:        () => ['GET',    '/api/jobs?view=everything'],

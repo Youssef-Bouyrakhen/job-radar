@@ -35,7 +35,7 @@ DEFAULTS = {
     },
     "groq": {"model": "openai/gpt-oss-120b", "max_prompt_chars": 18000},
     "openrouter": {"model": "poolside/laguna-s-2.1:free"},
-    "github": {"model": "openai/gpt-4.1-mini", "max_prompt_chars": 18000},
+    "github": {"enabled": False, "model": "openai/gpt-4.1-mini", "max_prompt_chars": 18000},
     "mistral": {"enabled": False, "model": "mistral-small-latest"},
     "cerebras": {"enabled": False, "model": "gpt-oss-120b"},
     "ai_budget": {

@@ -229,8 +229,9 @@ openrouter:
   # Tested on 2026-10-16: laguna-s-2.1 scored correctly in ~4 s; free Gemma was overloaded.
   model: poolside/laguna-s-2.1:free
 github:
-  # GitHub Models (free with a GitHub token that has "Models: read-only").
-  # gpt-4.1-mini is a "low" tier model: about 150 requests a day, 8,000 tokens per request.
+  # Off: GitHub retired GitHub Models on 2026-07-30 (every request only gets "OK" back).
+  # Kept here in case it comes back: enabled: true + GITHUB_MODELS_TOKEN in .env.
+  enabled: false
   model: openai/gpt-4.1-mini
   max_prompt_chars: 18000
 # Off: both need a payment method on file. Job Radar stays 100% free.
