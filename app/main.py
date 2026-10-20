@@ -31,9 +31,10 @@ async def lifespan(app: FastAPI):
     hide_old_duplicates()
     must_apply.prepare()  # once: recent good jobs are scored again with the blocker check
     categories.apply_rules()  # no AI: every company the name / jobs make clear gets its category right away
+    ai.requeue_unscored()  # once: jobs the AI gave up on wait for a score again
     logging.getLogger("jobradar").info(
         "AI scoring: %s", f"on ({' -> '.join(ai.providers())}, min. score {CONFIG['gemini']['min_score']})"
-        if ai.enabled() else "off (no GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY in .env)")
+        if ai.enabled() else "off (no GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY / GITHUB_MODELS_TOKEN in .env)")
     logging.getLogger("jobradar").info(
         "Telegram: %s", "on" if telegram.enabled() else "off (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing in .env)")
     logging.getLogger("jobradar").info(
@@ -109,6 +110,7 @@ def info():
         "checking": checking_all(),
         "telegram_enabled": telegram.enabled(),
         "ai_enabled": ai.enabled(),
+        "ai": ai.provider_status() if ai.enabled() else None,  # the AI usage bar at the top
         "min_score": CONFIG["gemini"]["min_score"],
         "must": {k: CONFIG["must_apply"][k] for k in ("min_score", "max_days", "center")},  # older Must apply jobs turn red
         **db.count_jobs(min_score()),

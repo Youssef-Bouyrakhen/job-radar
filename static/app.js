@@ -3,7 +3,7 @@
    If GET jobs fails (file opened directly), the page runs on demo data.
    ========================================================= */
 // Must match VERSION in app/__init__.py. If they differ, an old Job Radar is still running.
-const DASHBOARD_VERSION = '9.0';
+const DASHBOARD_VERSION = '9.1';
 
 const ENDPOINTS = {
   jobs:        () => ['GET',    '/api/jobs?view=everything'],
@@ -497,9 +497,9 @@ function renderLinks() {
 function aiProviderRow(s, row, chip) {
   const p = s.ai_provider;
   if (!p) return row('AI provider', 'Scores every job that passes the filter', chip(s.gemini_model || '–'));
-  const order = p.providers.map(x => x.name + (x.paused_minutes ? ` (paused ${x.paused_minutes} min)` : '')).join(' → ');
-  return row('AI provider', `Scores every job that passes the filter, 10 per request · order: ${esc(order)}`,
-    p.active ? chip(`${p.active} · ${p.model}`, 'chip--good') : chip('All paused, back in a few minutes', 'chip--maybe'));
+  const order = p.providers.map(x => x.name + (x.status === 'empty' ? ' (used up today)' : x.paused_minutes ? ` (paused ${x.paused_minutes} min)` : '')).join(' → ');
+  return row('AI provider', `Scores every job that passes the filter, up to 10 per request · order: ${esc(order)}`,
+    p.active ? chip(`${p.active} · ${p.model}`, 'chip--good') : chip(p.all_empty ? 'All used up today, jobs wait' : 'All paused, back in a few minutes', 'chip--maybe'));
 }
 
 function renderSettings() {
@@ -523,7 +523,31 @@ function renderSettings() {
   ].join('');
 }
 
-function render() { renderStatus(); renderNav(); renderHead(); renderAppPanel(); renderFilters(); renderList(); renderLinks(); renderSettings(); }
+// AI usage bar at the top of every page: one box per provider (used / estimated free limit today)
+const AI_STATUS = { active: 'Active', next: 'Next', paused: 'Paused', empty: 'Empty' };
+function renderAiBar() {
+  const bar = $('#aiBar'), ai = state.ai;
+  bar.hidden = state.demo || !ai;
+  if (bar.hidden) return;
+  const reset = new Date(ai.reset_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const boxes = ai.providers.map(p => {
+    const pct = Math.min(100, Math.round(100 * p.used / Math.max(1, p.budget)));
+    const tag = p.status === 'paused' && p.paused_minutes ? `Paused ${p.paused_minutes} min` : AI_STATUS[p.status];
+    return `<div class="ai-box ai-box--${p.status}" title="${esc(p.name)} · ${esc(p.model)}: ${p.used} of about ${p.budget} free requests used today">
+      <div class="ai-box-head"><span class="ai-name">${esc(p.name)}</span><span class="ai-tag">${esc(tag)}</span></div>
+      <div class="ai-count">${p.used} / ~${p.budget}</div>
+      <div class="ai-meter"><span style="width:${pct}%"></span></div>
+    </div>`;
+  }).join('');
+  const waiting = state.aiPending || 0;
+  bar.classList.toggle('is-empty', !!ai.all_empty);
+  bar.innerHTML = `${boxes}<div class="ai-info">
+      <span class="ai-waiting${waiting ? ' has-waiting' : ''}">${waiting} job${waiting === 1 ? '' : 's'} waiting for a score</span>
+      <span class="ai-reset">${ai.all_empty ? 'All AI limits used up · ' : ''}Resets at ${esc(reset)}</span>
+    </div>`;
+}
+
+function render() { renderAiBar(); renderStatus(); renderNav(); renderHead(); renderAppPanel(); renderFilters(); renderList(); renderLinks(); renderSettings(); }
 
 // Browser tab shows how many good jobs you haven't opened yet, e.g. "(3) Job Radar"
 function renderTitle() {
@@ -575,6 +599,8 @@ function applyInfo(i) {
   if (typeof i.telegram_on === 'boolean') state.telegramOn = i.telegram_on;
   if (typeof i.telegram_enabled === 'boolean') state.telegramOn = i.telegram_enabled;
   if (typeof i.ai_enabled === 'boolean') state.aiOn = i.ai_enabled;
+  if ('ai' in i) state.ai = i.ai;
+  if (typeof i.ai_pending === 'number') state.aiPending = i.ai_pending;
   if (i.min_score) state.minScore = i.min_score;
   if (i.must) Object.assign(state, { mustDays: i.must.max_days, mustScore: i.must.min_score, mustCenter: i.must.center });
   if (i.version) state.version = i.version;
@@ -591,7 +617,7 @@ async function refreshQuiet() {
     jobs = j.map(jobFromApi);
     // Not while you're on Watched links: that would wipe "Really delete?" and check messages
     if (l && state.tab !== 'links') { links = l.map(linkFromApi); renderLinks(); }
-    applyInfo(i); renderStatus(); renderNav(); renderHead(); renderFilters(); if (!state.openId) renderList();
+    applyInfo(i); renderAiBar(); renderStatus(); renderNav(); renderHead(); renderFilters(); if (!state.openId) renderList();
   } catch (e) {}
   loadApps(true);
 }

@@ -1,19 +1,22 @@
-"""Layer 2 filter: Google Gemini scores each job 1-10 for how well it fits you.
+"""Layer 2 filter: an AI scores each job 1-10 for how well it fits you.
 
-Only jobs that passed the keyword filter are sent. Without GEMINI_API_KEY in .env
-this layer is skipped and every keyword-filtered job is shown.
+Only jobs that passed the keyword filter are sent. Free providers only: Gemini first, then
+Groq, OpenRouter (free models) and GitHub Models. Without any of their keys in .env this
+layer is skipped and every keyword-filtered job is shown.
 """
 import json
 import logging
+import math
 import os
 import re
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from . import db, details
-from .config import CONFIG
+from .config import CONFIG, DEFAULTS
 
 log = logging.getLogger("jobradar")
 
@@ -105,24 +108,26 @@ PROVIDERS = (  # name, key in .env, section in config.yaml
     ("Gemini", "GEMINI_API_KEY", "gemini"),
     ("Groq", "GROQ_API_KEY", "groq"),
     ("OpenRouter", "OPENROUTER_API_KEY", "openrouter"),
-    ("Mistral", "MISTRAL_API_KEY", "mistral"),     # optional backups: only with a key in .env
+    ("GitHub", "GITHUB_MODELS_TOKEN", "github"),
+    ("Mistral", "MISTRAL_API_KEY", "mistral"),     # off (enabled: false): they need a payment method
     ("Cerebras", "CEREBRAS_API_KEY", "cerebras"),
 )
 OPENAI_STYLE_URLS = {
     "Groq": "https://api.groq.com/openai/v1/chat/completions",
     "OpenRouter": "https://openrouter.ai/api/v1/chat/completions",
+    "GitHub": "https://models.github.ai/inference/chat/completions",
     "Mistral": "https://api.mistral.ai/v1/chat/completions",
     "Cerebras": "https://api.cerebras.ai/v1/chat/completions",
 }
 
 # ---- daily budget and priorities ---------------------------------------------------
 # Every request is counted per provider and day (data: ai_usage). Work that matters less only
-# runs while enough of today's requests are left, so scoring jobs never runs out:
-#   "mail":  replies to your applications (interview invites!) - always, even past a provider's daily budget
-#   "score": scoring jobs (incl. the Must apply blocker check) - may use everything
-#   "jobs":  reading job lists, finding websites, imports - stops when keep_for_scoring % is left
-#   "low":   categories, company sizes, Initiativ reasons - stops when keep_for_jobs % is left
-PRIORITIES = ("mail", "score", "jobs", "low")
+# runs while enough of today's requests are left (ai_budget: keep_percent), so scoring never runs out:
+#   1 "score": scoring jobs (incl. the Must apply blocker check) - may use everything
+#   2 "mail":  application emails the rules can't sort
+#   3 "jobs":  reading careers pages without a feed, finding websites, imports
+#   4 "low":   categories, company sizes, Initiativ reasons - only leftovers
+PRIORITIES = ("score", "mail", "jobs", "low")
 
 
 class BudgetSaved(RateLimited):
@@ -133,12 +138,14 @@ class BudgetSaved(RateLimited):
 def stop_note(e: Exception, later: str) -> str:
     """The warning for the Companies page when AI work stopped early, e.g. later = "some job lists will be read next run"."""
     if isinstance(e, BudgetSaved):
-        return f"The rest of today's AI requests is kept for scoring jobs: {later}."
+        return f"The rest of today's AI requests is kept for more important work (scoring jobs first): {later}."
     return f"The AI's free limit is used up: {later}."
 
 
 def budget_of(name: str) -> int:
-    return int(CONFIG["ai_budget"]["daily_requests"].get(name, 0))
+    """Estimated free requests a day. A config.yaml without a provider (e.g. GitHub) gets the default."""
+    limits = {**DEFAULTS["ai_budget"]["daily_requests"], **(CONFIG["ai_budget"].get("daily_requests") or {})}
+    return int(limits.get(name, 0))
 
 
 def usage() -> list[dict]:
@@ -148,27 +155,44 @@ def usage() -> list[dict]:
             for p in providers()]
 
 
+def _keep(priority: str) -> int:
+    keep = {**DEFAULTS["ai_budget"]["keep_percent"], **(CONFIG["ai_budget"].get("keep_percent") or {})}
+    return 0 if priority == "score" else int(keep.get(priority, 0))
+
+
 def _allowed(priority: str) -> bool:
-    if priority in ("mail", "score"):
+    keep = _keep(priority)
+    if not keep:
         return True
     rows = usage()
     total, left = sum(r["budget"] for r in rows), sum(r["left"] for r in rows)
-    keep = CONFIG["ai_budget"]["keep_for_scoring" if priority == "jobs" else "keep_for_jobs"]
     return left > total * keep / 100
 _paused: dict[str, float] = {}   # provider -> time.monotonic() when it may be used again
 _active: str | None = None       # the provider that answered last
 _warned: set[str] = set()
 
 
+def _section(name: str) -> dict:
+    return CONFIG[dict((p[0], p[2]) for p in PROVIDERS)[name]]
+
+
 def model_of(name: str) -> str:
-    return CONFIG[dict((p[0], p[2]) for p in PROVIDERS)[name]]["model"]
+    return _section(name)["model"]
+
+
+def prompt_limit(name: str) -> int | None:
+    """Longest prompt (characters) this provider takes in one request, None = no limit.
+    Groq's free tier and GitHub Models only take about 8,000 tokens per request."""
+    return _section(name).get("max_prompt_chars")
 
 
 def providers() -> list[str]:
     """Providers with a key in .env, in order. OpenRouter only with a free model."""
     found = []
-    for name, key, _ in PROVIDERS:
+    for name, key, section in PROVIDERS:
         if not os.environ.get(key):
+            continue
+        if name != "Gemini" and not CONFIG[section].get("enabled", True):  # gemini: enabled = AI on/off
             continue
         if name == "OpenRouter" and not model_of(name).endswith(":free"):
             if name not in _warned:
@@ -179,45 +203,75 @@ def providers() -> list[str]:
     return found
 
 
+def _ready(name: str, used: dict[str, int]) -> bool:
+    """Not paused and still has requests left today."""
+    return time.monotonic() >= _paused.get(name, 0) and used.get(name, 0) < budget_of(name)
+
+
+def next_provider() -> str | None:
+    """The provider the next request goes to, None if all are paused or used up."""
+    used = db.ai_usage_today()
+    return next((p for p in providers() if _ready(p, used)), None)
+
+
 def provider_status() -> dict:
-    """For the Settings page: which provider scores right now, and the backups."""
+    """For the AI usage bar and Settings: each provider with used / estimated limit today and its
+    status - active (gets the next request), next (a backup), paused (limit hit or servers busy,
+    back in a few minutes) or empty (today's requests used up)."""
     now = time.monotonic()
-    ready = [p for p in providers() if _paused.get(p, 0) <= now]
-    active = _active if _active in ready else (ready[0] if ready else None)
+    active, rows = None, []
+    for u in usage():
+        name = u["name"]
+        paused = max(0.0, _paused.get(name, 0) - now)
+        if u["left"] <= 0:
+            status = "empty"
+        elif paused:
+            status = "paused"
+        elif active is None:
+            status, active = "active", name
+        else:
+            status = "next"
+        rows.append({**u, "model": model_of(name), "status": status, "paused_minutes": math.ceil(paused / 60)})
+    reset = datetime.combine(datetime.now(timezone.utc).date() + timedelta(days=1), datetime.min.time(), timezone.utc)
     return {
         "active": active,
         "model": model_of(active) if active else None,
-        "providers": [{**u, "model": model_of(u["name"]),
-                       "paused_minutes": max(0, round((_paused.get(u["name"], 0) - now) / 60))} for u in usage()],
+        "providers": rows,
+        "all_empty": bool(rows) and all(r["status"] == "empty" for r in rows),
+        "reset_at": reset.isoformat(timespec="seconds"),  # the daily counts start again (UTC midnight)
     }
 
 
 _last_call = 0.0
 
 
-def _ask_gemini(jobs: list[dict]) -> list[dict]:
+def _score_prompt(jobs: list[dict]) -> str:
     payload = [{
         "id": j["id"], "title": j["title"], "company": j["company"], "location": j["location"],
         "employment_label": j["employment"], "hours_found": j["hours"],
         "description": (j["description"] or "")[:3500],
     } for j in jobs]
-    prompt = INSTRUCTIONS.format(profile=settings()["profile"].strip(), jobs=json.dumps(payload, ensure_ascii=False))
-    return ask_json(prompt, RESPONSE_SCHEMA, temperature=0.2, priority="score")
+    return INSTRUCTIONS.format(profile=settings()["profile"].strip(), jobs=json.dumps(payload, ensure_ascii=False))
+
+
+def _ask_gemini(jobs: list[dict]) -> list[dict]:
+    return ask_json(_score_prompt(jobs), RESPONSE_SCHEMA, temperature=0.2, priority="score")
 
 
 def ask_json(prompt: str, schema: dict, temperature: float, priority: str = "low") -> list | dict:
     """Send one prompt to the first AI provider that isn't paused and has requests left today,
     and get JSON back in the given shape. Raises RateLimited / Overloaded only when every
-    provider is paused or used up, BudgetSaved when the rest is kept for more important work."""
+    provider is paused or used up, BudgetSaved when the rest is kept for more important work,
+    another error when every provider that was tried failed."""
     global _active
     if not _allowed(priority):
-        raise BudgetSaved(f"AI requests left today are kept for {'job scoring' if priority == 'jobs' else 'scoring and job lists'}")
+        raise BudgetSaved("AI requests left today are kept for more important work")
     error = None
     for name in providers():
-        if time.monotonic() < _paused.get(name, 0):
-            continue
-        if db.ai_usage_today().get(name, 0) >= budget_of(name) and priority != "mail":
-            continue  # this provider's free requests for today are used up
+        if not _ready(name, db.ai_usage_today()):
+            continue  # paused, or this provider's free requests for today are used up
+        if (prompt_limit(name) or len(prompt)) < len(prompt):
+            continue  # too long for this provider's free tier
         db.count_ai_request(name)
         try:
             answer = _ask_gemini_api(prompt, schema, temperature) if name == "Gemini" \
@@ -229,6 +283,11 @@ def ask_json(prompt: str, schema: dict, temperature: float, priority: str = "low
             _paused[name] = time.monotonic() + minutes * 60
             log.warning("%s: %s, pausing it for %d min and using the next AI provider (%s)",
                         name, "limit reached" if isinstance(e, RateLimited) else "servers busy", minutes, str(e)[:160])
+            error = e
+            continue
+        except Exception as e:  # e.g. a broken answer or "request too large": the next provider may manage
+            _paused[name] = time.monotonic() + 5 * 60
+            log.warning("%s failed (%s), pausing it for 5 min and using the next AI provider", name, str(e)[:160])
             error = e
             continue
         if _active != name:
@@ -256,8 +315,9 @@ def _ask_openai_style(name: str, prompt: str, schema: dict, temperature: float) 
     code = (data.get("error") or {}).get("code")
     if status == 200 and isinstance(code, int):  # OpenRouter sometimes reports errors inside a 200
         status = code
-    if status == 429:
-        raise RateLimited(str((data.get("error") or {}).get("message", ""))[:200])
+    if status == 429:  # GitHub says which limit in a header: "UserByModelByDay" = today's requests are gone
+        raise RateLimited(f"{r.headers.get('x-ratelimit-type', '')} "
+                          f"{str((data.get('error') or {}).get('message', ''))[:200]}".strip())
     if isinstance(status, int) and status >= 500:
         raise Overloaded(f"HTTP {status}")
     if status != 200 or not data.get("choices"):
@@ -315,14 +375,12 @@ def _complete_descriptions(jobs: list[dict]) -> None:
         db.save_description(j["id"], j["description"] or "")
 
 
-_paused_until = 0.0  # after hitting the free-tier limit we wait before trying again
-
-
 def score_pending_jobs() -> int:
-    """Score jobs that passed the keyword filter but have no AI score yet. Returns how many."""
-    global _paused_until
+    """Score jobs that passed the keyword filter but have no AI score yet. Returns how many.
+    The waiting line: when every provider is at its limit, the jobs simply stay unscored and
+    the next round (every 5 minutes) tries again as soon as any provider is free."""
     cfg = settings()
-    if not enabled() or time.monotonic() < _paused_until:
+    if not enabled() or not next_provider():
         return 0
     jobs = db.jobs_to_score(cfg["max_jobs_per_run"])
     if not jobs:
@@ -330,24 +388,29 @@ def score_pending_jobs() -> int:
     if cfg.get("fetch_full_description", True):
         _complete_descriptions(jobs)
 
-    scored = 0
-    size = cfg["batch_size"]
-    for start in range(0, len(jobs), size):
-        batch = jobs[start:start + size]
+    scored, retries = 0, 0
+    while jobs:
+        # As many jobs as fit into one request of the provider that answers next (Groq / GitHub take less)
+        limit = prompt_limit(next_provider() or "Gemini")
+        batch = jobs[:cfg["batch_size"]]
+        while len(batch) > 1 and limit and len(_score_prompt(batch)) > limit:
+            batch = batch[:-1]
+        jobs = jobs[len(batch):]
         try:
             answers = _ask_gemini(batch)
-        except RateLimited as e:
-            log.warning("Gemini: free-tier limit reached, pausing scoring for 10 min (%s)", e)
-            _paused_until = time.monotonic() + 600
-            break
-        except Overloaded:
-            log.warning("Gemini: Google's servers are busy, pausing scoring for 3 min")
-            _paused_until = time.monotonic() + 180
+        except (RateLimited, Overloaded) as e:
+            # One that only takes shorter requests is still free: smaller batch, same jobs
+            retries += 1
+            if next_provider() and retries <= len(providers()):
+                jobs = batch + jobs
+                continue
+            log.warning("AI scoring: every provider is at its limit or busy, %d job(s) wait for a score (%s)",
+                        db.count_jobs()["ai_pending"], str(e)[:120])
             break
         except Exception as e:
             # counts as a failed try; after 3 failed tries a job is shown without a score
             db.count_ai_attempt([j["id"] for j in batch])
-            log.warning("Gemini scoring failed: %s", e)
+            log.warning("AI scoring failed: %s", e)
             break
         ids = {j["id"] for j in batch}
         answered = {a.get("id") for a in answers}
@@ -367,8 +430,23 @@ def score_pending_jobs() -> int:
         db.save_scores(results, f"{_active}: {model_of(_active)}")
         scored += len(results)
     if scored:
-        log.info("Gemini scored %d job(s)", scored)
+        log.info("AI scored %d job(s)", scored)
     return scored
+
+
+REQUEUE = "1"  # bump to put unscored jobs back in the waiting line once more
+
+
+def requeue_unscored(days: int = 14) -> int:
+    """Once: recent jobs that were given up on (3 failed tries, mostly limits and too-long requests
+    before v9.1) go back into the waiting line."""
+    if db.get_setting("ai_requeue") == REQUEUE:
+        return 0
+    n = db.requeue_unscored(days)
+    db.set_setting("ai_requeue", REQUEUE)
+    if n:
+        log.info("AI scoring: %d job(s) without a score are back in the waiting line", n)
+    return n
 
 
 _background = threading.Lock()

@@ -216,32 +216,41 @@ gemini:
     Can work in <your city> (and nearby), or remotely.
     Languages: <your languages>.
 
-# Backup AI providers. When Gemini hits its limit (or Google's servers are busy), Job Radar
-# switches to Groq, then OpenRouter - same prompt, same 1-10 scores. Only providers with a
-# key in .env are used (GROQ_API_KEY, OPENROUTER_API_KEY). The rules above (min_score,
-# batch_size, profile, ...) apply to all of them.
+# Backup AI providers, all free. When Gemini hits its limit (or Google's servers are busy),
+# Job Radar switches to Groq, then OpenRouter, then GitHub Models - same prompt, same 1-10
+# scores. Only providers with a key in .env are used (GROQ_API_KEY, OPENROUTER_API_KEY,
+# GITHUB_MODELS_TOKEN). The rules above (min_score, batch_size, profile, ...) apply to all.
+# max_prompt_chars: the free tier only takes short requests, so fewer jobs go into one request.
 groq:
   model: openai/gpt-oss-120b
+  max_prompt_chars: 18000
 openrouter:
   # Must be a free model (the name ends with ":free"), otherwise OpenRouter is skipped.
   # Tested on 2026-10-16: laguna-s-2.1 scored correctly in ~4 s; free Gemma was overloaded.
   model: poolside/laguna-s-2.1:free
-# Optional backups, only used if MISTRAL_API_KEY / CEREBRAS_API_KEY is in .env (same prompt, same scores)
+github:
+  # GitHub Models (free with a GitHub token that has "Models: read-only").
+  # gpt-4.1-mini is a "low" tier model: about 150 requests a day, 8,000 tokens per request.
+  model: openai/gpt-4.1-mini
+  max_prompt_chars: 18000
+# Off: both need a payment method on file. Job Radar stays 100% free.
 mistral:
+  enabled: false
   model: mistral-small-latest
 cerebras:
+  enabled: false
   model: gpt-oss-120b
 
-# AI requests per provider and day (counted by Job Radar; Settings shows used / left).
-# Set them to your free tier's limits. When a provider says its daily quota is gone,
-# it counts as used up until the next day (UTC).
+# AI requests per provider and day (counted by Job Radar, shown in the AI bar at the top).
+# Estimates of the free limits. When a provider says its daily quota is gone, it counts as
+# used up until the next day (00:00 UTC).
 ai_budget:
-  daily_requests: {Gemini: 50, Groq: 50, OpenRouter: 50, Mistral: 300, Cerebras: 300}
+  daily_requests: {Gemini: 50, Groq: 50, OpenRouter: 50, GitHub: 150}
   # Priorities: 1. scoring jobs + Must apply blocker check (may use everything),
-  # 2. reading job lists / finding websites (stop when this % of today's requests is left),
-  # 3. categories, company sizes, Initiativ reasons (stop when this % is left)
-  keep_for_scoring: 30
-  keep_for_jobs: 60
+  # then each kind of work stops when only this % of today's requests is left:
+  # 2. application emails the rules can't sort, 3. reading careers pages without a feed
+  # (and finding websites), 4. categories, company sizes, Initiativ reasons (leftovers only)
+  keep_percent: {mail: 10, jobs: 30, low: 60}
 
 # Telegram: one message per good new job (score >= gemini.min_score, or every keyword
 # match if Gemini is off). Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env.

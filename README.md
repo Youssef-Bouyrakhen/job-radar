@@ -415,6 +415,12 @@ never changed.
 - [x] **Backup AI**: when Gemini hits its limit, scoring switches automatically to **Groq**, then
       **OpenRouter** (free models only). Only providers with a key in `.env` (`GROQ_API_KEY`,
       `OPENROUTER_API_KEY`) are used; Settings shows which one is active. 10 jobs per request.
+- [x] **AI limits (v9.1)**: 100% free. Gemini → Groq → OpenRouter (free models) → **GitHub Models**
+      (`GITHUB_MODELS_TOKEN`); Mistral / Cerebras are off. Rules first, AI last (company sizes from
+      job ad counts, Initiativ reasons only for the top 10). Jobs that can't be scored wait and are
+      scored as soon as any provider is free. The **AI usage bar** at the top of every page shows
+      used / estimated limit per provider, the active one (green), empty ones (red), the reset time
+      and how many jobs wait for a score.
 - [x] **Company Discovery Engine, Phase A** (v8.3): **Companies** page. Collects employers from the
       Arbeitsagentur (all IT jobs), OpenStreetMap and your own data, merges duplicates, finds and
       checks websites and careers pages, detects 12 applicant systems. Polite crawler (robots.txt,

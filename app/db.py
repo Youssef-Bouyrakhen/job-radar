@@ -500,6 +500,15 @@ def rescore_recent(min_score: int, days: int) -> int:
                 AND COALESCE(posted_at, first_seen) >= ?""", (min_score, since[:10])).rowcount
 
 
+def requeue_unscored(days: int) -> int:
+    """Recent jobs the AI gave up on (3 failed tries): back into the waiting line."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    with connect() as conn:
+        return conn.execute(
+            f"""UPDATE jobs SET ai_attempts = 0 WHERE {shown_sql(None)} AND ai_score IS NULL AND ai_attempts >= 3
+                AND first_seen >= ?""", (since,)).rowcount
+
+
 def must_to_send(max_age_hours: int) -> list[dict]:
     """Must apply jobs whose Telegram message hasn't gone out (only ones that came in recently)."""
     since = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat(timespec="seconds")

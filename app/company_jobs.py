@@ -267,10 +267,20 @@ Answer for each company by its number.
 """
 
 
+def data_size(c: dict) -> str | None:
+    """Size from our own data, no AI: staffing agency, or big / mid from the number of job ads
+    (Arbeitsagentur IT ads, jobs on its careers page). None = unknown. Never "small": a famous
+    name can have few ads."""
+    if c["size_hint"]:
+        return c["size_hint"]
+    jobs = c["jobs_total"] or 0
+    return "big" if jobs >= 40 else "mid" if jobs >= 10 else None
+
+
 def ai_sizes(rows: list[dict], limit: int) -> int:
-    """Ask the AI how big companies are (40 per request): famous names must not look "small"
-    just because they have few Arbeitsagentur ads. Companies with a careers page first."""
-    todo = sorted((c for c in rows if not c["size_ai"] and c["size_hint"] != "staffing agency"),
+    """Ask the AI how big companies are (40 per request), only those our data can't size.
+    Companies with a careers page first."""
+    todo = sorted((c for c in rows if not c["size_ai"] and not data_size(c)),
                   key=lambda c: (not c["career_url"], -sum(json.loads(c["sources"] or "{}").values())))[:limit]
     found = 0
     for i in range(0, len(todo), 40):
@@ -291,14 +301,8 @@ def ai_sizes(rows: list[dict], limit: int) -> int:
 
 
 def size_of(c: dict) -> str | None:
-    """staffing agency / big / mid / small, or None if unknown."""
-    if c["size_hint"] == "staffing agency":
-        return "staffing agency"
-    if (c["jobs_total"] or 0) >= 40 or c["size_ai"] == "big":
-        return "big"
-    if c["size_ai"] in ("mid", "small"):
-        return c["size_ai"]
-    return c["size_hint"]  # from its number of Arbeitsagentur IT ads: big / mid / None
+    """staffing agency / big / mid / small, or None if unknown. Our data first, then the AI."""
+    return data_size(c) or (c["size_ai"] if c["size_ai"] in ("big", "mid", "small") else None)
 
 
 def fit(c: dict) -> tuple[int, str]:
@@ -405,10 +409,14 @@ fit the person, based on its IT jobs. Concrete, no flattery, no made-up facts.
 """
 
 
+INITIATIV_TOP = 10  # only the best-fitting Initiativ companies get a reason (saves AI requests)
+
+
 def initiativ_reasons(rows: list[dict], limit: int) -> int:
     # Also companies you put on the list yourself, as long as their IT jobs are known
-    todo = [c for c in rows if c["status"] == "initiativ" and not c["initiativ_reason"]
-            and json.loads(c["it_titles"] or "[]")][:limit]
+    top = sorted((c for c in rows if c["status"] == "initiativ" and json.loads(c["it_titles"] or "[]")),
+                 key=lambda c: -(c["fit_score"] or 0))[:INITIATIV_TOP]
+    todo = [c for c in top if not c["initiativ_reason"]][:limit]
     written = 0
     for i in range(0, len(todo), 20):
         batch = todo[i:i + 20]

@@ -10,8 +10,8 @@ For each new email:
    applications: ignore_senders are skipped.
 2. What kind is it: confirmation, rejection, interview, test or other. Rules first
    ("leider", "Absage" -> rejection; "Vorstellungsgespräch" -> interview); the AI only when
-   the rules aren't sure. Interview-looking emails go to the AI first, and the AI requests
-   here never stop for the daily AI budget (priority "mail" in ai.py).
+   the rules aren't sure. Interview-looking emails go to the AI first. In the daily AI budget
+   they come right after job scoring (priority "mail" in ai.py).
 3. Which job you marked Applied does it belong to: by the company's name (sender, subject,
    text) and the sender's email domain. No clear match -> the "Needs review" list, nothing
    is changed.
@@ -414,6 +414,8 @@ def _check() -> dict:
                 log.warning("Application emails: AI did not answer (%s)", str(ex)[:150])
         for e in batch:
             a = answers.get(e["gmail_id"])
+            if a is None and isinstance(error, (ai.RateLimited, ai.Overloaded)):
+                continue  # every AI is at its limit: the email waits (read again next round)
             if a is None and ai.enabled() and _ai_failures.get(e["gmail_id"], 0) < 2:
                 _ai_failures[e["gmail_id"]] = _ai_failures.get(e["gmail_id"], 0) + 1
                 continue  # not saved: read again next round
