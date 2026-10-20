@@ -105,6 +105,54 @@ def check_link(link_id: int) -> dict:
             _running.discard(link_id)
 
 
+NO_JOBS_RULE = "1"  # bump when the job-link rules get better: pages that showed no jobs are checked again once
+NO_JOBS = "no job postings found"
+
+
+def recheck_no_jobs() -> None:
+    """Once per rule change: watched links, source suggestions and companies whose page
+    "loaded, but no job postings found" are checked again with the new rules."""
+    if db.get_setting("no_jobs_rule") == NO_JOBS_RULE:
+        return
+    from .company_jobs import link_urls  # these import this module's neighbours: load them late
+    from .discover import _test
+    counts = {}
+
+    links = [l for l in db.list_links() if l["active"] and l["kind"] == "url" and l["status"] == "red"
+             and NO_JOBS in (l["reason"] or "")]
+    now_green = 0
+    for link in links:
+        try:
+            now_green += check_link(link["id"])["link"]["status"] == "green"
+        except AlreadyRunning:
+            pass
+        except Exception:
+            log.exception("Checking %s again failed", link["url"])
+    counts["watched links"] = (now_green, len(links))
+
+    suggestions = [s for s in db.list_suggestions() if s["state"] == "red" and NO_JOBS in (s["reason"] or "")]
+    now_green = 0
+    for s in suggestions:
+        t = _test(s["url"], s["company"], browser=True)
+        if t and t["state"] != "red":
+            db.update_suggestion(s["id"], {k: t[k] for k in ("method", "state", "reason", "total_jobs", "good_jobs")})
+            now_green += 1
+    counts["source suggestions"] = (now_green, len(suggestions))
+
+    # Companies the engine couldn't add as a watched link: "Not auto-added: ... no job postings found"
+    companies = [c for c in db.company_rows() if NO_JOBS in (c["jobs_note"] or "")]
+    now_green = 0
+    for c in companies:
+        if any(check_url(url, browser=False).status == "green" for url in link_urls(c)):
+            db.update_company(c["id"], {"jobs_note": None})  # the next Companies run adds it
+            now_green += 1
+    counts["companies"] = (now_green, len(companies))
+
+    db.set_setting("no_jobs_rule", NO_JOBS_RULE)
+    log.info("Pages with \"%s\", checked again with the new rules: %s", NO_JOBS,
+             ", ".join(f"{name}: {g} of {n} now have jobs" for name, (g, n) in counts.items()))
+
+
 _checking_all = threading.Event()  # set while "Check now" (all sources) is running
 
 

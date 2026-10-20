@@ -1,12 +1,17 @@
 """Reads the jobs behind one link and decides if the link is trackable (green) or not (red)."""
+import hashlib
+import logging
 from dataclasses import dataclass, field
 
 import httpx
+from bs4 import BeautifulSoup
 
 from . import dedup
 from .config import CONFIG
 from .extractors import Job, ats, generic
 from .fetcher import Page, browser_available, fetch_html, fetch_with_browser, robots_allows
+
+log = logging.getLogger("jobradar")
 
 
 @dataclass
@@ -66,17 +71,22 @@ def check_url(url: str, browser: bool = True) -> CheckResult:
 
     # 3. Maybe the job list is built with JavaScript -> try a real (hidden) browser.
     if not browser:
-        return red("Page loaded, but no job postings found without a browser")
-    if not CONFIG["fetch"]["browser_fallback"]:
-        return red("Page loaded, but no job postings found (browser fallback is turned off)")
-    if not browser_available():
-        return red("Page loaded, but no job postings found (browser not installed, run setup.bat)")
-    page = fetch_with_browser(url)
-    if not page.ok:
-        return red(page.reason)
-    return _from_page(page, url, "Browser (JavaScript)") or red(
-        "Page loaded, but no job postings found, even with a browser"
-    )
+        why = " without a browser"
+    elif not CONFIG["fetch"]["browser_fallback"]:
+        why = " (browser fallback is turned off)"
+    elif not browser_available():
+        why = " (browser not installed, run setup.bat)"
+    else:
+        rendered = fetch_with_browser(url)
+        if not rendered.ok:
+            return _from_ai(page, url) or red(rendered.reason)
+        result = _from_page(rendered, url, "Browser (JavaScript)")
+        if result:
+            return result
+        page, why = rendered, ", even with a browser"
+
+    # 4. The page clearly talks about open jobs, but no rule found them: the AI reads the job list.
+    return _from_ai(page, url) or red(f"Page loaded, but no job postings found{why}")
 
 
 def _from_page(page: Page, url: str, method: str) -> CheckResult | None:
@@ -87,6 +97,37 @@ def _from_page(page: Page, url: str, method: str) -> CheckResult | None:
     if jobs:
         return found(jobs, method, name)
     return None
+
+
+# {link: (fingerprint of the page part, jobs the AI read from it)}. A watched link is checked
+# every hour: the AI is only asked again when the job part of the page changed.
+_ai_seen: dict[str, tuple[str, list[Job]]] = {}
+
+
+def _from_ai(page: Page, url: str) -> CheckResult | None:
+    from . import ai  # ai -> details -> arbeitsagentur imports this module: load them late
+    from .company_jobs import ai_extract, relevant_part
+    if not ai.enabled():
+        return None
+    part, links = relevant_part(page.html, page.url)  # the page text without scripts and menus
+    if not generic.HIRING.search(part) and not generic.GENDER.search(part):
+        return None
+    name = generic.site_name(BeautifulSoup(page.html, "html.parser"), page.url)
+    fingerprint = hashlib.sha1(part.encode()).hexdigest()
+    if url in _ai_seen and _ai_seen[url][0] == fingerprint:
+        jobs = _ai_seen[url][1]
+    else:
+        try:
+            jobs = ai_extract(name, part, links, page.url)
+        except (ai.RateLimited, ai.Overloaded):
+            return None  # no AI requests left right now: the next check tries again
+        except Exception as e:
+            log.warning("AI reading the job list of %s failed (%s)", url, e)
+            return None
+        # Only titles that look like a job ad ("... (m/w/d)", "Werkstudent ..."), not career areas
+        jobs = [j for j in jobs if generic.GENDER.search(j.title) or generic.JOB_WORD.search(j.title)]
+        _ai_seen[url] = (fingerprint, jobs)
+    return found(jobs, "AI from page text", name) if jobs else None
 
 
 def _from_board(board: ats.Board, url: str) -> CheckResult:

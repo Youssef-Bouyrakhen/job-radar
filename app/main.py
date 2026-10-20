@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -15,7 +16,7 @@ from pydantic import BaseModel
 from . import (VERSION, ai, applications, categories, companies, company_jobs, db, must_apply, discover, gmail, region,
                scheduler, telegram, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all,
-                      ensure_builtin_sources, hide_old_duplicates, min_score, refilter_all_jobs)
+                      ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
 from .config import CONFIG, ROOT
 
 load_dotenv(ROOT / ".env")  # before anything reads GEMINI_API_KEY etc.
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI):
     background = os.environ.get("JOBRADAR_NO_SCHEDULER") != "1"
     if background:
         scheduler.start()
+        threading.Thread(target=recheck_no_jobs, daemon=True, name="recheck-no-jobs").start()  # once per rule change
     yield
     if background:
         scheduler.stop()

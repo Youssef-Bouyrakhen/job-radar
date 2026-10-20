@@ -58,7 +58,8 @@ EXTRACT_PROMPT = """Below are the numbered links and the job-related text lines 
 List the open job postings on this page.
 
 Rules:
-- Only real job postings listed here. Not menu items, "all jobs" buttons, benefits, events or blog posts.
+- Only real job postings listed here. Not menu items, "all jobs" buttons, benefits, events or blog posts,
+  and not career areas or target groups ("Students", "Production", "IT & Digital").
 - title: the job title exactly as written.
 - link: the number of the link that opens this job ([3] -> 3), or 0 if there is none. Never make up links.
 - location and employment (e.g. Vollzeit, Teilzeit, Werkstudent): only if written next to the job, else "".

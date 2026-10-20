@@ -767,6 +767,12 @@ def get_suggestion(suggestion_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def update_suggestion(suggestion_id: int, fields: dict) -> None:
+    with connect() as conn:
+        conn.execute(f"UPDATE suggestions SET {', '.join(f'{k} = :{k}' for k in fields)} WHERE id = :id",
+                     {**fields, "id": suggestion_id})
+
+
 def set_suggestion_status(suggestion_id: int, status: str) -> None:
     with connect() as conn:
         conn.execute("UPDATE suggestions SET status = ? WHERE id = ?", (status, suggestion_id))

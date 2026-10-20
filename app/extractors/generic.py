@@ -2,7 +2,8 @@
 
 Two strategies:
 1. Structured data (schema.org "JobPosting"), which many sites add for Google Jobs.
-2. Links that look like job ads, e.g. "Werkstudent Softwareentwicklung (m/w/d)".
+2. Links that look like job ads: by their text ("Werkstudent Softwareentwicklung (m/w/d)")
+   or by their address (".../stelle/software-engineer-m-w-d/", ".../job/12345").
 """
 import json
 import re
@@ -13,16 +14,20 @@ from bs4 import BeautifulSoup
 from . import Job, clean, html_to_text, to_iso
 
 # "(m/w/d)", "(w/m/d)", "(f/m/x)", "(all genders)", "Entwickler*in", ...
-GENDER = re.compile(r"\(\s*(?:[mwfdxih]\s*[/|,]\s*){1,3}[mwfdxih]\s*\)|\(\s*all genders?\s*\)|\(\s*gn\s*\)|\w\*in\b", re.I)
+GENDER = re.compile(r"\(\s*(?:[mwfdxih]\s*[/|,]\s*){1,3}[mwfdxih]\s*\)|\(\s*all genders?\s*\)|\(\s*gn\s*\*?\s*\)|"
+                    r"\b[mwfd]\s*/\s*[mwfd]\s*/\s*[mwfdx]\b|\w\*in\b", re.I)
+# The same in an address: ".../software-engineer-m-w-d-ai/", ".../werkstudent-mwd"
+GENDER_SLUG = re.compile(r"[-_/](?:[mwfd]-[mwfd]-[mwfdx]|mwd|wmd|mfd|all-genders?)(?:[-_/.?]|$)", re.I)
 JOB_WORD = re.compile(
     r"werkstudent|student|praktik|\bintern\b|internship|trainee|ausbildung|duales studium|"
     r"entwickler|developer|engineer|ingenieur|informatiker|programmier|consultant|berater|"
     r"analyst|architekt|architect|administrator|manager|specialist|spezialist|scientist|"
-    r"designer|techniker|referent|sachbearbeiter|mitarbeiter|devops|software|teilzeit|vollzeit",
+    r"designer|techniker|referent|sachbearbeiter|mitarbeiter|devops|software|teilzeit|vollzeit|"
+    r"hilfskraft|werkstudium|abschlussarbeit|bachelorarbeit|masterarbeit|thesis|azubi|aushilfe|minijob",
     re.I,
 )
 JOB_HREF = re.compile(
-    r"/(?:jobs?|stellen\w*|stellenangebot\w*|karriere|careers?|positions?|vacanc\w*|"
+    r"/(?:jobs?|stellen?\w*|stellenangebot\w*|karriere|careers?|positions?|vacanc\w*|"
     r"job-?offers?|openings?|ausschreibung\w*|offene-stellen|jobdetail\w*)(?:[/\-_?.#]|$)|"
     r"[?&](?:job_?id|jobid|stelle|id)=",
     re.I,
@@ -31,6 +36,19 @@ JOB_HREF = re.compile(
 # title slug (".../werkstudent-software-entwicklung-frankfurt"). Menu links and
 # "related searches" ("/jobs/it-berater/in-darmstadt") don't.
 JOB_ID = re.compile(r"\d{4,}|[a-z0-9]+(?:-[a-z0-9]+){4,}", re.I)
+# Addresses that only ever hold ONE job ad: ".../stelle/<title>/", ".../job/<id>". Unlike
+# "/jobs/" or "/karriere/", which are also lists and menus ("/karriere/benefits").
+ONE_JOB_HREF = re.compile(
+    r"/(?:stelle|stellenangebot|stellenanzeige|stellenausschreibung|job|vacancy|position|jobdetails?|job-detail)"
+    r"/(?:[^/?#]*-[^/?#]+|[^/?#]*\d{3,}[^/?#]*)", re.I)
+# "Initiativbewerbung": a link on every careers page, but not an open job
+NOT_A_JOB = re.compile(r"initiativ|unsolicited|speculative|blindbewerbung|open application", re.I)
+# Articles about jobs, not job ads: ".../karriere/blog/von-der-azubine-zur-ausbilderin.html"
+ARTICLE_HREF = re.compile(r"/(?:blogs?|magazin|magazine|news|newsroom|presse?|aktuelles|stories|events?)/", re.I)
+# Words that show a page lists open jobs (stricter than JOB_WORD: "Software" is on every IT site).
+# Only then the AI is asked to read the job list.
+HIRING = re.compile(r"werk[\s-]*student|praktik|trainee|ausbildung|abschlussarbeit|stellenangebot|offene stellen|"
+                    r"stellenausschreibung|open positions|open roles|job openings|wir suchen|we.re hiring", re.I)
 NAV_TEXT = {
     "jobs", "karriere", "career", "careers", "stellenangebote", "offene stellen", "alle jobs",
     "alle stellen", "jobs anzeigen", "zu den jobs", "mehr erfahren", "jetzt bewerben",
@@ -97,9 +115,41 @@ def _from_json_ld(soup: BeautifulSoup, page_url: str) -> list[Job]:
     return [j for j in jobs if j.title]
 
 
+HEADINGS = ["h1", "h2", "h3", "h4", "h5", "strong"]
+
+
 def _link_title(a) -> str:
-    heading = a.find(["h1", "h2", "h3", "h4", "h5", "strong"])
-    return clean((heading or a).get_text(" "), 200)
+    heading = a.find(HEADINGS)
+    text = clean((heading or a).get_text(" "), 200)
+    if len(text) >= 6 and text.lower() not in NAV_TEXT:
+        return text
+    # An empty link laid over a job card (<a class="full-link" title="...">): its title attribute
+    for attr in ("title", "aria-label"):
+        label = clean(a.get(attr), 200)
+        if len(label) >= 6 and label.lower() not in NAV_TEXT:
+            return label
+    # ... or the heading of the card around it, as long as the card holds only this one link
+    node = a.parent
+    for _ in range(3):
+        if node is None or node.name in ("body", "html") or len({x["href"] for x in node.find_all("a", href=True)}) > 1:
+            break
+        heading = node.find(HEADINGS)
+        if heading and len(label := clean(heading.get_text(" "), 200)) >= 6:
+            return label
+        node = node.parent
+    return text
+
+
+def looks_like_job(title: str, url: str) -> bool:
+    """A job ad link: a job title ("... (m/w/d)", "Werkstudent ...") and / or a job ad address."""
+    path = urlparse(url).path
+    if NOT_A_JOB.search(title) or NOT_A_JOB.search(path) or ARTICLE_HREF.search(path):
+        return False
+    if GENDER.search(title) or (GENDER_SLUG.search(path) and JOB_HREF.search(url)):
+        return True
+    if ONE_JOB_HREF.search(path):
+        return True
+    return bool(JOB_WORD.search(title) and JOB_HREF.search(url) and JOB_ID.search(url))
 
 
 def _resolve(a, page_url: str) -> str:
@@ -120,7 +170,7 @@ def _from_links(soup: BeautifulSoup, page_url: str, company: str) -> list[Job]:
         title = _link_title(a)
         if len(title) < 6 or title.lower() in NAV_TEXT:
             continue
-        if GENDER.search(title) or (JOB_WORD.search(title) and JOB_HREF.search(url) and JOB_ID.search(url)):
+        if looks_like_job(title, url):
             found.append((a, Job(title=title, url=url, company=company)))
 
     job_urls = {job.url for _, job in found}
