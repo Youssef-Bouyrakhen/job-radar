@@ -358,6 +358,48 @@ never changed.
   **AA search: …** under Found via, and new employers go through the normal steps (website, careers
   page, jobs, fit score).
 
+### Coverage (region coverage)
+
+The **Coverage** page shows how much of a town is covered: not only IT employers, but every business
+that could hire an IT Werkstudent. It starts with the **City of Darmstadt** (all districts). On top:
+**Region covered: X%** (companies with a final status). Per town: companies, careers pages, checked %,
+how many nights are left, and one button per status; a click opens the Companies page with only that
+town's companies in that status.
+
+Where the companies come from (all automatic, in the nightly run, no AI):
+- **OpenStreetMap**: every named office inside the city boundary (any business type, not only IT), works,
+  research institutes, universities, town halls and hospitals. Shops, restaurants, cafés, doctors and
+  craftsmen aren't offices, so they don't come in; lawyers, tax advisors, insurance agents, clubs and
+  fraternities are left out too. Units of one employer (TU institutes, city offices) become one company.
+- **Arbeitsagentur**: every employer with a job ad in Darmstadt's postcodes, any job type (staffing
+  agencies are left out by the API).
+- **OffeneRegister.de**: the company register as open data. Its only download is from **2019**
+  (260 MB, the query service is offline), so it is read **once** (2–5 minutes) and a small extract is kept in
+  `data/offeneregister-Darmstadt.json`. IT-sounding companies (Software, IT, Digital, Data, ...) are added;
+  the others only mark known companies as being in Darmstadt. Holdings and management companies are left out.
+  Turn it off with `offeneregister: false`.
+
+Duplicates merge with the companies already known (same name or same website). Then:
+1. **Rules first**: restaurants, bakeries, hairdressers, care services, craftsmen, shops and staffing
+   agencies are **Skipped** right away (the reason shows under the status), also companies whose only
+   ads are for non-office jobs (cook, driver, nurse, ...).
+2. **The normal pipeline** for the rest, a few per night (`max_checks_per_run: 80`, on top of the usual
+   150): website (the OpenStreetMap tag, then a guess from the name, e.g. `acme-software.de`, which only
+   counts if the page names Darmstadt or a Darmstadt postcode; the AI last), careers page, jobs, fit score.
+3. **Final status** for every Darmstadt company:
+   - **Watched**: has a careers page; it's read every week and good jobs come to you (with good jobs it
+     also becomes a watched link).
+   - **Initiativ**: IT jobs but no student job (as before), or a **small IT company without a careers
+     page**: Job Radar reads its **Impressum** and shows the contact email (`max_contacts_per_run: 60`).
+   - **No careers page**: none found.
+   - **Skipped**: by the rules above, or only in the 2019 register with no website (probably closed).
+   A status you choose yourself is never changed.
+
+Everything goes through the polite crawler (robots.txt, max 1 request/s per site, honest User-Agent).
+The AI is only used in the usual places (websites the rules can't find, job lists without a feed,
+categories, sizes) and always after scoring jobs (see **AI limits**). More towns can be added under
+`region: towns:` in config.yaml (the official municipality key `ags` and the postcodes).
+
 ## 4. Settings
 
 - `config.yaml`: check interval, Arbeitsagentur searches, Gmail label, delays, browser fallback. Restart after editing.
@@ -439,3 +481,8 @@ never changed.
 - [x] **v8.7**: company **categories** (Insurance, Banks/Finance, Cloud/Data centers/Networks,
       Cybersecurity, IT services/Software, Other): rules first, the AI for unclear ones within a daily
       budget; Arbeitsagentur keyword searches per category.
+- [x] **v9.3**: **Region coverage**, starting with the City of Darmstadt: every business that could hire
+      an IT Werkstudent, from OpenStreetMap, the Arbeitsagentur (all employers) and OffeneRegister.de;
+      rules skip shops / restaurants / craftsmen, the rest goes through the normal pipeline at night;
+      every company ends Watched, Initiativ (Impressum email for small IT companies), No careers page or
+      Skipped. New **Coverage** page with "Region covered: X%".

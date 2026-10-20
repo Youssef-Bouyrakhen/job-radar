@@ -4,7 +4,8 @@
    a) the Arbeitsagentur API: ALL IT jobs (any type, full-time too) around Darmstadt and Frankfurt,
       plus keyword searches per category (companies.category_searches, IT jobs only),
    b) OpenStreetMap (Overpass API): IT / telecommunication / company offices, with their website tag,
-   c) your own database: jobs, email alerts, suggestions and watched links.
+   c) your own database: jobs, email alerts, suggestions and watched links,
+   d) region coverage: every business in the towns (Darmstadt) that could hire an IT student (region.py).
 2. Merge spelling variants ("ACME GmbH" = "Acme") and remember where each was found, how often.
 3. For the next companies in line (IT employers first): find the website and careers page
    (see careers.py). Each run checks at most companies.max_companies_per_run, so a big list
@@ -23,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
-from . import ai, arbeitsagentur, careers, categories, company_jobs, db
+from . import ai, arbeitsagentur, careers, categories, company_jobs, db, region
 from .config import CONFIG
 from .discover import NOT_A_COMPANY, _host_key, _is_known, _same, _watched_keys, company_key
 from .fetcher import BOT_HEADERS, Page, fetch_api, fetch_polite
@@ -53,7 +54,12 @@ STAFFING = re.compile(r"personal(?:dienst|service|vermittlung|leasing|beratung|m
 
 
 DOMAIN_NAME = re.compile(r"(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9-]*)\.(?:de|com|net|org|eu|io|info|biz|ag|group)/?", re.I)
-SOURCE_RANK = {"osm": 0, "arbeitsagentur": 1, "your_jobs": 2}  # whose spelling of a name is cleanest
+SOURCE_RANK = {"osm": 0, "arbeitsagentur": 1, "aa": 1, "your_jobs": 2}  # whose spelling of a name is cleanest
+
+
+def _source_kind(key: str) -> str:
+    """'osm_it' -> 'osm', 'region:Darmstadt:osm:engineer' -> 'osm', 'region:Darmstadt:aa' -> 'aa'."""
+    return key.split(":")[2] if key.startswith("region:") else key.split("_")[0]
 
 
 # "adesso Frankfurt" is adesso: an office's city at the end of the name is not part of it
@@ -182,29 +188,33 @@ def collect_bundesbank() -> list[dict]:
     return records
 
 
+def overpass(query: str, label: str, progress: dict) -> list[dict]:
+    """The elements an Overpass query finds. Overpass is a free service and often busy (429 / 504):
+    try 3 times with a pause."""
+    for attempt, pause in enumerate(OVERPASS_PAUSES + (None,)):
+        progress["step"] = f"Collecting companies from {label}…" + (f" (try {attempt + 1})" if attempt else "")
+        try:
+            r = httpx.post(OVERPASS, data={"data": query}, headers={"User-Agent": BOT_HEADERS["User-Agent"]}, timeout=200)
+            r.raise_for_status()
+            # A busy server can also answer 200 with an error note and no offices: that's not "no offices"
+            if not r.json().get("elements") and "error" in str(r.json().get("remark", "")).lower():
+                raise httpx.TransportError(f"Overpass: {r.json()['remark'][:120]}")
+            return r.json().get("elements", [])
+        except (httpx.HTTPStatusError, httpx.TransportError) as e:
+            if pause is None:
+                raise
+            log.info("Companies: %s busy (%s), trying again in %d s", label, e, pause)
+            time.sleep(pause)
+
+
 def collect_openstreetmap() -> list[dict]:
     cfg = CONFIG["companies"]
     radius = int(cfg["radius_km"] * 1000)
     around = "".join(f'nwr["office"~"^({"|".join(OSM_OFFICES)})$"]["name"](around:{radius},{lat},{lon});'
                      for lat, lon in cfg["places"].values())
     query = f"[out:json][timeout:120];({around});out center tags;"
-    # Overpass is a free service and often busy (429 / 504): try 3 times with a pause
-    for attempt, pause in enumerate(OVERPASS_PAUSES + (None,)):
-        _progress["step"] = "Collecting companies from OpenStreetMap…" + (f" (try {attempt + 1})" if attempt else "")
-        try:
-            r = httpx.post(OVERPASS, data={"data": query}, headers={"User-Agent": BOT_HEADERS["User-Agent"]}, timeout=180)
-            r.raise_for_status()
-            # A busy server can also answer 200 with an error note and no offices: that's not "no offices"
-            if not r.json().get("elements") and "error" in str(r.json().get("remark", "")).lower():
-                raise httpx.TransportError(f"Overpass: {r.json()['remark'][:120]}")
-            break
-        except (httpx.HTTPStatusError, httpx.TransportError) as e:
-            if pause is None:
-                raise
-            log.info("Companies: OpenStreetMap busy (%s), trying again in %d s", e, pause)
-            time.sleep(pause)
     records = []
-    for e in r.json().get("elements", []):
+    for e in overpass(query, "OpenStreetMap", _progress):
         tags = e.get("tags", {})
         center = e.get("center") or e
         website = tags.get("website") or tags.get("contact:website") or tags.get("url")
@@ -260,7 +270,7 @@ def merge(records: list[dict], collected: set[str]) -> list[dict]:
             found = key
         g = groups[found]
         # Spelling preference: a real name over a web address, OSM over Arbeitsagentur over your jobs
-        rank = (bool(r.get("domain_name")), SOURCE_RANK.get(r["source"].split("_")[0], 2))
+        rank = (bool(r.get("domain_name")), SOURCE_RANK.get(_source_kind(r["source"]), 2))
         best, count = g["names"].get(r["name"], (rank, 0))
         g["names"][r["name"]] = (min(best, rank), count + 1)
         g["counts"][r["source"]] += 1
@@ -472,11 +482,13 @@ def _run(kind: str = "run", text: str = "", label: str = "") -> None:
                 except company_import.ImportProblem as e:
                     log.info("Look-alikes skipped: %s", e)
             _collect()
+        region.triage()  # rules: shops, restaurants, craftsmen in the towns are skipped before any web request
         if ids is None or ids:
             _check(ids)
         categories.run(_progress, ids)  # rules for all; the AI for unclear ones, these first (before the fit score)
         if ids is None or ids:
             company_jobs.run(_progress, ids)  # Phase B: read their jobs, rank, auto-add, Initiativ list
+        region.settle(_progress)  # every checked town company gets its final status (Impressum emails)
     except company_import.ImportProblem as e:
         _progress["error"] = str(e)
     except Exception as e:
@@ -507,16 +519,23 @@ def _collect() -> None:
             collected |= {f"osm_{o}" for o in OSM_OFFICES}
         if collect is collect_category_searches:  # a category with no ads this time: its old counts go
             collected |= {f"ba_{cat}" for cat in CONFIG["companies"]["category_searches"]}
+    # Region coverage: every business in the towns (Darmstadt) that could hire an IT student
+    found, region_collected = region.collect(records, _progress)
+    records += found
+    collected |= region_collected
     _progress["step"] = "Merging duplicates…"
     rows = merge(records, collected)
     _progress["new"] = db.save_companies(rows)
     _progress["collected"] = len(rows)
+    region.assign_towns()
     log.info("Companies: %d companies (%d new) from %d records", len(rows), _progress["new"], len(records))
 
 
 def _check(ids: set[int] | None = None) -> None:
     cfg = CONFIG["companies"]
     todo = companies_to_check(cfg["max_companies_per_run"], ids)
+    if ids is None:  # plus a few companies of the towns (Darmstadt) each night, whatever their business
+        todo += region.to_check({c["id"] for c in todo})
     _progress.update(total=len(todo), done=0)
     if not todo:
         return
@@ -530,9 +549,17 @@ def _check(ids: set[int] | None = None) -> None:
         else:
             c["hint_note"] = f"{'OSM' if c['hint_from'] == 'osm' else 'Known'} website: {note}"
 
+    def guess(c: dict) -> None:
+        if home := region.guess_website(c):
+            homes[c["id"]], c["hint_from"] = _trim(home), "guess"
+
     _progress["step"] = "Checking the websites from OpenStreetMap…"
     with ThreadPoolExecutor(cfg["workers"]) as pool:
         list(pool.map(check_osm, [c for c in todo if c["website_hint"]]))
+    # Town companies: a guess from the name first (rule), the AI only for the rest
+    _progress["step"] = "Guessing websites from the company names…"
+    with ThreadPoolExecutor(cfg["workers"]) as pool:
+        list(pool.map(guess, [c for c in todo if c["town"] and not homes.get(c["id"])]))
     # Look-alikes came with the AI's website already: don't ask it twice
     ai_sites = ask_ai_for_websites([c for c in todo if not homes.get(c["id"]) and c["hint_from"] != "ai"])
 

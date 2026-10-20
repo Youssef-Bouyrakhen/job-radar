@@ -190,6 +190,12 @@ MIGRATIONS["companies"] = {
     "category": "TEXT",              # insurance / finance / cloud / security / software / other (empty = not sorted yet)
     "category_from": "TEXT",         # name / jobs / osm / ai / you: who decided
     "ad_titles": "TEXT",             # JSON: a few titles of its Arbeitsagentur IT ads (for the category)
+    # Region coverage, see region.py
+    "town": "TEXT",                  # e.g. "Darmstadt": in a town whose businesses are all covered
+    "status_note": "TEXT",           # why the engine gave it this status, e.g. "Skipped by rule: a restaurant"
+    "contact_email": "TEXT",         # from its Impressum (small IT companies without a careers page)
+    "contact_url": "TEXT",           # the page the email was on
+    "contact_checked_at": "TEXT",    # when the Impressum was read (once)
 }
 
 AFTER_ADDING = {
@@ -844,7 +850,7 @@ def set_company_category(company_id: int, category: str) -> bool:
 def set_company_status(company_id: int, status: str) -> bool:
     """Your choice in the dashboard: the engine won't change it again."""
     with connect() as conn:
-        return conn.execute("UPDATE companies SET status = ?, status_by = 'you', initiativ_at = CASE WHEN ? = "
+        return conn.execute("UPDATE companies SET status = ?, status_by = 'you', status_note = NULL, initiativ_at = CASE WHEN ? = "
                             "'initiativ' AND status != 'initiativ' THEN ? ELSE initiativ_at END WHERE id = ?",
                             (status, status, now(), company_id)).rowcount > 0
 
@@ -856,9 +862,10 @@ def companies_by_key(keys: list[str]) -> list[dict]:
 
 
 def skipped_company_names() -> list[str]:
-    """Companies you skipped on the Companies page or in Suggested sources: never suggested again."""
+    """Companies you skipped on the Companies page or in Suggested sources: never suggested again.
+    (Not the ones the region rules skipped, like a bakery: an import may still add those.)"""
     with connect() as conn:
-        return [r[0] for r in conn.execute("SELECT name FROM companies WHERE status = 'skipped' "
+        return [r[0] for r in conn.execute("SELECT name FROM companies WHERE status = 'skipped' AND status_by = 'you' "
                                            "UNION SELECT company FROM suggestions WHERE status = 'skipped'")]
 
 

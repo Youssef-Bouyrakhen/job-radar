@@ -100,7 +100,8 @@ def by_rules(c: dict, titles: list[str]) -> tuple[str, str] | None:
                 return cat, "jobs"
     # An IT company: an IT office on OpenStreetMap, or most of the jobs on its careers page are IT jobs.
     # Its IT job titles tell which kind (most are security jobs: Cybersecurity, ...), else IT services/Software.
-    osm_it = sources.get("osm_it") or sources.get("osm_software")
+    osm_it = sources.get("osm_it") or sources.get("osm_software") \
+        or any(k.endswith((":osm:it", ":osm:software")) for k in sources)  # region:Darmstadt:osm:it
     if osm_it or (c.get("jobs_near") or 0) >= 3 and (c.get("it_jobs") or 0) >= 0.6 * c["jobs_near"]:
         it = [t for t in titles if IT_WORDS.search(t)]
         kinds = Counter(cat for t in it for cat, rule in IT_TITLES.items() if rule.search(t))
@@ -175,7 +176,9 @@ def ask_ai(progress: dict, first: set[int] | None = None) -> int:
     if not ai.enabled():
         return 0
     from .company_jobs import _pace
-    todo = sorted((c for c in db.company_rows() if not c["category"] and c["career_url"] and c["status"] != "skipped"),
+    # Also town companies with a website but no careers page: an IT one gets the Impressum check (region.py)
+    todo = sorted((c for c in db.company_rows() if not c["category"] and c["status"] != "skipped"
+                   and (c["career_url"] or c["town"] and c["website"])),
                   key=lambda c: (c["id"] not in (first or ()), not c["career_url"], not c["website"],
                                  -sum(json.loads(c["sources"] or "{}").values())))
     sorted_ = 0

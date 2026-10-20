@@ -74,6 +74,13 @@ DEFAULTS = {
             "software": ["Softwareentwicklung", "IT-Dienstleister", "Anwendungsentwicklung"],
         },
     },
+    "region": {
+        # ags: the town's official municipality key (OpenStreetMap boundary); postcodes: all of its districts
+        "towns": {"Darmstadt": {"ags": "06411000", "postcodes": [64283, 64285, 64287, 64289, 64291, 64293, 64295, 64297]}},
+        "max_checks_per_run": 80,
+        "max_contacts_per_run": 60,
+        "offeneregister": True,
+    },
     "must_apply": {
         "min_score": 8,
         "max_days": 3,

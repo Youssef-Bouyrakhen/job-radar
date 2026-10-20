@@ -361,7 +361,9 @@ def link_urls(c: dict) -> list[str]:
 
 def auto_add(rows: list[dict], limit: int, progress: dict) -> int:
     watched = _watched_keys()
-    candidates = sorted((c for c in rows if c["good_jobs"] and c["status"] == "new"),
+    # Also town companies the engine marked Watched (careers page read weekly) that aren't a watched link yet
+    candidates = sorted((c for c in rows if c["good_jobs"] and (c["status"] == "new" or c["status"] == "watched"
+                                                                and c["town"] and not c["link_id"])),
                         key=lambda c: (-(c["fit_score"] or 0), -c["good_jobs"]))
     added = 0
     for c in candidates:
@@ -534,13 +536,14 @@ def rank(progress: dict) -> None:
         c["student_history"] = history.get(c["id"], 0)
         c["fit_score"], c["fit_reasons"] = fit(c)
         fields = {"student_history": c["student_history"], "fit_score": c["fit_score"], "fit_reasons": c["fit_reasons"]}
-        # Initiativ: IT jobs, but no Werkstudent job now or before. Back out of it once it posts one.
+        # Initiativ: IT jobs, but no Werkstudent job now or before. Back out of it once it posts one
+        # (only with a careers page: one without, from the Impressum rule, has nothing to watch).
         if c["status_by"] == "engine":
             if c["status"] == "new" and c["it_jobs"] and not c["student_jobs"] and not c["student_history"] \
                     and size_of(c) != "staffing agency":
                 fields["status"] = c["status"] = "initiativ"
                 fields["initiativ_at"] = db.now()
                 progress["initiativ"] += 1
-            elif c["status"] == "initiativ" and (c["student_jobs"] or c["student_history"]):
+            elif c["status"] == "initiativ" and c["career_url"] and (c["student_jobs"] or c["student_history"]):
                 fields["status"] = c["status"] = "new"
         db.update_company(c["id"], fields)

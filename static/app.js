@@ -3,7 +3,7 @@
    If GET jobs fails (file opened directly), the page runs on demo data.
    ========================================================= */
 // Must match VERSION in app/__init__.py. If they differ, an old Job Radar is still running.
-const DASHBOARD_VERSION = '9.2';
+const DASHBOARD_VERSION = '9.3';
 
 const ENDPOINTS = {
   jobs:        () => ['GET',    '/api/jobs?view=everything'],
@@ -30,6 +30,7 @@ const ENDPOINTS = {
   lookalikes:  () => ['POST',   '/api/companies/lookalikes'],
   weeklySummary:() => ['POST',  '/api/companies/weekly-summary'],
   setCompany:  id => ['PATCH',  `/api/companies/${id}`],    // { status } or { category }
+  coverage:    () => ['GET',    '/api/coverage'],           // -> { towns, covered_percent, per_night, progress }
   applications:() => ['GET',    '/api/applications'],       // -> { jobs: {id: {timeline, category}}, stats, review, ... }
   appCheck:    () => ['POST',   '/api/applications/check'],
   assignEmail: id => ['POST',   `/api/applications/emails/${id}/assign`],   // { job_id|null, kind }
@@ -305,11 +306,12 @@ function renderNav() {
   }).join('');
   $('#navViews').innerHTML = html;
   // On phones the sidebar is hidden: the app pages go into the same scrolling row
-  const pages = [['links', 'Watched links'], ['companies', 'Companies'], ['settings', 'Settings']]
+  const pages = [['links', 'Watched links'], ['companies', 'Companies'], ['coverage', 'Coverage'], ['settings', 'Settings']]
     .map(([tab, label]) => `<button type="button" class="nav-item" data-tab="${tab}"><span class="nav-label">${label}</span></button>`).join('');
   $('#mobileViews').innerHTML = html + pages;
   $('#linksCount').textContent = state.loading ? '–' : links.length;
   $('#companiesCount').textContent = coLoaded ? companies.length : '–';
+  $('#coverageCount').textContent = coverage ? coverage.covered_percent + '%' : '–';
   $$('.nav-item[data-tab]').forEach(b => b.classList.toggle('is-active', state.tab === b.dataset.tab));
 }
 
@@ -589,6 +591,7 @@ async function loadAll() {
   render();
   loadSuggestions();
   loadCompanies();
+  loadCoverage();
   loadApps();
 }
 function applyInfo(i) {
@@ -895,8 +898,10 @@ const CO_STATUS = { all: 'All', new: 'New', watched: 'Watched', initiativ: 'Init
 const CO_STATUS_ICON = { all: 'list', new: 'sparkle', watched: 'link', initiativ: 'send', no_career_page: 'eyeOff', skipped: 'trash' };
 const CO_SOURCE = { arbeitsagentur: 'Arbeitsagentur', your_jobs: 'Your jobs', osm_it: 'OSM IT office', osm_software: 'OSM software office',
                     osm_telecommunication: 'OSM telecom office', osm_company: 'OSM company', lookalike: 'Look-alike' };
-// "list:konaktiva 2026" = a list you imported
-const coSourceName = k => k.startsWith('list:') ? k.slice(5) : CO_SOURCE[k] || k;
+// "list:konaktiva 2026" = a list you imported; "region:Darmstadt:osm:engineer" = found by the region coverage
+const REGION_SOURCE = { aa: 'AA', osm: 'OSM', register: 'Register' };
+const coSourceName = k => k.startsWith('list:') ? k.slice(5)
+  : k.startsWith('region:') ? `${REGION_SOURCE[k.split(':')[2]] || k.split(':')[2]} ${k.split(':')[1]}` : CO_SOURCE[k] || k;
 const CO_CATEGORY = { insurance: 'Insurance', finance: 'Banks/Finance', cloud: 'Cloud/Data centers/Networks',
                       security: 'Cybersecurity', software: 'IT services/Software', other: 'Other' };
 const CO_CATEGORY_FROM = { name: 'from its name or website', jobs: 'from its job titles', osm: 'an IT office on OpenStreetMap',
@@ -907,6 +912,7 @@ const CO_PAGE = 200;
 let companies = [], coProgress = {}, coTimer = null, coShown = CO_PAGE, coLoaded = false;
 state.coStatus = sessionGet('jr-co-status', CO_STATUS, 'all');
 state.coQuery = '';
+state.coTown = '';  // set from the Coverage page: only this town's companies
 const CO_CATEGORY_FILTER = { all: 'All categories', ...CO_CATEGORY, unsorted: 'Not sorted yet' };
 state.coCategory = sessionGet('jr-co-category', CO_CATEGORY_FILTER, 'all');
 
@@ -927,8 +933,9 @@ const coTotal = c => Object.values(c.sources || {}).reduce((a, b) => a + b, 0);
 function coMatches(c, status = state.coStatus, category = state.coCategory) {
   if (status !== 'all' && c.status !== status) return false;
   if (category !== 'all' && (c.category || 'unsorted') !== category) return false;
+  if (state.coTown && c.town !== state.coTown) return false;
   const q = state.coQuery.trim().toLowerCase();
-  return !q || [c.name, c.city, c.website, CO_CATEGORY[c.category], ...Object.keys(c.sources || {}).map(coSourceName)].some(x => (x || '').toLowerCase().includes(q));
+  return !q || [c.name, c.city, c.town, c.website, c.contact_email, CO_CATEGORY[c.category], ...Object.keys(c.sources || {}).map(coSourceName)].some(x => (x || '').toLowerCase().includes(q));
 }
 const bareUrl = u => u.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '');
 
@@ -937,7 +944,11 @@ function coSources(c) {
     : k === 'your_jobs' ? 'Times it appears in your jobs, alerts and links'
     : k === 'lookalike' ? 'Suggested by the AI: similar to companies whose jobs you saved or applied to'
     : k.startsWith('list:') ? 'From a list you imported'
-    : k.startsWith('ba_') ? 'IT job ads found by the keyword searches for this category on the Arbeitsagentur' : 'Office on OpenStreetMap';
+    : k.startsWith('ba_') ? 'IT job ads found by the keyword searches for this category on the Arbeitsagentur'
+    : k.startsWith('region:') ? { aa: `Job ads of any kind in ${k.split(':')[1]} on the Arbeitsagentur`,
+        osm: `On OpenStreetMap in ${k.split(':')[1]} (${k.split(':')[3] || ''})`,
+        register: `In the company register (OffeneRegister.de, 2019), seat in ${k.split(':')[1]}` }[k.split(':')[2]] || k
+    : 'Office on OpenStreetMap';
   const mine = k => k.startsWith('list:') || k === 'lookalike';
   return Object.entries(c.sources || {}).sort((a, b) => mine(b[0]) - mine(a[0]) || b[1] - a[1]).map(([k, n]) =>
     `<span class="status-tag" title="${why(k)}">${esc(coSourceName(k))}${n > 1 && !mine(k) ? ` ${n}×` : ''}</span>`).join('');
@@ -982,6 +993,8 @@ function coRow(c) {
   const fitTag = c.fit_score != null ? `<span class="co-fit co-fit--${c.fit_score >= 60 ? 'good' : c.fit_score >= 40 ? 'maybe' : 'weak'}" title="Fit score 0–100: ${esc(c.fit_reasons || '')}">${c.fit_score}</span>` : '';
   const auto = c.link_id ? ' <span class="status-tag" title="Added to your watched links by the engine">auto-added</span>' : '';
   const reason = c.status === 'initiativ' && c.initiativ_reason ? `<div class="co-reason">${esc(c.initiativ_reason)}</div>` : '';
+  const email = c.contact_email ? `<div class="co-sub">Email: <a href="mailto:${esc(c.contact_email)}">${esc(c.contact_email)}</a>${c.contact_url ? ` · <a href="${esc(c.contact_url)}" target="_blank" rel="noopener">source</a>` : ''}</div>` : '';
+  const statusNote = c.status_note ? `<div class="co-note" title="${esc(c.status_note)}">${esc(c.status_note)}</div>` : '';
   const options = Object.entries(CO_STATUS).filter(([k]) => k !== 'all')
     .map(([k, label]) => `<option value="${k}"${c.status === k ? ' selected' : ''}>${label}</option>`).join('');
   const catOptions = (c.category ? '' : '<option value="" selected>Not sorted yet</option>') + Object.entries(CO_CATEGORY)
@@ -989,12 +1002,12 @@ function coRow(c) {
   const catWhy = c.category ? `Category ${CO_CATEGORY_FROM[c.category_from] || ''}. Change it if it's wrong.` : 'Not sorted yet: the AI sorts a few hundred companies a day';
   return `<div class="co-row" data-company="${c.id}">
     <div class="co-who"><div class="co-name">${fitTag}${esc(c.name)}${size}${auto}</div><div class="co-sub">${c.origin_note ? `<span class="co-origin">${esc(c.origin_note)}</span> · ` : ''}${site}${c.fit_reasons ? ` · ${esc(c.fit_reasons)}` : ''}</div>
-      <div class="co-sub co-sub-extra">${esc(place)}</div>${reason}</div>
+      <div class="co-sub co-sub-extra">${esc(place)}</div>${reason}${email}</div>
     <div class="co-city">${esc(place || '–')}</div>
     <div class="co-tags-cell"><div class="co-tags">${coSources(c)}</div></div>
     <div class="co-career">${coCareer(c)}</div>
     <div class="co-status"><select class="co-select" aria-label="Status of ${esc(c.name)}">${options}</select>
-      <select class="co-select co-cat${c.category ? '' : ' is-unsorted'}" aria-label="Category of ${esc(c.name)}" title="${esc(catWhy)}">${catOptions}</select></div>
+      <select class="co-select co-cat${c.category ? '' : ' is-unsorted'}" aria-label="Category of ${esc(c.name)}" title="${esc(catWhy)}">${catOptions}</select>${statusNote}</div>
   </div>`;
 }
 
@@ -1018,6 +1031,9 @@ function renderCompanies() {
   (p.warnings || []).forEach(w => parts.push(`<span class="demo-note">${esc(w)}</span>`));
   if (p.error) parts.push(`<span class="demo-note">${esc(p.error)}</span>`);
   $('#companiesSummary').innerHTML = parts.join('');
+  const townBar = $('#coTownFilter');
+  townBar.hidden = !state.coTown;
+  townBar.innerHTML = state.coTown ? `<span>Only companies in <strong>${esc(state.coTown)}</strong></span><button type="button" class="btn btn--sm" id="coTownClear">Show all</button>` : '';
 
   $('#companyBoxes').innerHTML = Object.entries(CO_STATUS).map(([k, label]) => {
     const on = state.coStatus === k, n = coLoaded ? companies.filter(c => coMatches(c, k)).length : '–';
@@ -1083,6 +1099,10 @@ $('#categoryBoxes').addEventListener('click', e => {
   const b = e.target.closest('[data-co-category]'); if (!b) return;
   state.coCategory = b.dataset.coCategory; coShown = CO_PAGE; sessionSet('jr-co-category', state.coCategory); renderCompanies();
 });
+$('#coTownFilter').addEventListener('click', e => {
+  if (!e.target.closest('#coTownClear')) return;
+  state.coTown = ''; coShown = CO_PAGE; renderCompanies();
+});
 $('#companySearch').addEventListener('input', e => { state.coQuery = e.target.value; coShown = CO_PAGE; renderCompanies(); });
 $('#companiesMore').addEventListener('click', () => { coShown += CO_PAGE; renderCompanies(); });
 $('#companyList').addEventListener('click', e => {
@@ -1102,17 +1122,72 @@ $('#companyList').addEventListener('change', async e => {
     catch (x) { [c.category, c.category_from] = before; renderCompanies(); toast('Could not save: ' + x.message); }
     return;
   }
-  const prev = c.status;
-  c.status = sel.value; renderCompanies();
+  const prev = [c.status, c.status_note];
+  c.status = sel.value; c.status_note = null; renderCompanies();
   try { await persist('setCompany', c.id, { status: c.status }); toast(`${c.name}: ${CO_STATUS[c.status]}`); }
-  catch (x) { c.status = prev; renderCompanies(); toast('Could not save: ' + x.message); }
+  catch (x) { [c.status, c.status_note] = prev; renderCompanies(); toast('Could not save: ' + x.message); }
+});
+
+/* Coverage: per town, how many of its businesses have a final status */
+const COV_STATUS = [['watched', 'Watched'], ['initiativ', 'Initiativ'], ['no_career_page', 'No careers page'], ['skipped', 'Skipped'], ['waiting', 'Waiting']];
+let coverage = null, covTimer = null;
+async function loadCoverage() {
+  if (state.demo) return renderCoverage();
+  try { coverage = await api('coverage'); } catch (e) { coverage = { error: 'Could not load the coverage: ' + e.message }; }
+  renderCoverage(); renderNav();
+  clearTimeout(covTimer);
+  if (coverage.progress?.running && state.tab === 'coverage') covTimer = setTimeout(loadCoverage, 5000);
+}
+const pluralOf = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+function covRow(t) {
+  const found = Object.entries(t.sources || {}).map(([k, n]) => `${k.replace(/^the /, '')} ${n}`).join(' · ');
+  const chips = COV_STATUS.map(([k, label]) => `<button type="button" class="cov-status" data-cov-town="${esc(t.town)}" data-cov-status="${k}"
+      title="Show these companies"><span class="cov-status-n">${t[k]}</span>${label}</button>`).join('');
+  const left = t.nights_left ? `${pluralOf(t.unchecked, 'company', 'companies')} not checked yet: about ${pluralOf(t.nights_left, 'night', 'nights')} left` : 'every company checked';
+  return `<div class="cov-row">
+    <div class="cov-town"><div class="co-name">${esc(t.town)}</div><div class="co-sub" title="Found via (places / job ads / register entries used)">${esc(found || 'not collected yet')}</div></div>
+    <div class="cov-num"><span class="cov-label">Companies</span>${t.companies}</div>
+    <div class="cov-num"><span class="cov-label">Careers pages</span>${t.careers}<div class="co-sub">${t.feeds} job feeds · ${t.emails} emails</div></div>
+    <div class="cov-check"><div class="cov-pct">${t.percent}%</div><div class="cov-meter"><span style="width:${t.percent}%"></span></div><div class="co-sub">${esc(left)}</div></div>
+    <div class="cov-statuses">${chips}</div>
+  </div>`;
+}
+function renderCoverage() {
+  const r = coverage, p = r?.progress || {};
+  const parts = ['<span>Every business in the region that could hire an IT Werkstudent</span>'];
+  if (state.demo) parts.push('<span>Demo data: connect the backend to see the coverage</span>');
+  else if (r && !r.error) parts.push(`<span>${r.per_night} more companies checked per night${r.run_hour != null ? ` (${r.run_hour}:00)` : ''}</span>`);
+  if (p.running) parts.push(`<span class="status-line is-checking"><span class="status-dot"></span>${esc(p.step)}${p.total ? ` · ${p.done} of ${p.total}` : ''}</span>`);
+  if (r?.error) parts.push(`<span class="demo-note">${esc(r.error)}</span>`);
+  $('#coverageSummary').innerHTML = parts.join('');
+  if (!r || r.error || state.demo) {
+    $('#coverageHero').innerHTML = '';
+    $('#coverageList').innerHTML = `<div class="empty"><p class="empty-text">${r || state.demo ? 'No coverage data.' : 'Loading…'}</p></div>`;
+    return;
+  }
+  const total = r.towns.reduce((a, t) => a + t.companies, 0), done = r.towns.reduce((a, t) => a + t.checked, 0);
+  $('#coverageHero').innerHTML = `<div class="cov-hero-num">${r.covered_percent}%</div>
+    <div class="cov-hero-text"><div class="cov-hero-title">Region covered</div>
+      <div class="co-sub">${done} of ${pluralOf(total, 'company', 'companies')} in ${r.towns.map(t => esc(t.town)).join(', ')} have a final status</div>
+      <div class="cov-meter cov-meter--big"><span style="width:${r.covered_percent}%"></span></div></div>`;
+  $('#coverageList').innerHTML = r.towns.length && total ? r.towns.map(covRow).join('')
+    : `<div class="empty"><h3 class="empty-title">Not collected yet</h3><p class="empty-text">The next discovery run (Companies page, or at night) collects the businesses of ${r.towns.map(t => esc(t.town)).join(', ')}.</p></div>`;
+}
+// A status opens the Companies page with only that town's companies in that status ("Waiting" = New)
+$('#coverageList').addEventListener('click', e => {
+  const b = e.target.closest('[data-cov-status]'); if (!b) return;
+  state.coTown = b.dataset.covTown;
+  state.coStatus = b.dataset.covStatus === 'waiting' ? 'new' : b.dataset.covStatus;
+  state.coCategory = 'all'; state.coQuery = ''; $('#companySearch').value = ''; coShown = CO_PAGE;
+  setTab('companies');
 });
 
 function setTab(tab) {
   state.tab = tab;
-  ['jobs', 'links', 'companies', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== tab);
+  ['jobs', 'links', 'companies', 'coverage', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== tab);
   if (tab === 'links' && !state.loading) loadSuggestions();
   if (tab === 'companies' && !state.loading) loadCompanies();
+  if (tab === 'coverage' && !state.loading) loadCoverage();
   if (tab === 'settings' && !state.loading && !state.demo) {  // the active AI provider can change
     api('settings').then(s => { settings = settingsFromApi(s); renderSettings(); }).catch(() => {});
   }

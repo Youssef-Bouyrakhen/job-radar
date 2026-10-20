@@ -24,6 +24,7 @@ The owner is a beginner: explain in plain language and give exact commands.
 - `app/must_apply.py` - the "Must apply" list; `app/telegram.py`, `app/weekly.py` - messages
 - `app/companies.py`, `careers.py`, `company_jobs.py`, `company_import.py`, `categories.py`,
   `discover.py` - Company Discovery Engine (find companies, careers pages, rank them)
+- `app/region.py` - region coverage (all Darmstadt businesses, Coverage page, Impressum emails)
 - `static/` - dashboard (`index.html`, `app.js`, `style.css`); `static/old-v6/` is old,
   `job-radar-v2.html` is the design mockup. Neither is used by the app.
 

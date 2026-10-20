@@ -324,3 +324,16 @@ companies:
     cloud: [Rechenzentrum, Cloud, Netzwerk, Hosting, DevOps, Linux]
     security: [IT-Sicherheit, Security, Pentest, SOC]
     software: [Softwareentwicklung, IT-Dienstleister, Anwendungsentwicklung]
+
+# Region coverage (Coverage page): every business in these towns that could hire an IT Werkstudent,
+# from OpenStreetMap, the Arbeitsagentur (all employers, all job types) and OffeneRegister.de.
+# Shops, restaurants, craftsmen and staffing agencies are skipped by rules; the rest goes through the
+# normal pipeline in the nightly run, a few companies per night.
+region:
+  towns:
+    Darmstadt:
+      ags: "06411000"            # official municipality key: the city boundary on OpenStreetMap
+      postcodes: [64283, 64285, 64287, 64289, 64291, 64293, 64295, 64297]   # all districts
+  max_checks_per_run: 80         # town companies whose website + careers page are checked per night (extra)
+  max_contacts_per_run: 60       # small IT companies without a careers page: Impressum emails read per night
+  offeneregister: true           # read the company register (2019, 260 MB) once, keep a small extract in data/

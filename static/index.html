@@ -22,6 +22,7 @@
         <div class="nav-section">App</div>
         <button type="button" class="nav-item" data-tab="links" title="Watched links"><svg data-icon="link"></svg><span class="nav-label">Watched links</span><span class="nav-count" id="linksCount">–</span></button>
         <button type="button" class="nav-item" data-tab="companies" title="Companies"><svg data-icon="building"></svg><span class="nav-label">Companies</span><span class="nav-count" id="companiesCount">–</span></button>
+        <button type="button" class="nav-item" data-tab="coverage" title="Region coverage"><svg data-icon="globe"></svg><span class="nav-label">Coverage</span><span class="nav-count" id="coverageCount">–</span></button>
         <button type="button" class="nav-item" data-tab="settings" title="Settings"><svg data-icon="sliders"></svg><span class="nav-label">Settings</span></button>
       </nav>
       <div class="side-foot">
@@ -127,6 +128,7 @@
             </div>
             <div class="add-error" id="importError" role="alert"></div>
           </form>
+          <div class="co-town" id="coTownFilter" hidden></div>
           <div class="filters"><div class="src-row" id="companyBoxes" role="group" aria-label="Status"></div>
             <div class="src-row src-row--compact" id="categoryBoxes" role="group" aria-label="Category"></div></div>
           <div class="co-head">
@@ -143,6 +145,20 @@
           </div>
           <div id="companyList" aria-live="polite"></div>
           <div class="co-more"><button type="button" class="btn btn--sm" id="companiesMore" hidden>Show more</button></div>
+        </section>
+
+        <section id="tab-coverage" hidden>
+          <div class="page-head"><h1 class="page-title">Coverage</h1><div class="summary" id="coverageSummary"></div></div>
+          <div class="cov-hero" id="coverageHero"></div>
+          <div class="cov-head">
+            <div class="th">Town</div>
+            <div class="th">Companies</div>
+            <div class="th">Careers pages</div>
+            <div class="th">Checked</div>
+            <div class="th">Status</div>
+          </div>
+          <div id="coverageList" aria-live="polite"></div>
+          <p class="shortcuts cov-legend"><span><strong>Watched</strong> careers page, read every week</span><span><strong>Initiativ</strong> IT jobs but no student job, or a small IT company without a careers page (email from its Impressum)</span><span><strong>No careers page</strong> none found</span><span><strong>Skipped</strong> shop, restaurant, craft, care or staffing business, or closed</span><span><strong>Waiting</strong> still in line for the nightly run</span></p>
         </section>
 
         <section id="tab-settings" hidden>

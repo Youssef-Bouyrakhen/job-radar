@@ -12,7 +12,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import VERSION, ai, applications, categories, companies, company_jobs, db, must_apply, discover, gmail, scheduler, telegram, weekly
+from . import (VERSION, ai, applications, categories, companies, company_jobs, db, must_apply, discover, gmail, region,
+               scheduler, telegram, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all,
                       ensure_builtin_sources, hide_old_duplicates, min_score, refilter_all_jobs)
 from .config import CONFIG, ROOT
@@ -239,6 +240,12 @@ def list_companies():
         r["sources"] = json.loads(r["sources"] or "{}")
         r["size"] = company_jobs.size_of(r)
     return {"progress": companies.progress(), "companies": rows}
+
+
+@app.get("/api/coverage")
+def coverage():
+    """Region coverage: per town how many companies, careers pages, and how many have a final status."""
+    return {**region.coverage(), "progress": companies.progress()}
 
 
 @app.post("/api/companies/run")
