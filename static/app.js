@@ -1147,12 +1147,14 @@ async function loadCoverage() {
   if (coverage.progress?.running && state.tab === 'coverage') covTimer = setTimeout(loadCoverage, 5000);
 }
 const pluralOf = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-function covRow(t) {
-  const found = Object.entries(t.sources || {}).map(([k, n]) => `${k.replace(/^the /, '')} ${n}`).join(' · ');
-  const chips = COV_STATUS.map(([k, label]) => `<button type="button" class="cov-status" data-cov-town="${esc(t.town)}" data-cov-status="${k}"
+// total: the "Whole region" row on top (its numbers aren't links: the Companies page filters one town)
+function covRow(t, total) {
+  const found = total ? `${coverage.towns.length} towns` : Object.entries(t.sources || {}).map(([k, n]) => `${k.replace(/^the /, '')} ${n}`).join(' · ');
+  const chips = COV_STATUS.map(([k, label]) => total ? `<span class="cov-status"><span class="cov-status-n">${t[k]}</span>${label}</span>`
+    : `<button type="button" class="cov-status" data-cov-town="${esc(t.town)}" data-cov-status="${k}"
       title="Show these companies"><span class="cov-status-n">${t[k]}</span>${label}</button>`).join('');
   const left = t.nights_left ? `${pluralOf(t.unchecked, 'company', 'companies')} not checked yet: about ${pluralOf(t.nights_left, 'night', 'nights')} left` : 'every company checked';
-  return `<div class="cov-row">
+  return `<div class="cov-row${total ? ' cov-row--total' : ''}">
     <div class="cov-town"><div class="co-name">${esc(t.town)}</div><div class="co-sub" title="Found via (places / job ads / register entries used)">${esc(found || 'not collected yet')}</div></div>
     <div class="cov-num"><span class="cov-label">Companies</span>${t.companies}</div>
     <div class="cov-num"><span class="cov-label">Careers pages</span>${t.careers}<div class="co-sub">${t.feeds} job feeds · ${t.emails} emails</div></div>
@@ -1178,7 +1180,7 @@ function renderCoverage() {
     <div class="cov-hero-text"><div class="cov-hero-title">Region covered</div>
       <div class="co-sub">${done} of ${pluralOf(total, 'company', 'companies')} in ${r.towns.map(t => esc(t.town)).join(', ')} have a final status</div>
       <div class="cov-meter cov-meter--big"><span style="width:${r.covered_percent}%"></span></div></div>`;
-  $('#coverageList').innerHTML = r.towns.length && total ? r.towns.map(covRow).join('')
+  $('#coverageList').innerHTML = r.towns.length && total ? (r.total && r.towns.length > 1 ? covRow(r.total, true) : '') + r.towns.map(t => covRow(t)).join('')
     : `<div class="empty"><h3 class="empty-title">Not collected yet</h3><p class="empty-text">The next discovery run (Companies page, or at night) collects the businesses of ${r.towns.map(t => esc(t.town)).join(', ')}.</p></div>`;
 }
 // A status opens the Companies page with only that town's companies in that status ("Waiting" = New)

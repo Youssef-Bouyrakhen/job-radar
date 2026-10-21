@@ -477,6 +477,11 @@ button.switch { border: 0; padding: 0; cursor: pointer; }
 .cov-status { display: inline-flex; align-items: baseline; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: var(--btn-shadow); cursor: pointer; font: inherit; font-size: 12.5px; color: var(--muted); line-height: 30px; }
 .cov-status:hover { background: var(--hover); color: var(--text); }
 .cov-status-n { font-size: 14px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+/* "Whole region" on top: the sum of the towns, its numbers are not buttons */
+.cov-row--total { background: var(--hover); }
+.cov-row--total .co-name { font-weight: 700; }
+.cov-row--total span.cov-status { cursor: default; box-shadow: none; }
+.cov-row--total span.cov-status:hover { background: var(--panel); color: var(--muted); }
 .cov-legend strong { color: var(--muted); font-weight: 600; }
 @container main (max-width: 900px) {
   .cov-head { display: none; }

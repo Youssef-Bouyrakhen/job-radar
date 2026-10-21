@@ -1,4 +1,5 @@
-"""Region coverage: every business in a town that could hire an IT Werkstudent (now: Darmstadt).
+"""Region coverage: every business in a town that could hire an IT Werkstudent (Darmstadt, Weiterstadt,
+Griesheim, Pfungstadt: region.towns in config.yaml).
 
 1. Collect (no AI, every night):
    a) OpenStreetMap: named offices of any kind, works, research institutes, universities, town halls and
@@ -7,12 +8,13 @@
    b) Arbeitsagentur: every employer with an ad in the town's postcodes, any job type (staffing agencies
       and private job agencies left out by the API itself).
    c) OffeneRegister.de: the company register as open data. Its only download is from 2019 (260 MB), so it is
-      read once and a small extract is kept in data/. IT-sounding companies (Software, IT, Digital, ...) are
+      read once (for every town without an extract, in one pass) and a small extract per town is kept in data/. IT-sounding companies (Software, IT, Digital, ...) are
       added; the others only mark known companies as being in the town.
    Duplicates merge with the companies already known (same name or same website).
 2. Rules: shops, restaurants, care services, craftsmen and staffing agencies the sources still bring are
    Skipped right away (the reason is saved), the rest goes through the normal pipeline: website (OSM tag,
-   then a guess from the name, the AI last) -> careers page -> jobs -> fit score. A few per night.
+   then a guess from the name, the AI last) -> careers page -> jobs -> fit score. max_checks_per_run a night
+   for all towns together, in the order of region.towns (Darmstadt is finished before the next town starts).
 3. Every company ends with a status: Watched (careers page, read every week), Initiativ, No careers page
    or Skipped. Small IT companies without a careers page: the contact email from their Impressum, Initiativ.
 """
@@ -71,6 +73,10 @@ PARENTS = {
 
 
 def _parent(name: str, town: str) -> str:
+    # Every town: "Magistrat der Stadt Weiterstadt Personalservice", "Stadt Pfungstadt: Kultur ..." are its administration
+    if re.match(rf"(?:der )?(?:magistrat der |stadtverwaltung )?(?:kreis)?stadt {re.escape(town)}\b|stadtverwaltung\b",
+                name, re.I):
+        name = f"Stadt {town}"
     return next((parent for rule, parent in PARENTS.get(town, []) if rule.search(name)), name)
 
 
@@ -111,6 +117,8 @@ def collect_osm(town: str, progress: dict) -> list[dict]:
         kind, name = _osm_kind(tags), tags.get("name", "").strip()
         if kind in SKIP_OSM or FRATERNITY.search(name):
             continue
+        if kind == "townhall":  # every town's is just "Rathaus": they must not merge into one company
+            name = f"Stadt {town}"
         center = e.get("center") or e
         website = tags.get("website") or tags.get("contact:website") or tags.get("url")
         records.append({"name": clean_name(_parent(name, town)), "source": source(town, f"osm:{kind}"),
@@ -162,12 +170,13 @@ def _register_file(town: str):
     return db.DB_PATH.parent / f"offeneregister-{town}.json"
 
 
-def _download_register(town: str, progress: dict) -> list[dict]:
-    """Stream the whole register once (about 5 million lines, 2-5 minutes) and keep this town's active
-    companies. Nothing big is saved: only the extract (a few hundred KB)."""
+def _download_register(names: list[str], progress: dict) -> None:
+    """Stream the whole register once (about 5 million lines, 2-5 minutes) and keep these towns' active
+    companies. Nothing big is saved: only one extract per town (a few hundred KB)."""
     if not robots_allows(REGISTER_URL, BOT_NAME):
         raise httpx.TransportError("OffeneRegister's robots.txt asks automated visitors not to download it")
-    found, lines, buffer = [], 0, b""
+    found, lines, buffer = {t: [] for t in names}, 0, b""
+    wanted = [t.encode() for t in names]
     decompressor = bz2.BZ2Decompressor()
     with httpx.stream("GET", REGISTER_URL, headers=BOT_HEADERS, timeout=120, follow_redirects=True) as r:
         r.raise_for_status()
@@ -180,30 +189,49 @@ def _download_register(town: str, progress: dict) -> list[dict]:
             *complete, buffer = buffer.split(b"\n")
             for line in complete:
                 lines += 1
-                if town.encode() not in line:
+                if not any(w in line for w in wanted):
                     continue
                 d = json.loads(line)
                 attrs = d.get("all_attributes") or {}
-                if d.get("current_status") != "currently registered" or attrs.get("registered_office") != town \
+                town = attrs.get("registered_office")
+                if d.get("current_status") != "currently registered" or town not in found \
                         or attrs.get("_registerArt") not in REGISTER_TYPES:
                     continue
                 address = d.get("registered_address") or ""
                 plz = re.search(r"\b(\d{5})\b", address)
-                if plz and not in_town(plz[1], None, town):
+                if plz and not in_town(plz[1], None, town):  # Griesheim near Darmstadt, not another one
                     continue
-                found.append({"name": d["name"], "address": address.rstrip(".")})
+                found[town].append({"name": d["name"], "address": address.rstrip(".")})
             progress["step"] = f"OffeneRegister: reading the company register once ({lines / 1_000_000:.1f} of about 5.3 million lines)…"
-    _register_file(town).write_text(json.dumps(found, ensure_ascii=False), encoding="utf-8")
-    log.info("Region %s: OffeneRegister read once (%d lines), %d active companies in %s", town, lines, len(found), town)
-    return found
+    for town, entries in found.items():
+        _register_file(town).write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+    log.info("OffeneRegister read once (%d lines): %s", lines, ", ".join(f"{len(e)} active companies in {t}"
+                                                                         for t, e in found.items()))
+
+
+_register_failed: Exception | None = None  # this run's download failed: the other towns don't try again
+
+
+def _register_entries(town: str, progress: dict) -> list[dict]:
+    """This town's register companies. The first town without an extract reads the big file for every
+    town that has none yet, so it is read only once (and only tried once per run)."""
+    global _register_failed
+    if not _register_file(town).exists():
+        if _register_failed:
+            raise _register_failed
+        try:
+            _download_register([t for t in towns() if not _register_file(t).exists()], progress)
+        except Exception as e:
+            _register_failed = e
+            raise
+    return json.loads(_register_file(town).read_text(encoding="utf-8"))
 
 
 def collect_register(town: str, progress: dict, known: list[dict]) -> list[dict]:
     """IT-sounding register companies as new records; the others only if they are known already (from the
     other sources or earlier runs): then they get the town too."""
     from .companies import clean_name
-    path = _register_file(town)
-    entries = json.loads(path.read_text(encoding="utf-8")) if path.exists() else _download_register(town, progress)
+    entries = _register_entries(town, progress)
     keys = {company_key(r["name"]) for r in known} | {c["name_key"] for c in db.company_rows()}
     by_prefix: dict[str, list[str]] = {}
     for k in keys:
@@ -224,7 +252,8 @@ def collect_register(town: str, progress: dict, known: list[dict]) -> list[dict]
 def collect(records: list[dict], progress: dict) -> tuple[list[dict], set[str]]:
     """All towns, all three sources. Returns (records, the source keys that were collected this time).
     A source that fails keeps its companies from earlier runs and is tried again the next night."""
-    found, collected = [], set()
+    global _register_failed
+    found, collected, _register_failed = [], set(), None
     old_keys = {k for c in db.company_rows() for k in json.loads(c["sources"] or "{}")}
     for town in towns():
         steps = [("OpenStreetMap", lambda: collect_osm(town, progress)),
@@ -255,7 +284,8 @@ def assign_towns() -> int:
     changed = 0
     for c in db.company_rows():
         sources = json.loads(c["sources"] or "{}")
-        town = next((t for t in map(town_of_source, sources) if t in towns()), None) \
+        # Found in several towns (a chain): the first in region.towns order
+        town = next((t for t in towns() if any(town_of_source(k) == t for k in sources)), None) \
             or next((t for t in towns() if in_town(None, c["city"], t)), None)
         if town != c["town"]:
             db.update_company(c["id"], {"town": town})
@@ -333,12 +363,17 @@ def triage() -> int:
     return skipped
 
 
+def _unchecked(c: dict) -> bool:
+    return bool(c["town"]) and not c["last_checked"] and c["status"] not in ("skipped", "initiativ")
+
+
 def to_check(exclude: set[int]) -> list[dict]:
-    """Town companies whose website and careers page were never looked for, a few per night."""
+    """Town companies whose website and careers page were never looked for, max_checks_per_run a night
+    for all towns together: one town is finished before the next one (region.towns order) starts."""
     from .companies import _priority
-    rows = [c for c in db.company_rows() if c["town"] and not c["last_checked"] and c["id"] not in exclude
-            and c["status"] not in ("skipped", "initiativ")]
-    return sorted(rows, key=_priority)[:CONFIG["region"]["max_checks_per_run"]]
+    order = {t: n for n, t in enumerate(towns())}
+    rows = [c for c in db.company_rows() if _unchecked(c) and c["id"] not in exclude]
+    return sorted(rows, key=lambda c: (order.get(c["town"], len(order)), _priority(c)))[:CONFIG["region"]["max_checks_per_run"]]
 
 
 # ---- 3. the website: a guess from the name before the AI ---------------------------------
@@ -511,20 +546,25 @@ def coverage() -> dict:
     rows = db.company_rows()
     per_night = CONFIG["region"]["max_checks_per_run"]
     stats = json.loads(db.get_setting("region_stats") or "{}")
-    result = []
-    for town in towns():
-        mine = [c for c in rows if c["town"] == town]
+    def row(town: str, mine: list[dict], queued_before: int) -> dict:
         count = {s: sum(c["status"] == s for c in mine) for s in FINAL}
-        unchecked = sum(not c["last_checked"] and c["status"] not in FINAL for c in mine)
+        unchecked = sum(_unchecked(c) for c in mine)
         final = sum(count.values())
-        result.append({
+        return {
             "town": town, "companies": len(mine), "careers": sum(bool(c["career_url"]) for c in mine),
             "feeds": sum(bool(c["feed_url"]) for c in mine), "emails": sum(bool(c["contact_email"]) for c in mine),
             "checked": final, "percent": math.floor(100 * final / len(mine)) if mine else 0,
             **count, "waiting": len(mine) - final, "unchecked": unchecked,
-            "nights_left": math.ceil(unchecked / per_night) if unchecked else 0,
+            # the towns share the nightly checks, in order: a town waits for the ones before it
+            "nights_left": math.ceil((queued_before + unchecked) / per_night) if unchecked else 0,
             "sources": stats.get(town, {}),
-        })
-    total = sum(t["companies"] for t in result)
-    return {"towns": result, "covered_percent": math.floor(100 * sum(t["checked"] for t in result) / total) if total else 0,
+        }
+
+    result, queued = [], 0
+    for town in towns():
+        result.append(row(town, [c for c in rows if c["town"] == town], queued))
+        queued += result[-1]["unchecked"]
+    total = row("Whole region", [c for c in rows if c["town"] in towns()], 0)
+    total["sources"] = {}
+    return {"towns": result, "total": total, "covered_percent": total["percent"],
             "per_night": per_night, "run_hour": CONFIG["companies"].get("daily_run_hour")}

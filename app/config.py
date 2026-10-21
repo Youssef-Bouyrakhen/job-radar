@@ -81,7 +81,13 @@ DEFAULTS = {
     },
     "region": {
         # ags: the town's official municipality key (OpenStreetMap boundary); postcodes: all of its districts
-        "towns": {"Darmstadt": {"ags": "06411000", "postcodes": [64283, 64285, 64287, 64289, 64291, 64293, 64295, 64297]}},
+        # in this order: the nightly checks finish a town before the next one starts
+        "towns": {
+            "Darmstadt": {"ags": "06411000", "postcodes": [64283, 64285, 64287, 64289, 64291, 64293, 64295, 64297]},
+            "Weiterstadt": {"ags": "06432023", "postcodes": [64331]},
+            "Griesheim": {"ags": "06432008", "postcodes": [64347]},
+            "Pfungstadt": {"ags": "06432018", "postcodes": [64319]},
+        },
         "max_checks_per_run": 300,
         "max_contacts_per_run": 60,
         "offeneregister": True,

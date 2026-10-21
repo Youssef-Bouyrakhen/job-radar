@@ -349,10 +349,19 @@ companies:
 # Shops, restaurants, craftsmen and staffing agencies are skipped by rules; the rest goes through the
 # normal pipeline in the nightly run, a few companies per night.
 region:
-  towns:
+  towns:                         # in this order: the nightly checks finish a town before the next one starts
     Darmstadt:
       ags: "06411000"            # official municipality key: the city boundary on OpenStreetMap
       postcodes: [64283, 64285, 64287, 64289, 64291, 64293, 64295, 64297]   # all districts
-  max_checks_per_run: 300        # town companies whose website + careers page are checked per night (extra)
+    Weiterstadt:                 # with Braunshardt, Gräfenhausen, Schneppenhausen, Riedbahn
+      ags: "06432023"
+      postcodes: [64331]
+    Griesheim:                   # the town near Darmstadt (not Frankfurt-Griesheim, 65933)
+      ags: "06432008"
+      postcodes: [64347]
+    Pfungstadt:                  # with Eschollbrücken, Eich, Hahn
+      ags: "06432018"
+      postcodes: [64319]
+  max_checks_per_run: 300        # town companies whose website + careers page are checked per night, all towns together
   max_contacts_per_run: 60       # small IT companies without a careers page: Impressum emails read per night
   offeneregister: true           # read the company register (2019, 260 MB) once, keep a small extract in data/

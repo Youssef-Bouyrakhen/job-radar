@@ -5,7 +5,7 @@
       plus keyword searches per category (companies.category_searches, IT jobs only),
    b) OpenStreetMap (Overpass API): IT / telecommunication / company offices, with their website tag,
    c) your own database: jobs, email alerts, suggestions and watched links,
-   d) region coverage: every business in the towns (Darmstadt) that could hire an IT student (region.py).
+   d) region coverage: every business in the towns (Darmstadt, Weiterstadt, Griesheim, Pfungstadt) that could hire an IT student (region.py).
 2. Merge spelling variants ("ACME GmbH" = "Acme") and remember where each was found, how often.
 3. For the next companies in line (IT employers first): find the website and careers page
    (see careers.py). Each run checks at most companies.max_companies_per_run, so a big list
@@ -630,7 +630,7 @@ def _collect() -> None:
             collected |= {f"osm_{o}" for o in OSM_OFFICES}
         if collect is collect_category_searches:  # a category with no ads this time: its old counts go
             collected |= {f"ba_{cat}" for cat in CONFIG["companies"]["category_searches"]}
-    # Region coverage: every business in the towns (Darmstadt) that could hire an IT student
+    # Region coverage: every business in the towns (region.towns) that could hire an IT student
     found, region_collected = region.collect(records, _progress)
     records += found
     collected |= region_collected
@@ -664,7 +664,7 @@ def _save_failure(c: dict, e: Exception) -> None:
 def _check(ids: set[int] | None = None) -> None:
     cfg = CONFIG["companies"]
     todo = companies_to_check(cfg["max_companies_per_run"], ids)
-    if ids is None:  # plus a few companies of the towns (Darmstadt) each night, whatever their business
+    if ids is None:  # plus a few companies of the towns (one town after the other) each night, whatever their business
         todo += region.to_check({c["id"] for c in todo})
     _progress.update(total=len(todo), done=0)
     if not todo:
