@@ -199,6 +199,7 @@ MIGRATIONS["companies"] = {
     "contact_email": "TEXT",         # from its Impressum (small IT companies without a careers page)
     "contact_url": "TEXT",           # the page the email was on
     "contact_checked_at": "TEXT",    # when the Impressum was read (once)
+    "jobs_part_hash": "TEXT",        # the page's job part when the AI last read it: unchanged = no AI request
 }
 
 AFTER_ADDING = {
@@ -931,7 +932,8 @@ def employer_jobs() -> list[tuple[str, str, str]]:
 
 def mark_auto_added(link_id: int) -> None:
     with connect() as conn:
-        conn.execute("UPDATE links SET auto_added = 1 WHERE id = ?", (link_id,))
+        # Its company's jobs were read already and went the normal way: the link's first check is no baseline
+        conn.execute("UPDATE links SET auto_added = 1, baseline_done = 1 WHERE id = ?", (link_id,))
 
 
 # ---- dashboard switches --------------------------------------------------------

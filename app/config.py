@@ -54,6 +54,7 @@ DEFAULTS = {
         "ai_batch_size": 25,
         "max_job_reads_per_run": 120,
         "recheck_after_days": 7,
+        "watched_read_hour": 19,
         "max_ai_pages_per_run": 30,
         "max_auto_added_per_run": 10,
         "max_initiativ_reasons_per_run": 60,

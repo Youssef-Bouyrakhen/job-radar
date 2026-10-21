@@ -27,6 +27,11 @@ def start() -> None:
     if hour is not None:  # Company Discovery Engine once a day (German time), like pressing "Run discovery"
         from . import companies  # imported here: companies needs the checker's modules first
         scheduler.add_job(companies.start, "cron", hour=hour, minute=0, id="companies", coalesce=True, timezone=GERMANY)
+    read_hour = CONFIG["companies"].get("watched_read_hour")
+    if read_hour is not None:  # the jobs of every watched company, once a day (your links: every hour anyway)
+        from . import company_jobs
+        scheduler.add_job(company_jobs.read_watched, "cron", hour=read_hour, minute=0, id="watched_read",
+                          max_instances=1, coalesce=True, misfire_grace_time=3600, timezone=GERMANY)
     weekly = CONFIG["companies"].get("weekly_summary") or {}
     if weekly.get("day"):  # Sunday evening: one Telegram message with the week's numbers
         from . import weekly as summary

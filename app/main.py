@@ -34,6 +34,7 @@ async def lifespan(app: FastAPI):
     must_apply.prepare()  # once: recent good jobs are scored again with the blocker check
     categories.apply_rules()  # no AI: every company the name / jobs make clear gets its category right away
     ai.requeue_unscored()  # once: jobs the AI gave up on wait for a score again
+    company_jobs.release_first_reads()  # once: good jobs from companies' first reads can go to Telegram
     logging.getLogger("jobradar").info(
         "AI scoring: %s", f"on ({' -> '.join(ai.providers())}, min. score {CONFIG['gemini']['min_score']})"
         if ai.enabled() else "off (no GEMINI_API_KEY / GROQ_API_KEY / CLOUDFLARE_API_TOKEN / OPENROUTER_API_KEY in .env)")

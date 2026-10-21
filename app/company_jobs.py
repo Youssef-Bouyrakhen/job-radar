@@ -4,14 +4,17 @@
    page, else the AI reads the job list from the page text (only the job-related lines, to save
    AI requests). Only jobs in the Darmstadt / Frankfurt area (or remote, or without a place) are
    saved; they go through the normal flow: keyword filter, duplicates, AI score, Telegram.
-   The first time a company is read, its jobs don't go to Telegram (that would be a flood of
-   old jobs), except jobs posted in the last 7 days.
+   Also the first time a company is read: you never saw its jobs, so a good one is new to you
+   (only jobs that pass the filter and the AI score are sent, so this is no flood).
+   Watched companies are read every day at 19:00 (read_watched); the AI only reads a page again
+   when its job part changed.
 2. Fit score (0-100): small / mid-size companies, distance, share of IT jobs, Werkstudent jobs
    now or before (strong bonus), fresh jobs. Big companies get fewer points but stay visible.
 3. The best companies with good jobs become watched links (max 10 per run), marked "auto-added".
 4. Companies with IT jobs but no Werkstudent job go to the Initiativ list, with a one-line AI
    reason why an Initiativbewerbung could fit you.
 """
+import hashlib
 import json
 import logging
 import re
@@ -36,7 +39,6 @@ from .sources import check_url
 log = logging.getLogger("jobradar")
 
 FRESH_DAYS = 14         # "has fresh jobs" for the fit score
-NOTIFY_DAYS = 7         # on a company's first read, only jobs this new go to Telegram
 MAX_PART = 4000         # characters of a page sent to the AI
 # A real Werkstudent job. Stricter than the keyword filter, where "Teilzeit" also counts:
 # "Voll-/Teilzeit" senior jobs must not earn the Werkstudent bonus.
@@ -174,7 +176,7 @@ def _posted_days(job: Job) -> int | None:
     return (date.today() - day).days
 
 
-def save_jobs(c: dict, jobs: list[Job], first_read: bool) -> tuple[dict, list[dict]]:
+def save_jobs(c: dict, jobs: list[Job]) -> tuple[dict, list[dict]]:
     """Run the jobs through filter + duplicates and save the ones in the area.
     Returns (the company's job numbers, the new jobs)."""
     jf = get_filter()
@@ -205,8 +207,7 @@ def save_jobs(c: dict, jobs: list[Job], first_read: bool) -> tuple[dict, list[di
         if is_it and len(it_titles) < 5:
             it_titles.append(j.title)
         rows.append({**asdict(j), "dedup_key": dedup_key(j.title, j.company), "hours": verdict.hours,
-                     "filter_passed": verdict.passed, "filter_reason": verdict.reason,
-                     "baseline": first_read and not (days is not None and days <= NOTIFY_DAYS)})
+                     "filter_passed": verdict.passed, "filter_reason": verdict.reason})
     source = {"id": None, "name": f"{c['name']} (Companies)", "url": c["career_url"] or ""}
     new = db.insert_new_jobs(source, rows, baseline=False)
     fields = {"jobs_total": stats["total"], "jobs_near": stats["near"], "it_jobs": stats["it"],
@@ -469,15 +470,20 @@ def companies_to_read(limit: int, ids: set[int] | None = None) -> list[dict]:
     return sorted(rows, key=lambda c: (c["jobs_read_at"] or "", -(c["fit_score"] or 0)))[:limit]
 
 
-def run(progress: dict, ids: set[int] | None = None) -> None:
+def _part_hash(part: str) -> str:
+    return hashlib.sha1(part.encode()).hexdigest()
+
+
+def read_jobs(todo: list[dict], progress: dict, stop=lambda: False) -> int:
+    """Read and save the jobs of these companies: feeds and structured data without the AI; the AI
+    only for a page whose job part changed since it last read it (max_ai_pages_per_run at most).
+    stop(): True = don't start more (the morning). Returns how many new jobs passed your filter."""
     cfg = CONFIG["companies"]
-    todo = companies_to_read(cfg["max_job_reads_per_run"], ids)
     progress.update(step="Reading job lists…", done=0, total=len(todo))
     results: dict[int, dict] = {}
 
     def read(c: dict) -> None:
-        from .companies import too_late  # companies imports this module
-        if too_late(progress):  # morning: read next night
+        if stop():  # morning: read next night
             progress["done"] += 1
             return
         try:
@@ -497,7 +503,14 @@ def run(progress: dict, ids: set[int] | None = None) -> None:
         r = results.get(c["id"])
         if r is None:
             continue  # not read before the morning deadline
+        part_hash = None
         if "ai_part" in r:
+            part_hash = _part_hash(r["ai_part"])
+            if part_hash == c["jobs_part_hash"]:  # the same job list as last time: nothing new, no AI request
+                db.save_company_check(c["id"], {"jobs_note": None}, stamp="jobs_read_at")
+                progress["jobs_read"] += 1
+                progress["done"] += 1
+                continue
             if ai_budget <= 0:
                 continue  # read again next run, when there are AI requests left
             ai_budget -= 1
@@ -508,13 +521,29 @@ def run(progress: dict, ids: set[int] | None = None) -> None:
                 ai_budget = 0
                 progress["warnings"].append(ai.stop_note(e, "some job lists will be read next run"))
                 continue
-        fields, new = save_jobs(c, r["jobs"], first_read=not c["jobs_read_at"])
-        db.save_company_check(c["id"], {**fields, "jobs_method": r.get("method"), "jobs_note": r.get("note")},
-                              stamp="jobs_read_at")
+        fields, new = save_jobs(c, r["jobs"])
+        db.save_company_check(c["id"], {**fields, "jobs_method": r.get("method"), "jobs_note": r.get("note"),
+                                        "jobs_part_hash": part_hash}, stamp="jobs_read_at")
         new_good += sum(1 for j in new if j["filter_passed"])
         progress["jobs_read"] += 1
         progress["new_jobs"] += len(new)
         progress["done"] += 1
+    return new_good
+
+
+def _score_and_send() -> None:
+    """Scored first, then sent to Telegram (like jobs from watched links)."""
+    if ai.enabled():
+        ai.score_in_background()
+    else:
+        telegram.notify_in_background()
+
+
+def run(progress: dict, ids: set[int] | None = None) -> None:
+    from .companies import too_late  # companies imports this module
+    cfg = CONFIG["companies"]
+    todo = companies_to_read(cfg["max_job_reads_per_run"], ids)
+    new_good = read_jobs(todo, progress, stop=lambda: too_late(progress))
     log.info("Companies: read %d job lists, %d new jobs (%d match your filter)",
              progress["jobs_read"], progress["new_jobs"], new_good)
 
@@ -527,11 +556,8 @@ def run(progress: dict, ids: set[int] | None = None) -> None:
     if ai.enabled():
         progress["step"] = "Writing Initiativ reasons…"
         initiativ_reasons(mine(db.company_rows()), cfg["max_initiativ_reasons_per_run"])
-    if new_good:  # scored first, then sent to Telegram (like jobs from watched links)
-        if ai.enabled():
-            ai.score_in_background()
-        else:
-            telegram.notify_in_background()
+    if new_good:
+        _score_and_send()
 
 
 def rank(progress: dict) -> None:
@@ -554,3 +580,59 @@ def rank(progress: dict) -> None:
             elif c["status"] == "initiativ" and c["career_url"] and (c["student_jobs"] or c["student_history"]):
                 fields["status"] = c["status"] = "new"
         db.update_company(c["id"], fields)
+
+
+# ---- every day at 19:00: the jobs of every watched company ---------------------------------
+
+def watched_to_read() -> list[dict]:
+    """Watched companies with a careers page. Not the ones that are a watched link already
+    (yours or auto-added): those are checked every hour by the normal link check."""
+    active = {l["id"] for l in db.list_links() if l["active"]}
+    yours = _watched_keys()
+    return [c for c in db.company_rows() if c["status"] == "watched" and (c["career_url"] or c["feed_url"])
+            and c["link_id"] not in active and not _is_known(c["name_key"], yours)]
+
+
+def read_watched() -> dict:
+    """Read the job list of every watched company once (19:00, German time), so a good new job
+    reaches you the same day. Waits while a Companies run is going (they read the same pages)."""
+    from . import companies  # it imports this module
+    for _ in range(180):  # at most 3 hours
+        if not companies.progress()["running"]:
+            break
+        time.sleep(60)
+    else:
+        log.warning("Watched careers pages: a Companies run is still going after 3 hours, read tomorrow")
+        return {}
+    started = time.monotonic()
+    todo = watched_to_read()
+    progress = {"step": "", "done": 0, "total": 0, "jobs_read": 0, "new_jobs": 0, "warnings": []}
+    new_good = read_jobs(todo, progress)
+    seconds = time.monotonic() - started
+    log.info("Watched careers pages: read %d of %d in %.0f s, %d new jobs (%d match your filter)%s",
+             progress["jobs_read"], len(todo), seconds, progress["new_jobs"], new_good,
+             "".join(f"; {w}" for w in progress["warnings"]))
+    if new_good:
+        _score_and_send()
+    return {**progress, "companies": len(todo), "new_good": new_good, "seconds": round(seconds)}
+
+
+FIRST_READ_RULE = "1"  # bump to release the jobs of first reads again
+
+
+def release_first_reads(days: int = 30) -> int:
+    """Once: good jobs from a company's first read were kept from Telegram before v9.7. The recent ones
+    you haven't opened or marked yet are released, so the normal Telegram round sends the good ones."""
+    if db.get_setting("first_read_rule") == FIRST_READ_RULE:
+        return 0
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    with db.connect() as conn:
+        released = conn.execute(
+            """UPDATE jobs SET baseline = 0
+               WHERE link_id IS NULL AND source LIKE '% (Companies)' AND baseline = 1 AND notified = 0
+                 AND filter_passed = 1 AND duplicate_of IS NULL AND seen = 0
+                 AND COALESCE(status, '') = '' AND first_seen >= ?""", (since,)).rowcount
+    db.set_setting("first_read_rule", FIRST_READ_RULE)
+    if released:
+        log.info("Companies: %d good jobs from first reads can go to Telegram now", released)
+    return released
