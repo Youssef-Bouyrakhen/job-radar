@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
     refilter_all_jobs()
     hide_old_duplicates()
     must_apply.prepare()  # once: recent good jobs are scored again with the blocker check
+    region.skip_staffing()  # staffing agencies with a careers page stay Skipped (some were Watched in v9.9)
     categories.apply_rules()  # no AI: every company the name / jobs make clear gets its category right away
     ai.requeue_unscored()  # once: jobs the AI gave up on wait for a score again
     company_jobs.release_first_reads()  # once: good jobs from companies' first reads can go to Telegram
@@ -51,6 +52,8 @@ async def lifespan(app: FastAPI):
     if background:
         scheduler.start()
         threading.Thread(target=recheck_no_jobs, daemon=True, name="recheck-no-jobs").start()  # once per rule change
+        # once per area / hours rule change: places and hours read again, the Must apply box checked again
+        threading.Thread(target=must_apply.recheck_jobs, daemon=True, name="recheck-jobs").start()
         if companies.recheck_due():  # once per finder change: the "No careers page" companies (shown on the Companies page)
             companies.start("recheck")
     yield
@@ -118,7 +121,8 @@ def info():
         "ai_enabled": ai.enabled(),
         "ai": ai.provider_status() if ai.enabled() else None,  # the AI usage bar at the top
         "min_score": CONFIG["gemini"]["min_score"],
-        "must": {k: CONFIG["must_apply"][k] for k in ("min_score", "max_days", "center")},  # older Must apply jobs turn red
+        "must": {**{k: CONFIG["must_apply"][k] for k in ("min_score", "max_days")},  # older Must apply jobs turn red
+                 "center": CONFIG["area"]["center"]},
         **db.count_jobs(min_score()),
     }
 

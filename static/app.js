@@ -200,7 +200,10 @@ const scoreTier = s => s >= state.minScore ? 'good' : s >= 4 ? 'maybe' : 'weak';
 const scoreLabel = s => s >= 9 ? 'Top match' : s >= state.minScore ? 'Good fit' : s >= 4 ? 'Maybe' : 'Weak';
 const shortReason = r => r ? r.split('. ')[0].replace(/\.$/, '') : '';
 const city = l => (l || '').replace(/ am Main/, '').replace(/, DE$/, '');
-const placeText = j => [city(j.location), j.hours].filter(Boolean).join(' · ') || '–';
+// No place is "Location unknown" (never Darmstadt); farther than the area's max_km: "Outside your area (Koblenz)"
+const placeOf = j => j.area === 'outside' ? `Outside your area (${city(j.location).split(/[,;/(]/)[0].trim()})`
+  : j.location ? city(j.location) : 'Location unknown';
+const placeText = j => [placeOf(j), j.hours].filter(Boolean).join(' · ');
 const initials = c => (c || '?').replace(/[^A-Za-zÄÖÜäöü ]/g, ' ').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
 const hue = s => [...(s || '?')].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -396,7 +399,7 @@ function jobRow(j) {
         </div>
       </div>
       <div class="cell cell-score">${scoreChip(j)}</div>
-      <div class="cell cell-place"><span class="chip${tooMany ? ' chip--warn-hours' : ''}"${tooMany ? ' title="More than 20 h per week"' : ''}><span class="chip-text">${esc(placeText(j))}</span></span></div>
+      <div class="cell cell-place"><span class="chip${tooMany || j.area === 'outside' ? ' chip--warn-hours' : ''}"${tooMany ? ' title="More than 20 h per week"' : j.area === 'outside' ? ` title="${Math.round(j.area_km)} km from ${esc(state.mustCenter || 'Darmstadt')}"` : ''}><span class="chip-text">${esc(placeText(j))}</span></span></div>
       <div class="cell cell-age">${postedChip(j)}</div>
       <div class="cell cell-actions">
         <button type="button" class="act" data-action="open" title="Open ad (o)" aria-label="Open ad">${ICON.open}</button>
@@ -413,7 +416,7 @@ function jobRow(j) {
       <div class="details-facts">
         <span>${j.posted_at ? 'Posted' : 'First seen'} <b>${fmtDate(dateOf(j))}</b>${j.posted_at ? '' : ' (the site shows no posting date)'}</span>
         <span>Source <b>${esc(j.source || '–')}</b>${SOURCES[j.site] ? ` (${SOURCES[j.site].short})` : ''}</span>
-        <span>Location <b>${esc(j.location || '–')}</b></span>
+        <span>Location <b>${esc(j.location || 'unknown')}</b>${j.area === 'outside' ? ` (outside your area, ${Math.round(j.area_km)} km from ${esc(state.mustCenter || 'Darmstadt')})` : ''}</span>
         <span>Hours <b>${j.hours ? esc(j.hours) : 'not stated'}</b></span>
         ${j.employment ? `<span>Type <b>${esc(j.employment)}</b></span>` : ''}
       </div>

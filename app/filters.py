@@ -97,7 +97,7 @@ class JobFilter:
         self.fulltime = Keywords(cfg.get("fulltime_keywords"))
         self.never = Keywords(cfg.get("exclude_keywords"))
         self.unless_student = Keywords(cfg.get("exclude_unless_student_keywords"))
-        self.max_hours = cfg.get("max_hours_per_week", 25)
+        self.max_hours = cfg.get("max_hours_per_week", 20)
         self.min_it_words_in_description = cfg.get("min_it_words_in_description", 2)
 
     def check(self, title: str, employment: str = "", description: str = "") -> FilterResult:

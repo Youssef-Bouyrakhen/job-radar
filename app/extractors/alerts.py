@@ -110,6 +110,18 @@ def _card(anchors: list, other_ids: set[int]):
     return card
 
 
+def linkedin_card(title: str, lines: list[str]) -> tuple[str, str, str] | None:
+    """LinkedIn emails since October 2026 put one link around the whole card, so its text is
+    "Title Company · City (Hybrid) Actively recruiting" (or "... Company City See who ... has hired").
+    The card's lines are still title, company, place. "Jobs similar to · Title · at · Company": no place."""
+    if len(lines) >= 4 and lines[0] == "Jobs similar to" and lines[2] == "at":
+        return lines[1], lines[3], ""
+    if len(lines) >= 3 and lines[0] != title and title.startswith(lines[0]) \
+            and title[len(lines[0]):].strip().startswith(lines[1]):
+        return lines[0], lines[1], lines[2]
+    return None
+
+
 def _job_from_card(url: str, anchors: list, card) -> Job | None:
     texts = [clean(a.get_text(" "), 200) for a in anchors]
     texts = [t for t in texts if len(t) >= 3 and not NOISE.match(t)]
@@ -127,7 +139,9 @@ def _job_from_card(url: str, anchors: list, card) -> Job | None:
             continue
         rest.append(line)
     info = [l for l in rest if len(l) <= 80 and "€" not in l and not re.search(r"\d+\s*(k|tsd)?\s*(€|eur)", l, re.I)]
-    if info and " · " in info[0]:  # LinkedIn: "Company · City, Hessen, Deutschland"
+    if card_lines := linkedin_card(title, rest):
+        title, company, location = card_lines
+    elif info and " · " in info[0]:  # LinkedIn: "Company · City, Hessen, Deutschland"
         company, _, location = info[0].partition(" · ")
     else:
         company = info[0] if info else ""

@@ -158,6 +158,9 @@ MIGRATIONS = {
         # Application tracking (applications.py)
         "applied_at": "TEXT",           # when you marked it Applied
         "app_status": "TEXT",           # from the emails: confirmation / test / interview / rejection (empty = no reply yet)
+        # Your area (must_apply.area_of): near / remote / outside / unknown; empty = not looked at yet
+        "area": "TEXT",
+        "area_km": "REAL",              # km from the area's center (empty: remote or unknown)
     },
 }
 
@@ -384,7 +387,7 @@ STATUSES = ("", "saved", "applied", "hidden")
 LIST_COLUMNS = """id, link_id, source, url, title, company, location, employment, hours,
                   posted_at, first_seen, seen, status, filter_passed, filter_reason,
                   ai_score, ai_reason, ai_full_time, ai_attempts, ai_blocker,
-                  must_apply, must_reasons, must_at, must_why_not, applied_at, app_status"""
+                  must_apply, must_reasons, must_at, must_why_not, applied_at, app_status, area, area_km"""
 
 
 def list_jobs(view: str = "all", min_score: int | None = None, limit: int = 500) -> list[dict]:
@@ -459,9 +462,54 @@ def jobs_to_score(limit: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def save_description(job_id: int, description: str) -> None:
+def save_details(job: dict) -> None:
+    """The full ad (details.complete): description, place, job type, hours. A new place is looked at again."""
     with connect() as conn:
-        conn.execute("UPDATE jobs SET description = ?, details_fetched = 1 WHERE id = ?", (description, job_id))
+        conn.execute("""UPDATE jobs SET description = ?, location = ?, employment = ?, hours = ?, details_fetched = 1,
+                            area = CASE WHEN COALESCE(location, '') = ? THEN area END WHERE id = ?""",
+                     (job["description"], job["location"], job["employment"], job["hours"], job["location"] or "",
+                      job["id"]))
+
+
+def jobs_missing_details() -> list[dict]:
+    """Jobs in your list (not applied / hidden) without a place, or without hours and never read in full."""
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            f"""SELECT id, url, title, location, employment, hours, description FROM jobs
+                WHERE {shown_sql(None)} AND status NOT IN ('applied', 'hidden')
+                AND (COALESCE(location, '') = '' OR (hours IS NULL AND details_fetched = 0))""")]
+
+
+def linkedin_misread() -> list[dict]:
+    """LinkedIn alert jobs read with the whole card as their title (see alerts.linkedin_card)."""
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT id, title, description FROM jobs WHERE url LIKE '%linkedin.com/jobs/view/%'")]
+
+
+def fix_job(job_id: int, title: str, company: str, location: str, dedup: str) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE jobs SET title = ?, company = ?, location = ?, dedup_key = ?, area = NULL WHERE id = ?",
+                     (title, company, location, dedup, job_id))
+
+
+# ---- your area -----------------------------------------------------------------
+
+def jobs_without_area() -> list[dict]:
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            f"""SELECT id, title, location FROM jobs WHERE {shown_sql(None)}
+                AND (area IS NULL OR area = 'unknown')""")]
+
+
+def save_area(job_id: int, area: str, km: float | None) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE jobs SET area = ?, area_km = ? WHERE id = ?", (area, km, job_id))
+
+
+def reset_areas() -> None:
+    with connect() as conn:
+        conn.execute("UPDATE jobs SET area = NULL, area_km = NULL")
 
 
 def count_ai_attempt(job_ids: list[int]) -> None:
@@ -482,15 +530,32 @@ def save_scores(results: list[dict], model: str) -> None:
 
 # ---- 🔥 Must apply -----------------------------------------------------------------
 
+MUST_COLUMNS = """id, link_id, source, url, dedup_key, title, company, location, employment, hours, description,
+                  posted_at, first_seen, ai_score, ai_blocker, ai_full_time"""
+
+
 def must_candidates(min_score: int, days: int) -> list[dict]:
     """Recent good jobs that aren't in the Must apply box yet (and not applied / hidden)."""
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
     with connect() as conn:
         return [dict(r) for r in conn.execute(
-            f"""SELECT id, link_id, source, url, dedup_key, title, company, location, employment, hours, description,
-                       posted_at, first_seen, ai_score, ai_blocker
+            f"""SELECT {MUST_COLUMNS}
                 FROM jobs WHERE {shown_sql(None)} AND must_apply = 0 AND status NOT IN ('applied', 'hidden')
                 AND ai_score >= ? AND COALESCE(posted_at, first_seen) >= ?""", (min_score, since[:10]))]
+
+
+def must_box() -> list[dict]:
+    """The jobs in the Must apply box now (not applied / hidden)."""
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            f"SELECT {MUST_COLUMNS} FROM jobs WHERE must_apply = 1 AND status NOT IN ('applied', 'hidden')")]
+
+
+def drop_must(job_id: int, why_not: str) -> None:
+    """Out of the box: it doesn't meet a (new) rule any more."""
+    with connect() as conn:
+        conn.execute("UPDATE jobs SET must_apply = 0, must_reasons = NULL, must_at = NULL, must_why_not = ? "
+                     "WHERE id = ?", (why_not, job_id))
 
 
 def save_must(job_id: int, ok: bool, met: list[str], why_not: str) -> None:
@@ -527,7 +592,7 @@ def must_to_send(max_age_hours: int) -> list[dict]:
     with connect() as conn:
         return [dict(r) for r in conn.execute(
             """SELECT id, url, title, company, location, hours, posted_at, first_seen, source, ai_score, ai_reason,
-                      must_reasons FROM jobs WHERE must_apply = 1 AND must_sent_at IS NULL AND must_at >= ?
+                      must_reasons, area FROM jobs WHERE must_apply = 1 AND must_sent_at IS NULL AND must_at >= ?
                AND status NOT IN ('applied', 'hidden') ORDER BY ai_score DESC""", (since,))]
 
 
@@ -536,7 +601,7 @@ def must_to_remind(after_hours: int) -> list[dict]:
     with connect() as conn:
         return [dict(r) for r in conn.execute(
             """SELECT id, url, title, company, location, hours, posted_at, first_seen, source, ai_score, ai_reason,
-                      must_reasons FROM jobs WHERE must_apply = 1 AND must_sent_at <= ? AND must_reminded = 0
+                      must_reasons, area FROM jobs WHERE must_apply = 1 AND must_sent_at <= ? AND must_reminded = 0
                AND status NOT IN ('applied', 'hidden')""", (before,))]
 
 
@@ -605,14 +670,15 @@ def link_kinds() -> dict[int, dict]:
 
 def jobs_to_notify(min_score: int | None, ai_on: bool, limit: int) -> list[dict]:
     """Good new jobs not sent yet. Not sent: jobs from the very first check of a link
-    (that would be a flood), and - while Gemini is on - jobs still waiting for a score."""
+    (that would be a flood), jobs outside your area, and - while Gemini is on - jobs still waiting for a score."""
     waiting_for_ai = "AND (ai_score IS NOT NULL OR ai_attempts >= 3)" if ai_on else ""
     with connect() as conn:
         rows = conn.execute(
             f"""SELECT id, url, title, company, location, hours, posted_at, first_seen, source,
-                       ai_score, ai_reason
+                       ai_score, ai_reason, area
                 FROM jobs
                 WHERE {shown_sql(min_score)} AND notified = 0 AND baseline = 0 {waiting_for_ai}
+                AND COALESCE(area, '') != 'outside'
                 ORDER BY COALESCE(ai_score, 0) DESC, first_seen DESC LIMIT ?""",
             (limit,),
         ).fetchall()

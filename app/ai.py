@@ -59,7 +59,8 @@ SCORE (whole number 1-10)
         sells software, cloud or AI products.
       - Really full-time (more than 20 h/week during the semester) - see below.
       - Needs a finished degree or several years of work experience.
-      - Far from Darmstadt / Frankfurt and not remote.
+      - Far from Darmstadt (more than 40 km) and not remote. Read the place from "location" and
+        the description ("am Standort Koblenz"). Location "unknown" does NOT mean Darmstadt.
 
 FULL-TIME CHECK
 Job boards sometimes label student jobs "Vollzeit". Read the description and decide:
@@ -77,7 +78,8 @@ blocker = a few English words if ONE of these is true, else "":
 Wanting "first experience", "Kenntnisse" or a running Bachelor's / Master's degree is NOT a blocker.
 
 For EVERY job return: id, score, reason (ONE short English sentence, max 25 words, giving the
-main reason for the score), hours_per_week (e.g. "15-20" or "20"; "" if the ad doesn't say),
+main reason for the score), hours_per_week (e.g. "15-20" or "20", only as the ad states them; "" if the ad
+doesn't say - never assume 20 because it is a Werkstudent job),
 full_time (true/false), blocker ("" or the blocker).
 
 JOBS (JSON)
@@ -263,7 +265,7 @@ _last_call = 0.0
 
 def _score_prompt(jobs: list[dict]) -> str:
     payload = [{
-        "id": j["id"], "title": j["title"], "company": j["company"], "location": j["location"],
+        "id": j["id"], "title": j["title"], "company": j["company"], "location": j["location"] or "unknown",
         "employment_label": j["employment"], "hours_found": j["hours"],
         "description": (j["description"] or "")[:3500],
     } for j in jobs]
@@ -398,18 +400,11 @@ def _ask_gemini_api(prompt: str, schema: dict, temperature: float) -> list | dic
 
 
 def _complete_descriptions(jobs: list[dict]) -> None:
-    """Fetch the full ad for jobs that only have a title or a short teaser."""
+    """The full ad for jobs with only a title or a short teaser, no place or no hours, so the AI
+    (and Must apply) see the real city, hours and job type."""
     for j in jobs:
-        if j["details_fetched"] or len(j["description"] or "") >= 400:
-            continue
-        try:
-            full = details.fetch_description(j["url"])
-        except Exception as e:
-            log.info("Could not read the full ad of '%s' (%s)", j["title"][:60], type(e).__name__)
-            full = ""
-        if len(full) > len(j["description"] or ""):
-            j["description"] = full
-        db.save_description(j["id"], j["description"] or "")
+        if details.needs_details(j):
+            details.complete(j)
 
 
 def score_pending_jobs() -> int:

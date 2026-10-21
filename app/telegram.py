@@ -12,7 +12,7 @@ from datetime import date, datetime
 
 import httpx
 
-from . import ai, db
+from . import ai, db, must_apply
 from .config import CONFIG
 
 log = logging.getLogger("jobradar")
@@ -101,7 +101,7 @@ def job_message(job: dict) -> str:
         lines.append(f"<b>{job['ai_score']}/10</b> · <a href=\"{e(job['url'])}\"><b>{e(job['title'])}</b></a>")
     else:
         lines.append(f"<a href=\"{e(job['url'])}\"><b>{e(job['title'])}</b></a>")
-    where = " · ".join(filter(None, [job.get("company"), job.get("location")]))
+    where = " · ".join(filter(None, [job.get("company"), job.get("location") or "Location unknown"]))
     if where:
         lines.append(f"🏢 {e(where)}")
     if job.get("hours"):
@@ -132,6 +132,7 @@ def notify_pending() -> int:
         return 0
     sent = 0
     try:
+        must_apply.update_areas()  # jobs outside your area are never sent
         for job in db.jobs_to_notify(min_score(), ai.enabled(), CONFIG["telegram"]["max_messages_per_run"]):
             try:
                 send(job_message(job))

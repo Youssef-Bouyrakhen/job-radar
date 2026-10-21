@@ -76,7 +76,7 @@ applications:
 #      min_it_words_in_description different IT keywords in the description).
 filter:
   enabled: true
-  max_hours_per_week: 25
+  max_hours_per_week: 20
   min_it_words_in_description: 2
 
   student_keywords:
@@ -275,13 +275,17 @@ telegram:
   # At most this many messages per round; the rest follow in the next round (5 min later).
   max_messages_per_run: 15
 
+# Your area: a job farther than max_km from `center` (and not remote / Homeoffice / Bundesweit) shows
+# "Outside your area (<city>)", is never Must apply and never sent to Telegram. No known place: "Location unknown".
+area:
+  center: Darmstadt     # one of companies.places
+  max_km: 40
+
 # 🔥 Must apply: a job goes in only if ALL are true (it leaves only when you mark it Applied or hide it)
 must_apply:
   min_score: 8          # AI score at least this
   max_days: 3           # posted in the last N days (no posting date: first seen); red after that if not applied
-  max_km: 30            # distance from `center` (remote / Homeoffice / Bundesweit always count)
-  center: Darmstadt     # one of companies.places
-  max_hours: 20         # Werkstudent, at most this many hours a week (if the ad says)
+  max_hours: 20         # Werkstudent, at most this many hours a week (the ad must say; unknown = not Must apply)
   reminder_hours: 24    # one Telegram reminder after this long if not applied / hidden
   # Low-competition sign (one is enough): the company's own careers page, a small / mid-size company,
   # Werkstudent jobs from it before, or one of these categories

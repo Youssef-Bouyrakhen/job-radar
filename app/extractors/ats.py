@@ -162,6 +162,14 @@ def _recruitee(b: Board, search: str) -> list[Job]:
     return jobs
 
 
+def workday_place(p: dict) -> str:
+    """Some Workday sites leave locationsText empty (Debeka): the city is then the first bullet
+    without digits (the other one is the job number, "JR13304"), or in the address: /job/Koblenz/..."""
+    bullet = next((f for f in p.get("bulletFields") or [] if isinstance(f, str) and not re.search(r"\d", f)), "")
+    path = re.match(r"/job/([^/]+)/", p.get("externalPath") or "")
+    return clean(bullet) or (path[1].replace("-", " ") if path else "")
+
+
 def _workday(b: Board, search: str) -> list[Job]:
     host = f"{b.key}.{b.extra['wd']}.myworkdayjobs.com"
     api = f"https://{host}/wday/cxs/{b.key}/{b.extra['site']}/jobs"
@@ -174,7 +182,7 @@ def _workday(b: Board, search: str) -> list[Job]:
             if p.get("title"):
                 jobs.append(Job(
                     title=clean(p["title"]), url=prefix + p.get("externalPath", ""),
-                    company=b.key.capitalize(), location=p.get("locationsText") or "",
+                    company=b.key.capitalize(), location=p.get("locationsText") or workday_place(p),
                     posted=relative_date(p.get("postedOn")),  # e.g. "Posted 3 Days Ago"
                 ))
         if len(postings) < 20:

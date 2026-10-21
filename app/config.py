@@ -86,11 +86,15 @@ DEFAULTS = {
         "max_contacts_per_run": 60,
         "offeneregister": True,
     },
+    # Your area: jobs farther than max_km from center (and not remote / Bundesweit) are shown as
+    # "Outside your area", never Must apply and never sent to Telegram
+    "area": {
+        "center": "Darmstadt",
+        "max_km": 40,
+    },
     "must_apply": {
         "min_score": 8,
         "max_days": 3,
-        "max_km": 30,
-        "center": "Darmstadt",
         "max_hours": 20,
         "reminder_hours": 24,
         "low_competition_categories": ["insurance", "finance", "cloud", "security"],

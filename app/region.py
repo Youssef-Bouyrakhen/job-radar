@@ -289,12 +289,17 @@ NOT_TARGET_JOB = re.compile(
 SMALL_AD_COUNT = 9  # a company with this many ads or fewer, all for such jobs, is skipped
 
 
+def is_staffing(c: dict) -> bool:
+    from .companies import STAFFING
+    return c["size_hint"] == "staffing agency" or bool(STAFFING.search(c["name"]))
+
+
 def skip_reason(c: dict) -> str | None:
     """Why this company is skipped without checking its website, or None."""
-    from .companies import IT_SOURCES, REGIONAL, STAFFING
+    from .companies import IT_SOURCES, REGIONAL
     from .filters import get_filter
     name, sources = c["name"], json.loads(c["sources"] or "{}")
-    if c["size_hint"] == "staffing agency" or STAFFING.search(name):
+    if is_staffing(c):
         return "a staffing agency"
     if (m := NOT_TARGET.search(name)) and not REGIONAL.search(name):
         return f"a shop, restaurant, care or craft business (\"{m[0]}\" in its name)"
@@ -437,11 +442,27 @@ def _contact(c: dict) -> dict:
             "status": "initiativ", "initiativ_at": db.now(), "status_note": note}
 
 
+def skip_staffing() -> int:
+    """Staffing agencies stay Skipped, also with a careers page: their jobs are for clients. Also undoes
+    v9.9, which made some of them Watched. Never a status you chose or an auto-added watched link."""
+    skipped = 0
+    for c in db.company_rows():
+        if c["status_by"] == "you" or c["link_id"] or not c["career_url"] or not is_staffing(c):
+            continue
+        if c["status"] == "new" or c["status"] == "watched" and (c["status_note"] or "").startswith("Careers page read"):
+            db.update_company(c["id"], {"status": "skipped", "status_note": SKIP_NOTE + "a staffing agency"})
+            skipped += 1
+    if skipped:
+        log.info("Region: %d staffing agencies with a careers page skipped", skipped)
+    return skipped
+
+
 def settle(progress: dict) -> dict:
     """Give every checked company with a careers page, and every checked town company, its final status.
     Returns {status: how many changed}."""
     from .company_jobs import size_of
     changed = {s: 0 for s in FINAL}
+    changed["skipped"] += skip_staffing()
     contacts = []
     for c in db.company_rows():
         # Watched links, Initiativ and Skipped are final already; a status you chose is never changed

@@ -1,15 +1,17 @@
 """🔥 Must apply: the few jobs worth applying to today. A job goes in only if ALL are true:
 
-1. Werkstudent / working student / studentische Hilfskraft, max 20 h/week if the ad states hours
+1. Werkstudent / working student / studentische Hilfskraft, the ad states the hours and they are max 20 h/week
 2. AI score 8 or higher
 3. posted in the last 3 days (no posting date: first seen)
-4. within 30 km of Darmstadt, or remote / Homeoffice / Bundesweit
+4. in your area: within 40 km of Darmstadt (area: in config.yaml), or remote / Homeoffice / Bundesweit.
+   A job without a known place is never in the area (never "0 km").
 5. no blockers: the AI checks "2+ years experience", staffing agency, Master-only in the scoring request
 6. at least one low-competition sign: from the company's own careers page / applicant system, a small or
    mid-size company, the company posted Werkstudent jobs before, or its category is Insurance,
    Banks/Finance, Cloud/Data centers/Networks or Cybersecurity
 
-The numbers are in config.yaml (must_apply:). Once in, a job stays until you mark it Applied or hide it.
+The numbers are in config.yaml (must_apply: and area:).
+Jobs outside your area are never sent to Telegram either (update_areas, before every Telegram round). Once in, a job stays until you mark it Applied or hide it.
 Telegram: a "🔥 MUST APPLY" message right away, and one reminder after 24 h if you haven't applied or hidden it.
 """
 import json
@@ -18,11 +20,12 @@ import math
 import re
 import threading
 import time
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
 
-from . import db
+from . import db, details
 from .config import CONFIG
 from .fetcher import BOT_HEADERS
 from .filters import detect_hours
@@ -44,6 +47,10 @@ CATEGORY_LABELS = {"insurance": "insurance", "finance": "bank / finance", "cloud
 
 def cfg() -> dict:
     return CONFIG["must_apply"]
+
+
+def area() -> dict:
+    return CONFIG["area"]
 
 
 # ---- distance --------------------------------------------------------------------------
@@ -94,9 +101,52 @@ def _look_up(name: str) -> tuple[float, float] | None:
 
 
 def km_from_center(location: str) -> float | None:
-    center = CONFIG["companies"]["places"].get(cfg()["center"])
+    center = CONFIG["companies"]["places"].get(area()["center"])
     found = place_of(location) if location else None
     return round(_km(found, tuple(center)), 1) if found and center else None
+
+
+# ---- your area -------------------------------------------------------------------------
+
+NOT_A_PLACE = re.compile(r"^(?:de|deu|deutschland|germany|d)$", re.I)
+
+
+def _places(location: str) -> list[str]:
+    parts = [re.sub(r"\s*\(.*?\)", "", p).strip(" -") for p in re.split(r"[,;/|]| oder | or | und | and ", location)]
+    return [p for p in dict.fromkeys(parts) if len(p) >= 2 and not NOT_A_PLACE.match(p)][:8] or [location]
+
+
+def area_of(job: dict) -> tuple[str, float | None]:
+    """("remote" / "near" / "outside" / "unknown", km). No place = "unknown", never the company's office:
+    Debeka has an office in Darmstadt, its Werkstudent job was in Koblenz."""
+    place = job.get("location") or ""
+    if REMOTE.search(f"{place} | {job['title']}"):
+        return "remote", None
+    # "Dortmund, Berlin, Darmstadt, Dresden": the nearest of the places counts
+    found = [km for part in _places(place) if (km := km_from_center(part)) is not None]
+    km = min(found) if found else None
+    if km is None and " · " in job["title"]:  # some alert emails put "Company · City (Remote)" into the title
+        km = km_from_center(job["title"].rsplit(" · ", 1)[1])
+    if km is None:
+        return "unknown", None
+    return ("near" if km <= area()["max_km"] else "outside"), km
+
+
+def area_note(job: dict, km: float | None) -> str:
+    """Why a job isn't in your area, for Must apply."""
+    if km is None:
+        return "Location unknown"
+    city = re.split(r"[,;/(]| oder | or ", job.get("location") or "")[0].strip() or job["title"].rsplit(" · ", 1)[-1]
+    return f"Outside your area ({city}, {round(km)} km from {area()['center']})"
+
+
+def update_areas() -> int:
+    """Remote / near / outside / unknown for shown jobs that don't have it yet. "Unknown" ones are
+    tried again (places are remembered, so that costs nothing unless the place lookup failed)."""
+    jobs = db.jobs_without_area()
+    for j in jobs:
+        db.save_area(j["id"], *area_of(j))
+    return len(jobs)
 
 
 # ---- the six conditions ------------------------------------------------------------------
@@ -105,7 +155,7 @@ def _max_hours(job: dict) -> float | None:
     nums = re.findall(r"\d+(?:[.,]\d+)?", job.get("hours") or "")
     if nums:
         return max(float(n.replace(",", ".")) for n in nums)
-    found = detect_hours(job.get("description") or "")
+    found = detect_hours(f"{job.get('employment') or ''} | {job.get('description') or ''}")
     return found.high if found else None
 
 
@@ -132,9 +182,13 @@ def check(job: dict, company: dict | None, history: int, site: str) -> tuple[boo
     if not STUDENT.search(f"{job['title']} | {job.get('employment') or ''}"):
         return False, met, "not a Werkstudent job"
     hours = _max_hours(job)
-    if hours and hours > c["max_hours"]:
+    if hours is None:
+        return False, met, "hours unknown (the ad doesn't say)"
+    if hours > c["max_hours"]:
         return False, met, f"more than {c['max_hours']} h/week"
-    met.append("Werkstudent" + (f", max {hours:g} h/week" if hours else ""))
+    if job.get("ai_full_time"):  # "Vollzeit" without student hours (the AI read the whole ad)
+        return False, met, "full-time"
+    met.append(f"Werkstudent, max {hours:g} h/week")
     if (job.get("ai_score") or 0) < c["min_score"]:
         return False, met, f"AI score below {c['min_score']}"
     met.append(f"AI score {job['ai_score']}/10")
@@ -143,21 +197,10 @@ def check(job: dict, company: dict | None, history: int, site: str) -> tuple[boo
         return False, met, f"older than {c['max_days']} days"
     met.append("posted " + ("today" if age < 1 else f"{int(age)} day{'s' if int(age) > 1 else ''} ago")
                if job["posted_at"] else f"first seen {'today' if age < 1 else f'{int(age)} d ago'} (no posting date)")
-    place = job.get("location") or ""
-    if REMOTE.search(f"{place} | {job['title']}"):
-        met.append("remote / nationwide")
-    else:
-        km = km_from_center(place) if place else None
-        if km is None and " · " in job["title"]:  # some alert emails put "Company · City (Remote)" into the title
-            km = km_from_center(job["title"].rsplit(" · ", 1)[1])
-        if km is None and company and company.get("lat") is not None and not place:
-            center = CONFIG["companies"]["places"].get(c["center"])
-            km = round(_km((company["lat"], company["lon"]), tuple(center)), 1) if center else None
-        if km is None:
-            return False, met, "place unknown"
-        if km > c["max_km"]:
-            return False, met, f"{round(km)} km from {c['center']}"
-        met.append(f"{round(km)} km from {c['center']}")
+    where, km = area_of(job)
+    if where in ("unknown", "outside"):
+        return False, met, area_note(job, km)
+    met.append("remote / nationwide" if where == "remote" else f"{round(km)} km from {area()['center']}")
     if job.get("ai_blocker") is None:
         return False, met, "blockers not checked yet"
     if job["ai_blocker"]:
@@ -184,13 +227,23 @@ def check(job: dict, company: dict | None, history: int, site: str) -> tuple[boo
 def update() -> int:
     """Check the candidates (new, recent, high score) and put the ones that meet everything in the box.
     Returns how many came in."""
+    c = cfg()
+    added = 0
+    for job, ok, met, why_not in _judge(db.must_candidates(c["min_score"], c["max_days"] + 1)):
+        db.save_must(job["id"], ok, met, why_not)
+        added += ok
+    if added:
+        log.info("Must apply: %d new job(s)", added)
+    return added
+
+
+def _judge(jobs: list[dict]) -> list[tuple[dict, bool, list[str], str]]:
+    """(job, all met, the conditions it met, the first one it failed) for each job."""
     from .companies import clean_name
     from .discover import company_key
     from .source_types import site
-    c = cfg()
-    candidates = db.must_candidates(c["min_score"], c["max_days"] + 1)
-    if not candidates:
-        return 0
+    if not jobs:
+        return []
     by_key = {r["name_key"]: r for r in db.company_rows()}
     # Werkstudent jobs per company: (simplified title, first seen). The same ad from 3 sources counts once.
     student_jobs: dict[str, list[tuple[str, str]]] = {}
@@ -198,20 +251,16 @@ def update() -> int:
         if STUDENT.search(dedup):
             student_jobs.setdefault(company_key(clean_name(company)), []).append((dedup.split("|")[0], seen))
     links = db.link_kinds()
-    added = 0
-    for job in candidates:
+    judged = []
+    for job in jobs:
         company = _company(job, by_key)
         key = company_key(clean_name(job.get("company") or ""))
         # "Before": a different Werkstudent ad, found at least a week before this one
         before = (datetime.fromisoformat(job["first_seen"]) - timedelta(days=7)).isoformat()
         own = job["dedup_key"].split("|")[0]
         history = len({t for t, seen in student_jobs.get(key, []) if t != own and seen < before})
-        ok, met, why_not = check(job, company, history, site(links.get(job["link_id"]), job["source"], job["url"]))
-        db.save_must(job["id"], ok, met, why_not)
-        added += ok
-    if added:
-        log.info("Must apply: %d new job(s)", added)
-    return added
+        judged.append((job, *check(job, company, history, site(links.get(job["link_id"]), job["source"], job["url"]))))
+    return judged
 
 
 RULE = "1"  # bump when the conditions change: recent good jobs are checked again
@@ -224,3 +273,44 @@ def prepare() -> None:
     n = db.rescore_recent(cfg()["min_score"], cfg()["max_days"] + 1)
     db.set_setting("must_rule", RULE)
     log.info("Must apply: %d recent good job(s) will be scored again (blocker check)", n)
+
+
+AREA_RULE = "1"  # bump when the area / hours rules change: current jobs and the Must apply box are checked again
+
+
+def recheck_jobs() -> Counter | None:
+    """Once per rule change: the full ad for shown jobs without a place (or hours), every job's area again,
+    and the Must apply box with the new rules. A job that fails a rule leaves the box; one that is only
+    older than max_days stays (the box keeps a job until you apply or hide it).
+    Returns {why jobs left the box: how many}."""
+    if db.get_setting("area_rule") == AREA_RULE:
+        return None
+    from .checker import refilter_all_jobs  # it imports modules that import this one
+    from .dedup import dedup_key
+    from .extractors.alerts import linkedin_card
+    fixed = 0
+    for j in db.linkedin_misread():  # the card's lines are in the description: "Title · Company · Place · ..."
+        if card := linkedin_card(j["title"], (j["description"] or "").split(" · ")):
+            db.fix_job(j["id"], *card, dedup_key(card[0], card[1]))
+            fixed += 1
+    if fixed:
+        log.info("Job-alert emails: %d LinkedIn jobs had the company as their place: title, company and place fixed", fixed)
+        refilter_all_jobs()  # the keyword filter on the real titles
+    todo = db.jobs_missing_details()
+    for j in todo:
+        details.complete(j)
+    db.reset_areas()
+    update_areas()
+    left, box = Counter(), db.must_box()
+    for job, ok, met, why_not in _judge(box):
+        if ok or why_not.startswith("older than"):
+            continue
+        db.drop_must(job["id"], why_not)
+        left["outside your area" if why_not.startswith("Outside") else why_not] += 1
+        log.info("Must apply: '%s' (%s) left the box: %s", job["title"][:70], job["company"], why_not)
+    db.set_setting("area_rule", AREA_RULE)
+    log.info("Must apply: new area / hours rules: %d job(s) without a place or hours read again, %d of %d Must apply "
+             "job(s) left the box%s", len(todo), sum(left.values()), len(box),
+             "".join(f"; {n}x {why}" for why, n in left.items()))
+    update()  # recent good jobs with the new rules (one may come in now)
+    return left
