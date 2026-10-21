@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from urllib.parse import unquote
 
 from bs4 import BeautifulSoup
 
@@ -16,7 +17,7 @@ from . import arbeitsagentur, db
 from .extractors import clean, html_to_text
 from .extractors.generic import _walk
 from .fetcher import fetch_html, robots_allows
-from .filters import detect_hours
+from .filters import hours_of
 
 log = logging.getLogger("jobradar")
 
@@ -25,6 +26,8 @@ MAX_CHARS = 8000
 EMPLOYMENT = {"FULL_TIME": "Vollzeit", "PART_TIME": "Teilzeit", "INTERN": "Praktikum", "TEMPORARY": "befristet",
               "CONTRACTOR": "freie Mitarbeit", "PER_DIEM": "Aushilfe"}
 WORKDAY_PLACE = re.compile(r"myworkdayjobs\.com/.*?/job/([^/]+)/")
+# SuccessFactors career sites (Fraunhofer, ...): /job/Stuttgart-Student-Assistant-...-70569/1449749733/
+CITY_TITLE_PLZ = re.compile(r"/job/([^/]+)-(\d{5})/\d+/?$")
 
 
 @dataclass
@@ -34,10 +37,10 @@ class Details:
     employment: str = ""    # e.g. "Vollzeit", "Teilzeit"
 
 
-def fetch_details(url: str) -> Details:
+def fetch_details(url: str, title: str = "") -> Details:
     if url.startswith(arbeitsagentur.DETAIL_URL):
         return Details(arbeitsagentur.fetch_description(url))  # its jobs always come with a place
-    found = Details(location=_place_in_url(url))
+    found = Details(location=_place_in_url(url, title))
     if not robots_allows(url):
         return found
     page = fetch_html(url)
@@ -56,7 +59,7 @@ def complete(job: dict) -> None:
     """Reads the job's own page and fills in what the job list didn't say: the full description,
     the city, the job type (Vollzeit / Teilzeit ...) and the hours. Changes `job` and saves it."""
     try:
-        found = fetch_details(job["url"])
+        found = fetch_details(job["url"], job["title"])
     except Exception as e:
         log.info("Could not read the full ad of '%s' (%s)", job["title"][:60], type(e).__name__)
         found = Details()
@@ -64,14 +67,21 @@ def complete(job: dict) -> None:
         job["description"] = found.description
     job["location"] = job["location"] or found.location
     job["employment"] = job["employment"] or found.employment
-    if not job["hours"] and (hours := detect_hours(f"{job['employment'] or ''} | {job['description'] or ''}")):
+    employer = f"{job.get('company') or ''} | {job.get('source') or ''} | {job['url']}"
+    if not job["hours"] and (hours := hours_of(job["title"], job["employment"] or "", job["description"] or "", employer)):
         job["hours"] = hours.text
     db.save_details(job)
 
 
-def _place_in_url(url: str) -> str:
-    m = WORKDAY_PLACE.search(url)
-    return m[1].replace("-", " ") if m and not re.search(r"\d", m[1]) else ""
+def _place_in_url(url: str, title: str = "") -> str:
+    if (m := WORKDAY_PLACE.search(url)) and not re.search(r"\d", m[1]):
+        return m[1].replace("-", " ")
+    if m := CITY_TITLE_PLZ.search(unquote(url)):
+        # The city is the part before the title: "Sankt-Augustin-Student-Assistant-..." -> "Sankt Augustin"
+        first = (re.findall(r"\w+", title) or [""])[0]
+        cut = m[1].find(f"-{first}-") if first else -1
+        return f"{(m[1][:cut] if cut > 0 else m[1].split('-')[0]).replace('-', ' ')} ({m[2]})"
+    return ""
 
 
 def _place(posting: dict) -> str:

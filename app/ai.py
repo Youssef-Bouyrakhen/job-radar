@@ -61,11 +61,16 @@ SCORE (whole number 1-10)
       - Needs a finished degree or several years of work experience.
       - Far from Darmstadt (more than 40 km) and not remote. Read the place from "location" and
         the description ("am Standort Koblenz"). Location "unknown" does NOT mean Darmstadt.
+NEVER more than 5 for a job more than 40 km from Darmstadt (not remote) or a full-time job.
 
 FULL-TIME CHECK
 Job boards sometimes label student jobs "Vollzeit". Read the description and decide:
 - Student works about 10-20 h/week during the semester (more only in semester breaks)
   -> NOT full-time (full_time = false).
+- Hours PER MONTH ("40 Stunden im Monat", "monthly working time 40 hours", common for student
+  assistants / HiWi at universities and research institutes) are about a quarter of that per week
+  (40 a month = about 9 a week) -> NOT full-time.
+- "Vollzeit" alone, with no student or part-time hours -> full_time = true.
 - Asks for 30-40 h/week, a regular "Vollzeit" position without student hours, or a normal
   permanent employee -> full_time = true and score at most 3.
 
@@ -78,8 +83,8 @@ blocker = a few English words if ONE of these is true, else "":
 Wanting "first experience", "Kenntnisse" or a running Bachelor's / Master's degree is NOT a blocker.
 
 For EVERY job return: id, score, reason (ONE short English sentence, max 25 words, giving the
-main reason for the score), hours_per_week (e.g. "15-20" or "20", only as the ad states them; "" if the ad
-doesn't say - never assume 20 because it is a Werkstudent job),
+main reason for the score), hours_per_week (e.g. "15-20" or "20", only as the ad states them; hours per month
+divided by 4.33; "" if the ad doesn't say - never assume 20 because it is a Werkstudent job),
 full_time (true/false), blocker ("" or the blocker).
 
 JOBS (JSON)

@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from . import (VERSION, ai, applications, categories, companies, company_jobs, db, must_apply, discover, gmail, region,
                scheduler, telegram, weekly)
-from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all,
+from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all, recheck_hours,
                       ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
 from .config import CONFIG, ROOT
 
@@ -29,6 +29,7 @@ for noisy in ("httpx", "apscheduler"):
 async def lifespan(app: FastAPI):
     db.init_db()
     ensure_builtin_sources()
+    recheck_hours()  # once per hours rule: hours read again (per month -> per week), the changes logged
     refilter_all_jobs()
     hide_old_duplicates()
     must_apply.prepare()  # once: recent good jobs are scored again with the blocker check

@@ -28,12 +28,13 @@ import httpx
 from . import db, details
 from .config import CONFIG
 from .fetcher import BOT_HEADERS
-from .filters import detect_hours
+from .filters import hours_of, max_per_week
 
 log = logging.getLogger("jobradar")
 
 STUDENT = re.compile(r"werk\s?-?student|working[- ]student|studentische[rn]?\s+(?:hilfskraft|aushilfe|mitarbeit|"
                      r"besch[äa]ftigung)|student(?:ische)?\s+assistant|studentjob|\bhiwi\b", re.I)
+FULL_TIME = re.compile(r"vollzeit|full[- ]?time", re.I)
 REMOTE = re.compile(r"remote|home\s?-?office|mobiles? arbeiten|bundesweit|deutschlandweit|germany[- ]wide|"
                     r"nationwide|[üu]berregional|ortsunabh[äa]ngig|anywhere", re.I)
 STAFFING_FIRM = re.compile(r"personal(?:dienst|service|vermittlung|leasing|beratung)|zeitarbeit|staffing|"
@@ -69,6 +70,9 @@ def _km(a: tuple[float, float], b: tuple[float, float]) -> float:
 def place_of(location: str) -> tuple[float, float] | None:
     """Coordinates of a job's place ("Frankfurt am Main, Hessen"), from OpenStreetMap (Nominatim).
     Each place is looked up once and remembered; at most 1 request per second (their rule)."""
+    # A postcode is the surest: "Sankt Augustin (53757)", "64283 Darmstadt"
+    if (plz := re.search(r"\b(\d{5})\b", location)) and (found := _look_up(plz[1])):
+        return found
     name = re.sub(r"\s+", " ", re.split(r"[;|/(]| oder | or ", location)[0]).strip(" ,-")
     name = re.sub(r"^\d{5}\s+", "", name)[:80]
     # "Darmstadt bei Frankfurt am Main", "Eschborn, Hessen, Deutschland": also try the first part alone
@@ -152,10 +156,11 @@ def update_areas() -> int:
 # ---- the six conditions ------------------------------------------------------------------
 
 def _max_hours(job: dict) -> float | None:
-    nums = re.findall(r"\d+(?:[.,]\d+)?", job.get("hours") or "")
-    if nums:
-        return max(float(n.replace(",", ".")) for n in nums)
-    found = detect_hours(f"{job.get('employment') or ''} | {job.get('description') or ''}")
+    """Most hours a week ("40 h/month ≈ 9 h/week" -> 9)."""
+    if (saved := max_per_week(job.get("hours"))) is not None:
+        return saved
+    found = hours_of(job["title"], job.get("employment") or "", job.get("description") or "",
+                     f"{job.get('company') or ''} | {job.get('source') or ''} | {job.get('url') or ''}")
     return found.high if found else None
 
 
@@ -179,8 +184,9 @@ def check(job: dict, company: dict | None, history: int, site: str) -> tuple[boo
     """(all met, the conditions it met as short texts, the first one it failed)."""
     from .company_jobs import size_of
     c, met = cfg(), []
-    if not STUDENT.search(f"{job['title']} | {job.get('employment') or ''}"):
-        return False, met, "not a Werkstudent job"
+    head = f"{job['title']} | {job.get('employment') or ''}"
+    if not STUDENT.search(head):  # "Vollzeit" alone is full-time; with Werkstudent the hours decide (below)
+        return False, met, "full-time ('Vollzeit')" if FULL_TIME.search(head) else "not a Werkstudent job"
     hours = _max_hours(job)
     if hours is None:
         return False, met, "hours unknown (the ad doesn't say)"
@@ -189,6 +195,10 @@ def check(job: dict, company: dict | None, history: int, site: str) -> tuple[boo
     if job.get("ai_full_time"):  # "Vollzeit" without student hours (the AI read the whole ad)
         return False, met, "full-time"
     met.append(f"Werkstudent, max {hours:g} h/week")
+    # The place before the score: a job outside your area has its score capped at 5, and that's the real reason
+    where, km = area_of(job)
+    if where in ("unknown", "outside"):
+        return False, met, area_note(job, km)
     if (job.get("ai_score") or 0) < c["min_score"]:
         return False, met, f"AI score below {c['min_score']}"
     met.append(f"AI score {job['ai_score']}/10")
@@ -197,9 +207,6 @@ def check(job: dict, company: dict | None, history: int, site: str) -> tuple[boo
         return False, met, f"older than {c['max_days']} days"
     met.append("posted " + ("today" if age < 1 else f"{int(age)} day{'s' if int(age) > 1 else ''} ago")
                if job["posted_at"] else f"first seen {'today' if age < 1 else f'{int(age)} d ago'} (no posting date)")
-    where, km = area_of(job)
-    if where in ("unknown", "outside"):
-        return False, met, area_note(job, km)
     met.append("remote / nationwide" if where == "remote" else f"{round(km)} km from {area()['center']}")
     if job.get("ai_blocker") is None:
         return False, met, "blockers not checked yet"
@@ -275,7 +282,7 @@ def prepare() -> None:
     log.info("Must apply: %d recent good job(s) will be scored again (blocker check)", n)
 
 
-AREA_RULE = "1"  # bump when the area / hours rules change: current jobs and the Must apply box are checked again
+AREA_RULE = "2"  # bump when the area / hours rules change: current jobs and the Must apply box are checked again
 
 
 def recheck_jobs() -> Counter | None:
@@ -308,6 +315,8 @@ def recheck_jobs() -> Counter | None:
         db.drop_must(job["id"], why_not)
         left["outside your area" if why_not.startswith("Outside") else why_not] += 1
         log.info("Must apply: '%s' (%s) left the box: %s", job["title"][:70], job["company"], why_not)
+    for job, ok, met, why_not in _judge(db.must_explained()):  # "Not in Must apply" with the new rules
+        db.save_must(job["id"], ok, met, why_not)
     db.set_setting("area_rule", AREA_RULE)
     log.info("Must apply: new area / hours rules: %d job(s) without a place or hours read again, %d of %d Must apply "
              "job(s) left the box%s", len(todo), sum(left.values()), len(box),

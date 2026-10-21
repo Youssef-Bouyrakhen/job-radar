@@ -34,7 +34,8 @@ def refilter_all_jobs() -> None:
     jobs = db.all_jobs_for_filter()
     results = []
     for j in jobs:
-        verdict = job_filter.check(j["title"], j["employment"] or "", j["description"] or "")
+        verdict = job_filter.check(j["title"], j["employment"] or "", j["description"] or "",
+                                   f"{j['company'] or ''} | {j['source'] or ''} | {j['url']}")
         results.append((j["id"], verdict.passed, verdict.reason, verdict.hours))
     db.save_filter_results(results)
     if jobs:
@@ -84,7 +85,8 @@ def check_link(link_id: int) -> dict:
             for j in result.jobs:
                 if not j.url:
                     continue
-                verdict = job_filter.check(j.title, j.employment, j.description)
+                verdict = job_filter.check(j.title, j.employment, j.description,
+                                           f"{j.company} | {link['name'] or ''} | {link['url']} | {j.url}")
                 jobs.append({**asdict(j), "dedup_key": dedup_key(j.title, j.company), "hours": verdict.hours,
                              "filter_passed": verdict.passed, "filter_reason": verdict.reason})
             new = db.insert_new_jobs(link, jobs, baseline=not link["baseline_done"])
@@ -103,6 +105,29 @@ def check_link(link_id: int) -> dict:
     finally:
         with _running_lock:
             _running.discard(link_id)
+
+
+HOURS_RULE = "1"  # bump when hours are read differently: the change is counted and logged once
+
+
+def recheck_hours() -> dict | None:
+    """Once per hours rule: every saved job's hours again (per month -> per week, HiWi jobs), and
+    jobs outside your area capped at score 5. Logs how many changed."""
+    if db.get_setting("hours_rule") == HOURS_RULE:
+        return None
+    before = db.job_hours()
+    refilter_all_jobs()
+    after = db.job_hours()
+    changed = [i for i, row in after.items() if row["hours"] != before[i]["hours"]]
+    shown = [i for i in changed if after[i]["shown"]]
+    capped = db.cap_outside_scores()
+    db.set_setting("hours_rule", HOURS_RULE)
+    for i in shown[:15]:
+        log.info("Hours: '%s': %s -> %s", after[i]["title"][:60], before[i]["hours"], after[i]["hours"])
+    log.info("Hours read again: %d of %d jobs changed (%d in your list), %d now without hours; "
+             "%d jobs outside your area capped at score %d", len(changed), len(after), len(shown),
+             sum(1 for i in changed if not after[i]["hours"]), capped, db.OUTSIDE_MAX)
+    return {"changed": len(changed), "shown": len(shown), "capped": capped}
 
 
 NO_JOBS_RULE = "1"  # bump when the job-link rules get better: pages that showed no jobs are checked again once

@@ -45,8 +45,9 @@ async function api(name, arg, body) {
 
 /* Translate the backend's field names into the shapes below. */
 const STATUS_TO_API = { new: '', saved: 'saved', applied: 'applied', hidden: 'hidden' };
+// Most hours a week: "15–20 h/week" -> 20, "40 h/month ≈ 9 h/week" -> 9
 function maxHours(text) {
-  const nums = (text || '').match(/\d+(?:[.,]\d+)?/g);
+  const nums = (text || '').split('≈').pop().match(/\d+(?:[.,]\d+)?/g);
   return nums ? Math.max(...nums.map(n => parseFloat(n.replace(',', '.')))) : null;
 }
 function jobFromApi(j) {

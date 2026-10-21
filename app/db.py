@@ -340,8 +340,21 @@ def insert_new_jobs(link: dict, jobs: list[dict], baseline: bool) -> list[dict]:
 
 def all_jobs_for_filter() -> list[dict]:
     with connect() as conn:
-        rows = conn.execute("SELECT id, title, employment, description FROM jobs").fetchall()
+        rows = conn.execute("SELECT id, title, employment, description, company, source, url FROM jobs").fetchall()
     return [dict(r) for r in rows]
+
+
+def job_hours() -> dict[int, dict]:
+    """{job id: its hours, title, and whether it is in your list} (for counting what a new rule changed)."""
+    with connect() as conn:
+        return {r["id"]: dict(r) for r in conn.execute(
+            f"SELECT id, title, hours, ({shown_sql(None)}) AS shown FROM jobs")}
+
+
+def cap_outside_scores() -> int:
+    with connect() as conn:
+        return conn.execute(f"UPDATE jobs SET ai_score = {OUTSIDE_MAX} WHERE area = 'outside' AND ai_score > {OUTSIDE_MAX}"
+                            ).rowcount
 
 
 def save_filter_results(results: list[tuple[int, bool, str, str]]) -> None:
@@ -453,7 +466,7 @@ def next_due(interval_minutes: int) -> str | None:
 def jobs_to_score(limit: int) -> list[dict]:
     with connect() as conn:
         rows = conn.execute(
-            f"""SELECT id, url, title, company, location, employment, hours, description, details_fetched
+            f"""SELECT id, url, title, company, source, location, employment, hours, description, details_fetched
                 FROM jobs
                 WHERE {shown_sql(None)} AND ai_score IS NULL AND ai_attempts < 3
                 ORDER BY first_seen DESC, id DESC LIMIT ?""",
@@ -475,7 +488,7 @@ def jobs_missing_details() -> list[dict]:
     """Jobs in your list (not applied / hidden) without a place, or without hours and never read in full."""
     with connect() as conn:
         return [dict(r) for r in conn.execute(
-            f"""SELECT id, url, title, location, employment, hours, description FROM jobs
+            f"""SELECT id, url, title, company, source, location, employment, hours, description FROM jobs
                 WHERE {shown_sql(None)} AND status NOT IN ('applied', 'hidden')
                 AND (COALESCE(location, '') = '' OR (hours IS NULL AND details_fetched = 0))""")]
 
@@ -502,9 +515,13 @@ def jobs_without_area() -> list[dict]:
                 AND (area IS NULL OR area = 'unknown')""")]
 
 
+OUTSIDE_MAX = 5  # the highest AI score a job outside your area can have
+
+
 def save_area(job_id: int, area: str, km: float | None) -> None:
     with connect() as conn:
-        conn.execute("UPDATE jobs SET area = ?, area_km = ? WHERE id = ?", (area, km, job_id))
+        conn.execute(f"""UPDATE jobs SET area = ?, area_km = ?, ai_score = CASE WHEN ? = 'outside'
+                             THEN MIN(ai_score, {OUTSIDE_MAX}) ELSE ai_score END WHERE id = ?""", (area, km, area, job_id))
 
 
 def reset_areas() -> None:
@@ -520,10 +537,12 @@ def count_ai_attempt(job_ids: list[int]) -> None:
 def save_scores(results: list[dict], model: str) -> None:
     with connect() as conn:
         conn.executemany(
-            """UPDATE jobs SET ai_score = ?, ai_reason = ?, ai_full_time = ?, ai_model = ?,
+            # Outside your area: never more than OUTSIDE_MAX ("Maybe", never "Top match")
+            f"""UPDATE jobs SET ai_score = CASE WHEN area = 'outside' THEN MIN(?, {OUTSIDE_MAX}) ELSE ? END,
+                   ai_reason = ?, ai_full_time = ?, ai_model = ?,
                    hours = COALESCE(hours, NULLIF(?, '')), ai_blocker = ?
                WHERE id = ?""",
-            [(r["score"], r["reason"], int(r["full_time"]), model, r["hours"], r.get("blocker", ""), r["id"])
+            [(r["score"], r["score"], r["reason"], int(r["full_time"]), model, r["hours"], r.get("blocker", ""), r["id"])
              for r in results],
         )
 
@@ -549,6 +568,14 @@ def must_box() -> list[dict]:
     with connect() as conn:
         return [dict(r) for r in conn.execute(
             f"SELECT {MUST_COLUMNS} FROM jobs WHERE must_apply = 1 AND status NOT IN ('applied', 'hidden')")]
+
+
+def must_explained() -> list[dict]:
+    """Jobs in your list that show why they're not in Must apply (the text can be from older rules)."""
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            f"""SELECT {MUST_COLUMNS} FROM jobs WHERE {shown_sql(None)} AND must_apply = 0
+                AND must_why_not IS NOT NULL AND status NOT IN ('applied', 'hidden')""")]
 
 
 def drop_must(job_id: int, why_not: str) -> None:

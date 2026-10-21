@@ -34,7 +34,7 @@ from .dedup import dedup_key
 from .discover import NEARBY, _belongs_to, _is_known, _same, _watched_keys, _with_search, board_url, company_key
 from .extractors import Job, ats, clean, generic
 from .fetcher import fetch_polite
-from .filters import detect_hours, get_filter
+from .filters import get_filter, hours_of
 from .sources import check_url
 
 log = logging.getLogger("jobradar")
@@ -220,8 +220,9 @@ def save_jobs(c: dict, jobs: list[Job]) -> tuple[dict, list[dict]]:
             continue
         head = f"{j.title} | {j.employment}"
         is_it = bool(jf.it.find(head)) or len(jf.it.find_all(j.description)) >= jf.min_it_words_in_description
-        verdict = jf.check(j.title, j.employment, j.description)
-        hours = detect_hours(f"{head} | {j.description}")
+        employer = f"{c['name']} | {c['website'] or ''} | {j.url}"
+        verdict = jf.check(j.title, j.employment, j.description, employer)
+        hours = hours_of(j.title, j.employment, j.description, employer)
         student = bool(WERKSTUDENT.search(head)) or bool(hours and hours.high <= jf.max_hours)
         stats["near"] += 1
         stats["it"] += is_it
