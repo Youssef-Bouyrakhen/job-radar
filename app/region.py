@@ -353,6 +353,8 @@ def guess_website(c: dict) -> Page | None:
         return None
     for host in dict.fromkeys([key, "-".join(words)]):
         for tld in ("de", "com"):
+            if not careers.valid_host(f"www.{host}.{tld}"):  # a very long name: no such domain can exist
+                continue
             page, _ = careers.check_website(f"https://www.{host}.{tld}/", c["name"])
             if page and _mentions_town(page, c["town"]):
                 return page
@@ -465,7 +467,10 @@ def settle(progress: dict) -> dict:
         progress.update(step="Looking for contact emails in the Impressum…", done=0, total=len(contacts))
 
         def one(c: dict) -> None:
-            db.update_company(c["id"], _contact(c))
+            try:
+                db.update_company(c["id"], _contact(c))
+            except Exception as e:  # one bad company never stops the others; tried again next run
+                log.warning("Region: contact email of %s failed (%s)", c["name"], e)
             progress["done"] += 1
 
         with ThreadPoolExecutor(CONFIG["companies"]["workers"]) as pool:

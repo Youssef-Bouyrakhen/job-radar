@@ -225,7 +225,7 @@ def _guesses(name: str) -> list[str]:
     words = _words(name)
     if len(words) == 1 and words[0] in GENERIC_SLUGS:  # keep the legal form: "software-ag"
         words = re.sub(r"[^a-z0-9]+", " ", _fold(name)).split()
-    slugs = [s for s in dict.fromkeys(["-".join(words), "".join(words)]) if len(s) >= 3]
+    slugs = [s for s in dict.fromkeys(["-".join(words), "".join(words)]) if 3 <= len(s) <= 63]  # longer: not a valid subdomain
     urls = []
     for s in slugs:
         urls += [f"https://{s}.jobs.personio.de", f"https://{s}.recruitee.com", f"https://boards.greenhouse.io/{s}",

@@ -251,8 +251,9 @@ def coverage():
 
 
 @app.post("/api/companies/run")
-def run_companies():
-    companies.start()  # if a run is already going, just report on that one
+def run_companies(until_done: bool = False):
+    # until_done: no morning stop (for a run started by hand at night); a run already going is just reported on
+    companies.start(night_limit=not until_done)
     return {"progress": companies.progress()}
 
 

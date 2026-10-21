@@ -70,13 +70,29 @@ def _site(url: str) -> str:
     return ".".join(host(url).split(".")[-2:])
 
 
+def valid_host(name: str) -> bool:
+    """Can this domain be opened at all? Every part 1-63 characters, at most 253 in all, and it
+    encodes for DNS. Otherwise httpx raises UnicodeError ("label empty or too long")."""
+    if not name or len(name) > 253 or any(not 0 < len(part) <= 63 for part in name.rstrip(".").split(".")):
+        return False
+    try:
+        name.encode("idna")
+    except UnicodeError:
+        return False
+    return True
+
+
 def normalize_url(url: str) -> str | None:
     url = re.split(r"[;\s]+", (url or "").strip())[0]  # OSM tags can hold several: "a.de;b.de"
     if not url:
         return None
     if not url.lower().startswith(("http://", "https://")):
         url = "https://" + url.lstrip("/")
-    return url if "." in host(url) else None
+    try:
+        name = urlparse(url).hostname or ""
+    except ValueError:  # e.g. "https://[broken"
+        return None
+    return url if "." in name and valid_host(name) else None
 
 
 def _compact(text: str) -> str:

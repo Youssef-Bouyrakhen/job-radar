@@ -457,16 +457,17 @@ def progress() -> dict:
     return {**_progress, "warnings": list(_progress["warnings"]), "notes": list(_progress["notes"])}
 
 
-def start(kind: str = "run", text: str = "", label: str = "") -> bool:
+def start(kind: str = "run", text: str = "", label: str = "", night_limit: bool = True) -> bool:
     """Start a run in the background. False if one is already running (only one at a time).
     kind "import": the companies in `text` (names or a link), marked with `label`;
-    kind "lookalikes": companies similar to the ones whose jobs you saved or applied to."""
+    kind "lookalikes": companies similar to the ones whose jobs you saved or applied to.
+    night_limit False: no stop before the morning, even if started at night."""
     with _lock:
         if _progress["running"]:
             return False
         _progress.update(running=True, kind=kind, step="Starting…", **COUNTERS, warnings=[], notes=[], error="",
                          finished_at=None)
-    threading.Thread(target=_run, args=(kind, text, label), daemon=True, name="companies").start()
+    threading.Thread(target=_run, args=(kind, text, label, night_limit), daemon=True, name="companies").start()
     return True
 
 
@@ -485,10 +486,10 @@ def too_late(progress: dict) -> bool:
     return bool(progress.get("stop_at")) and time.time() >= progress["stop_at"]
 
 
-def _run(kind: str = "run", text: str = "", label: str = "") -> None:
+def _run(kind: str = "run", text: str = "", label: str = "", night_limit: bool = True) -> None:
     from . import company_import  # it imports this module
     started = time.monotonic()
-    _progress["stop_at"] = night_deadline()
+    _progress["stop_at"] = night_deadline() if night_limit else None
     try:
         ids = None  # None = all companies that are due
         recheck_career_pages()
@@ -504,13 +505,13 @@ def _run(kind: str = "run", text: str = "", label: str = "") -> None:
                 except company_import.ImportProblem as e:
                     log.info("Look-alikes skipped: %s", e)
             _collect()
-        region.triage()  # rules: shops, restaurants, craftsmen in the towns are skipped before any web request
+        _step("the region rules", region.triage)  # shops, restaurants, craftsmen in the towns are skipped before any web request
         if ids is None or ids:
-            _check(ids)
+            _step("checking the companies", lambda: _check(ids))
         categories.run(_progress, ids)  # rules for all; the AI for unclear ones, these first (before the fit score)
         if ids is None or ids:
             company_jobs.run(_progress, ids)  # Phase B: read their jobs, rank, auto-add, Initiativ list
-        region.settle(_progress)  # every checked town company gets its final status (Impressum emails)
+        _step("the final region statuses", lambda: region.settle(_progress))  # incl. Impressum emails
     except company_import.ImportProblem as e:
         _progress["error"] = str(e)
     except Exception as e:
@@ -519,6 +520,15 @@ def _run(kind: str = "run", text: str = "", label: str = "") -> None:
     finally:
         _progress.update(running=False, step="", finished_at=db.now())
         log.info("Companies: run finished in %.0f s", time.monotonic() - started)
+
+
+def _step(label: str, run) -> None:
+    """A step that goes wrong is logged and shown, and the run goes on with the next step."""
+    try:
+        run()
+    except Exception as e:
+        log.exception("Companies: %s failed", label)
+        _progress["warnings"].append(f"Something went wrong in {label} ({type(e).__name__}: {e}); the rest of the run went on")
 
 
 def _collect() -> None:
@@ -553,6 +563,25 @@ def _collect() -> None:
     log.info("Companies: %d companies (%d new) from %d records", len(rows), _progress["new"], len(records))
 
 
+class CheckFailed(Exception):
+    pass
+
+
+RETRY_NOTE = "Check failed, tried again next night: "
+
+
+def _save_failure(c: dict, e: Exception) -> None:
+    """The first failure leaves the company unchecked, so the next night tries it again.
+    A second failure in a row is saved as checked (red): it doesn't take a place in the line every night."""
+    error = str(e) if isinstance(e, CheckFailed) else f"{type(e).__name__}: {e}"
+    if (c["notes"] or "").startswith(RETRY_NOTE):
+        log.warning("Companies: %s failed again, not tried any more (%s)", c["name"], error)
+        db.save_company_check(c["id"], {"notes": f"Check failed twice: {error}"[:300], "career_state": "red"})
+    else:
+        log.warning("Companies: %s failed, tried again next night (%s)", c["name"], error)
+        db.update_company(c["id"], {"notes": (RETRY_NOTE + error)[:300]})
+
+
 def _check(ids: set[int] | None = None) -> None:
     cfg = CONFIG["companies"]
     todo = companies_to_check(cfg["max_companies_per_run"], ids)
@@ -565,16 +594,25 @@ def _check(ids: set[int] | None = None) -> None:
     homes: dict[int, Page | None] = {}
 
     def check_osm(c: dict) -> None:
-        homes[c["id"]], note = careers.check_website(c["website_hint"], c["name"])
+        try:
+            homes[c["id"]], note = careers.check_website(c["website_hint"], c["name"])
+        except Exception as e:  # one bad company never stops the run: it is checked again next night
+            c["failed"], homes[c["id"]] = f"its website check failed ({type(e).__name__}: {e})", None
+            return
         if homes[c["id"]]:
             _trim(homes[c["id"]])
         else:
             c["hint_note"] = f"{'OSM' if c['hint_from'] == 'osm' else 'Known'} website: {note}"
 
     def guess(c: dict) -> None:
-        if too_late(_progress):
+        if too_late(_progress) or c.get("failed"):
             return
-        if home := region.guess_website(c):
+        try:
+            home = region.guess_website(c)
+        except Exception as e:
+            c["failed"] = f"the website guess failed ({type(e).__name__}: {e})"
+            return
+        if home:
             homes[c["id"]], c["hint_from"] = _trim(home), "guess"
 
     _progress["step"] = "Checking the websites from OpenStreetMap…"
@@ -585,7 +623,7 @@ def _check(ids: set[int] | None = None) -> None:
     with ThreadPoolExecutor(cfg["workers"]) as pool:
         list(pool.map(guess, [c for c in todo if c["town"] and not homes.get(c["id"])]))
     # Look-alikes came with the AI's website already: don't ask it twice
-    need_ai = [c for c in todo if not homes.get(c["id"]) and c["hint_from"] != "ai"]
+    need_ai = [c for c in todo if not homes.get(c["id"]) and c["hint_from"] != "ai" and not c.get("failed")]
     ask = not too_late(_progress)
     ai_sites = ask_ai_for_websites(need_ai) if ask else {}
     # The free AI ran out before it could look for their website: they wait for the next night
@@ -600,14 +638,18 @@ def _check(ids: set[int] | None = None) -> None:
                 _progress["done"] += 1
             return
         try:
+            if c.get("failed"):
+                raise CheckFailed(c["failed"])
             fields = check_company(c, ai_sites.get(c["id"]), homes.pop(c["id"], None), watched)
             if c.get("hint_note"):
                 fields["notes"] = " · ".join(filter(None, [c["hint_note"], fields["notes"]]))
             db.save_company_check(c["id"], fields)
-        except Exception as e:
-            log.warning("Companies: %s failed (%s)", c["name"], e)
-            db.save_company_check(c["id"], {"notes": f"Check failed: {e}"[:300], "career_state": "red"})
+        except Exception as e:  # one bad company never stops the run
             fields = {}
+            try:
+                _save_failure(c, e)
+            except Exception:
+                log.exception("Companies: could not save the failure of %s", c["name"])
         with _lock:
             _progress["done"] += 1
             _progress["websites"] += bool(fields.get("website"))

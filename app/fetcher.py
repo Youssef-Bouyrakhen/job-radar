@@ -89,7 +89,7 @@ def robots_allows(url: str, agent: str = "*") -> bool:
             if r.status_code == 200 and "html" not in r.headers.get("content-type", ""):
                 parser = RobotFileParser()
                 parser.parse(r.text.splitlines())
-        except httpx.HTTPError:
+        except (httpx.HTTPError, ValueError):  # ValueError: a malformed address (e.g. a part over 63 characters)
             pass
         _robots[base] = parser
     parser = _robots[base]
@@ -143,7 +143,7 @@ def fetch_html(url: str) -> Page:
         return Page(False, url, reason="The site took too long to answer")
     except httpx.ConnectError:
         return Page(False, url, reason="Could not connect to the site (is the address correct?)")
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, ValueError) as e:  # ValueError: a malformed address
         return Page(False, url, reason=f"Could not connect to the site ({type(e).__name__})")
     return _check(url, str(r.url), r.status_code, r.text)
 
