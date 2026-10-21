@@ -307,8 +307,10 @@ A careers page only counts if it talks about jobs (Stellenangebote, Jobs, Karrie
 positions) or has an applicant system; blog, magazine, news and press pages never count. If
 OpenStreetMap is busy, Job Radar tries 3 times; if it still fails, the companies from earlier runs stay.
 
-A company's jobs are read **at most once a week** (`recheck_after_days: 7`, it can't go lower), and
-its website / careers page is looked for only once.
+In the night run a company's jobs are read **at most once a week** (`recheck_after_days: 7`, it can't
+go lower), and its website / careers page is looked for only once. **Watched** and **Initiativ** companies
+are read **every day at 19:00** (`watched_read_hour`); the AI only reads a page again when its job part
+changed. The Companies page shows for each company when it was last read and when it is read next.
 
 **Import list** (Companies page): paste company names (one per line), or the link of a page that
 lists companies, e.g. a career fair's exhibitor list, tech hub members, h_da dual-study partners
@@ -387,7 +389,7 @@ Duplicates merge with the companies already known (same name or same website). T
    150): website (the OpenStreetMap tag, then a guess from the name, e.g. `acme-software.de`, which only
    counts if the page names Darmstadt or a Darmstadt postcode; the AI last), careers page, jobs, fit score.
 3. **Final status** for every Darmstadt company:
-   - **Watched**: has a careers page; it's read every week and good jobs come to you (with good jobs it
+   - **Watched**: has a careers page; it's read every day at 19:00 and good jobs come to you (with good jobs it
      also becomes a watched link).
    - **Initiativ**: IT jobs but no student job (as before), or a **small IT company without a careers
      page**: Job Radar reads its **Impressum** and shows the contact email (`max_contacts_per_run: 60`).

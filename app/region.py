@@ -15,7 +15,7 @@ Griesheim, Pfungstadt: region.towns in config.yaml).
    Skipped right away (the reason is saved), the rest goes through the normal pipeline: website (OSM tag,
    then a guess from the name, the AI last) -> careers page -> jobs -> fit score. max_checks_per_run a night
    for all towns together, in the order of region.towns (Darmstadt is finished before the next town starts).
-3. Every company ends with a status: Watched (careers page, read every week), Initiativ, No careers page
+3. Every company ends with a status: Watched (careers page, read every day at 19:00), Initiativ, No careers page
    or Skipped. Small IT companies without a careers page: the contact email from their Impressum, Initiativ.
 """
 import bz2

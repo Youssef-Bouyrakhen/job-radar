@@ -248,6 +248,7 @@ def list_companies():
     for r in rows:
         r["sources"] = json.loads(r["sources"] or "{}")
         r["size"] = company_jobs.size_of(r)
+    company_jobs.next_reads(rows)  # "next: today 19:00"
     return {"progress": companies.progress(), "companies": rows}
 
 

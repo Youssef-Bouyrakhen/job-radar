@@ -983,13 +983,25 @@ function showCompanyJobs(c) {
   state.openId = null; state.focusId = null;
   setTab('jobs'); render();
 }
+// "today 19:04", "tomorrow 03:00", "12 Oct 19:00"
+const dayTime = iso => {
+  const d = new Date(iso), day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const n = Math.round((day(d) - day(new Date())) / 864e5);
+  return `${n === 0 ? 'today' : n === 1 ? 'tomorrow' : n === -1 ? 'yesterday' : fmtShort(iso)} ${fmtTime(iso)}`;
+};
+// When its jobs were read last and are read next (and by what, on hover)
+function coReads(c) {
+  const last = c.jobs_read_at ? `last read ${dayTime(c.jobs_read_at)}` : 'not read yet';
+  const next = c.next_read ? `next ${dayTime(c.next_read)}` : c.next_read_how ? `next ${c.next_read_how}` : '';
+  return `<div class="co-sub" title="${esc(c.next_read_how ? 'Read ' + c.next_read_how : '')}">${esc([last, next].filter(Boolean).join(' · '))}</div>`;
+}
 function coCareer(c) {
   const link = (u, label) => u ? `<a href="${esc(u)}" target="_blank" rel="noopener" title="${esc(u)}">${label || esc(bareUrl(u))}</a>` : '';
   const note = esc(c.notes || '');
   if (c.career_state === 'green') return `<span class="chip chip--good" title="${note}"><span class="chip-text">${esc(c.ats_type)} job list</span></span>
-      <div class="co-sub">${link(c.feed_url, 'job feed')}${c.career_url && c.career_url !== c.feed_url ? ` · ${link(c.career_url, 'careers page')}` : ''}</div>${coJobs(c)}`;
+      <div class="co-sub">${link(c.feed_url, 'job feed')}${c.career_url && c.career_url !== c.feed_url ? ` · ${link(c.career_url, 'careers page')}` : ''}</div>${coJobs(c)}${coReads(c)}`;
   if (c.career_state === 'amber') return `<span class="chip chip--maybe" title="${note}"><span class="chip-text">Careers page</span></span>
-      <div class="co-sub">${link(c.career_url)}</div>${coJobs(c)}`;
+      <div class="co-sub">${link(c.career_url)}</div>${coJobs(c)}${coReads(c)}`;
   if (c.last_checked) return `<span class="chip chip--error" title="${note}"><span class="chip-text">No careers page</span></span>
       <div class="co-sub" title="${note}">${note}</div>`;
   return `<span class="chip chip--muted"><span class="chip-text">Not checked yet</span></span>`;

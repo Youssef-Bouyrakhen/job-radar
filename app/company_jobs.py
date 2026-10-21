@@ -6,8 +6,8 @@
    saved; they go through the normal flow: keyword filter, duplicates, AI score, Telegram.
    Also the first time a company is read: you never saw its jobs, so a good one is new to you
    (only jobs that pass the filter and the AI score are sent, so this is no flood).
-   Watched companies are read every day at 19:00 (read_watched); the AI only reads a page again
-   when its job part changed.
+   Watched and Initiativ companies are read every day at 19:00 (read_watched); the AI only reads a
+   page again when its job part changed.
 2. Fit score (0-100): small / mid-size companies, distance, share of IT jobs, Werkstudent jobs
    now or before (strong bonus), fresh jobs. Big companies get fewer points but stay visible.
 3. The best companies with good jobs become watched links (max 10 per run), marked "auto-added".
@@ -24,6 +24,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 
@@ -387,7 +388,7 @@ def link_urls(c: dict) -> list[str]:
 
 def auto_add(rows: list[dict], limit: int, progress: dict) -> int:
     watched = _watched_keys()
-    # Also town companies the engine marked Watched (careers page read weekly) that aren't a watched link yet
+    # Also town companies the engine marked Watched (careers page read every day) that aren't a watched link yet
     candidates = sorted((c for c in rows if c["good_jobs"] and (c["status"] == "new" or c["status"] == "watched"
                                                                 and c["town"] and not c["link_id"])),
                         key=lambda c: (-(c["fit_score"] or 0), -c["good_jobs"]))
@@ -625,15 +626,52 @@ def rank(progress: dict) -> None:
         db.update_company(c["id"], fields)
 
 
-# ---- every day at 19:00: the jobs of every watched company ---------------------------------
+# ---- every day at 19:00: the jobs of every watched and Initiativ company --------------------
+
+GERMANY = ZoneInfo("Europe/Berlin")
+
+
+def _as_link(c: dict, active: set[int], yours: set[str]) -> bool:
+    """A watched link already (yours or auto-added): the normal link check reads it every hour."""
+    return c["link_id"] in active or _is_known(c["name_key"], yours)
+
+
+def _daily(c: dict, active: set[int], yours: set[str]) -> bool:
+    return c["status"] in ("watched", "initiativ") and bool(c["career_url"] or c["feed_url"])         and not _as_link(c, active, yours)
+
 
 def watched_to_read() -> list[dict]:
-    """Watched companies with a careers page. Not the ones that are a watched link already
-    (yours or auto-added): those are checked every hour by the normal link check."""
-    active = {l["id"] for l in db.list_links() if l["active"]}
-    yours = _watched_keys()
-    return [c for c in db.company_rows() if c["status"] == "watched" and (c["career_url"] or c["feed_url"])
-            and c["link_id"] not in active and not _is_known(c["name_key"], yours)]
+    """Watched and Initiativ companies with a careers page (an Initiativ company that posts a Werkstudent
+    job reaches you the same day). Not the ones that are a watched link already."""
+    active, yours = {l["id"] for l in db.list_links() if l["active"]}, _watched_keys()
+    return [c for c in db.company_rows() if _daily(c, active, yours)]
+
+
+def _next_at(after: datetime, hour: int) -> datetime:
+    """The first `hour`:00 (German time) at or after `after`."""
+    at = after.astimezone(GERMANY).replace(hour=hour, minute=0, second=0, microsecond=0)
+    return at if at >= after else at + timedelta(days=1)
+
+
+def next_reads(rows: list[dict]) -> None:
+    """Adds next_read (ISO time, empty = none planned) and next_read_how to each company: when its jobs
+    are read next and by what. The night run reads at most max_job_reads_per_run, so that one can be later."""
+    cfg = CONFIG["companies"]
+    active, yours = {l["id"] for l in db.list_links() if l["active"]}, _watched_keys()
+    now, daily_hour, night_hour = datetime.now(GERMANY), cfg.get("watched_read_hour"), cfg.get("daily_run_hour")
+    every = timedelta(days=max(7, cfg["recheck_after_days"]))
+    for c in rows:
+        c["next_read"], c["next_read_how"] = None, ""
+        if not (c["career_url"] or c["feed_url"]) or c["status"] == "skipped":
+            continue
+        if _as_link(c, active, yours):
+            c["next_read_how"] = "with your watched link (every hour)"
+        elif daily_hour is not None and _daily(c, active, yours):
+            c["next_read"], c["next_read_how"] = _next_at(now, daily_hour).isoformat(), f"every day at {daily_hour:02d}:00"
+        elif night_hour is not None:
+            due = max(now, datetime.fromisoformat(c["jobs_read_at"]) + every) if c["jobs_read_at"] else now
+            c["next_read"] = _next_at(due, night_hour).isoformat()
+            c["next_read_how"] = f"night run at {night_hour:02d}:00 (once a week{'' if c['jobs_read_at'] else '; first read, in line'})"
 
 
 def read_watched() -> dict:
