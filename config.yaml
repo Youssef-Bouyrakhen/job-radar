@@ -362,6 +362,19 @@ region:
     Pfungstadt:                  # with Eschollbrücken, Eich, Hahn
       ags: "06432018"
       postcodes: [64319]
+    Langen:                      # Langen (Hessen), with Oberlinden
+      ags: "06438006"
+      postcodes: [63225]
+    Egelsbach:
+      ags: "06438003"
+      postcodes: [63329]
+      hall: Gemeinde Egelsbach   # not a town ("Stadt"): its administration is the Gemeinde
+    Dreieich:                    # with Sprendlingen, Dreieichenhain, Buchschlag, Götzenhain, Offenthal
+      ags: "06438002"
+      postcodes: [63303]
+    Neu-Isenburg:                # with Gravenbruch, Zeppelinheim
+      ags: "06438009"
+      postcodes: [63263]
   max_checks_per_run: 300        # town companies whose website + careers page are checked per night, all towns together
   max_contacts_per_run: 60       # small IT companies without a careers page: Impressum emails read per night
   offeneregister: true           # read the company register (2019, 260 MB) once, keep a small extract in data/

@@ -363,8 +363,9 @@ never changed.
 ### Coverage (region coverage)
 
 The **Coverage** page shows how much of a town is covered: not only IT employers, but every business
-that could hire an IT Werkstudent. It starts with the **City of Darmstadt** (all districts). On top:
-**Region covered: X%** (companies with a final status). Per town: companies, careers pages, checked %,
+that could hire an IT Werkstudent. The towns: **Darmstadt** (all districts), **Weiterstadt**, **Griesheim**,
+**Pfungstadt**, **Langen**, **Egelsbach**, **Dreieich** and **Neu-Isenburg**. On top: **Region covered: X%**
+(companies with a final status) and a **Whole region** row. Per town: companies, careers pages, checked %,
 how many nights are left, and one button per status; a click opens the Companies page with only that
 town's companies in that status.
 
@@ -373,22 +374,23 @@ Where the companies come from (all automatic, in the nightly run, no AI):
   research institutes, universities, town halls and hospitals. Shops, restaurants, cafés, doctors and
   craftsmen aren't offices, so they don't come in; lawyers, tax advisors, insurance agents, clubs and
   fraternities are left out too. Units of one employer (TU institutes, city offices) become one company.
-- **Arbeitsagentur**: every employer with a job ad in Darmstadt's postcodes, any job type (staffing
+- **Arbeitsagentur**: every employer with a job ad in the town's postcodes, any job type (staffing
   agencies are left out by the API).
 - **OffeneRegister.de**: the company register as open data. Its only download is from **2019**
-  (260 MB, the query service is offline), so it is read **once** (2–5 minutes) and a small extract is kept in
-  `data/offeneregister-Darmstadt.json`. IT-sounding companies (Software, IT, Digital, Data, ...) are added;
-  the others only mark known companies as being in Darmstadt. Holdings and management companies are left out.
+  (260 MB, the query service is offline), so it is read **once** (2–5 minutes) and a small extract per town is kept
+  in `data/` (e.g. `offeneregister-Darmstadt.json`; a new town gets its extract the next time the download
+  works). IT-sounding companies (Software, IT, Digital, Data, ...) are added; the others only mark known
+  companies as being in the town. Holdings and management companies are left out.
   Turn it off with `offeneregister: false`.
 
 Duplicates merge with the companies already known (same name or same website). Then:
 1. **Rules first**: restaurants, bakeries, hairdressers, care services, craftsmen, shops and staffing
    agencies are **Skipped** right away (the reason shows under the status), also companies whose only
    ads are for non-office jobs (cook, driver, nurse, ...).
-2. **The normal pipeline** for the rest, a few per night (`max_checks_per_run: 80`, on top of the usual
-   150): website (the OpenStreetMap tag, then a guess from the name, e.g. `acme-software.de`, which only
-   counts if the page names Darmstadt or a Darmstadt postcode; the AI last), careers page, jobs, fit score.
-3. **Final status** for every Darmstadt company:
+2. **The normal pipeline** for the rest, a few per night (`max_checks_per_run: 300` for all towns together,
+   on top of the usual 150; one town after the other, in the order above, Darmstadt first): website (the OpenStreetMap tag, then a guess from the name, e.g. `acme-software.de`, which only
+   counts if the page names the town or one of its postcodes; the AI last), careers page, jobs, fit score.
+3. **Final status** for every town company:
    - **Watched**: has a careers page; it's read every day at 19:00 and good jobs come to you (with good jobs it
      also becomes a watched link).
    - **Initiativ**: IT jobs but no student job (as before), or a **small IT company without a careers

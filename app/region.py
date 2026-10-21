@@ -1,5 +1,5 @@
 """Region coverage: every business in a town that could hire an IT Werkstudent (Darmstadt, Weiterstadt,
-Griesheim, Pfungstadt: region.towns in config.yaml).
+Griesheim, Pfungstadt, Langen, Egelsbach, Dreieich, Neu-Isenburg: region.towns in config.yaml).
 
 1. Collect (no AI, every night):
    a) OpenStreetMap: named offices of any kind, works, research institutes, universities, town halls and
@@ -72,11 +72,17 @@ PARENTS = {
 }
 
 
+def _hall(town: str) -> str:
+    """The town's administration: "Stadt Langen", or "Gemeinde Egelsbach" (region.towns: hall)."""
+    return towns()[town].get("hall") or f"Stadt {town}"
+
+
 def _parent(name: str, town: str) -> str:
-    # Every town: "Magistrat der Stadt Weiterstadt Personalservice", "Stadt Pfungstadt: Kultur ..." are its administration
-    if re.match(rf"(?:der )?(?:magistrat der |stadtverwaltung )?(?:kreis)?stadt {re.escape(town)}\b|stadtverwaltung\b",
-                name, re.I):
-        name = f"Stadt {town}"
+    # Every town: "Magistrat der Stadt Weiterstadt Personalservice", "Stadt Pfungstadt: Kultur ...",
+    # "Gemeindeverwaltung Egelsbach" are its administration
+    if re.match(rf"(?:der )?(?:magistrat der |stadtverwaltung |gemeindeverwaltung |gemeindevorstand der )?"
+                rf"(?:(?:kreis)?stadt|gemeinde) {re.escape(town)}\b|(?:stadt|gemeinde)verwaltung\b", name, re.I):
+        name = _hall(town)
     return next((parent for rule, parent in PARENTS.get(town, []) if rule.search(name)), name)
 
 
@@ -118,7 +124,7 @@ def collect_osm(town: str, progress: dict) -> list[dict]:
         if kind in SKIP_OSM or FRATERNITY.search(name):
             continue
         if kind == "townhall":  # every town's is just "Rathaus": they must not merge into one company
-            name = f"Stadt {town}"
+            name = _hall(town)
         center = e.get("center") or e
         website = tags.get("website") or tags.get("contact:website") or tags.get("url")
         records.append({"name": clean_name(_parent(name, town)), "source": source(town, f"osm:{kind}"),
@@ -193,7 +199,7 @@ def _download_register(names: list[str], progress: dict) -> None:
                     continue
                 d = json.loads(line)
                 attrs = d.get("all_attributes") or {}
-                town = attrs.get("registered_office")
+                town = re.sub(r"\s*\(.*\)$", "", attrs.get("registered_office") or "")  # "Langen (Hessen)"
                 if d.get("current_status") != "currently registered" or town not in found \
                         or attrs.get("_registerArt") not in REGISTER_TYPES:
                     continue

@@ -5,7 +5,8 @@
       plus keyword searches per category (companies.category_searches, IT jobs only),
    b) OpenStreetMap (Overpass API): IT / telecommunication / company offices, with their website tag,
    c) your own database: jobs, email alerts, suggestions and watched links,
-   d) region coverage: every business in the towns (Darmstadt, Weiterstadt, Griesheim, Pfungstadt) that could hire an IT student (region.py).
+   d) region coverage: every business in the towns (Darmstadt, Weiterstadt, Griesheim, Pfungstadt, Langen,
+      Egelsbach, Dreieich, Neu-Isenburg) that could hire an IT student (region.py).
 2. Merge spelling variants ("ACME GmbH" = "Acme") and remember where each was found, how often.
 3. For the next companies in line (IT employers first): find the website and careers page
    (see careers.py). Each run checks at most companies.max_companies_per_run, so a big list
@@ -66,7 +67,7 @@ def _source_kind(key: str) -> str:
 
 # "adesso Frankfurt" is adesso: an office's city at the end of the name is not part of it
 CITY_SUFFIX = re.compile(r"(?:\s+|\s*[-–,|/]\s*)(?:frankfurt(?: am main| a\.? ?m\.?)?|darmstadt|eschborn|offenbach"
-                         r"(?: am main)?|r[üu]sselsheim|mainz|wiesbaden|hanau|langen|dreieich|neu-isenburg|"
+                         r"(?: am main)?|r[üu]sselsheim|mainz|wiesbaden|hanau|langen|egelsbach|dreieich|neu-isenburg|"
                          r"bad homburg|oberursel|weiterstadt|griesheim|bad vilbel|kelsterbach|rhein-main)$", re.I)
 
 

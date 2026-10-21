@@ -29,7 +29,7 @@ WORKERS = 4  # companies tested at the same time (each website still gets its po
 # A job counts as "good" if it passes your keyword filter AND is in the area (or remote).
 # An empty location counts too: many feeds don't say.
 NEARBY = re.compile(
-    r"darmstadt|frankfurt|offenbach|eschborn|r[üu]e?sselsheim|mainz|wiesbaden|hanau|langen|dreieich|"
+    r"darmstadt|frankfurt|offenbach|eschborn|r[üu]e?sselsheim|mainz|wiesbaden|hanau|langen|egelsbach|dreieich|"
     r"neu-isenburg|bad homburg|oberursel|weiterstadt|griesheim|bad vilbel|kelsterbach|raunheim|"
     r"rhein-main|hessen|hesse|remote|home ?office|mobil|"
     # nationwide jobs ("Bundesweit") can be done from here too
