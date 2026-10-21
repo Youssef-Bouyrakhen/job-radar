@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from . import ai, arbeitsagentur, careers, categories, company_jobs, db, region
+from . import ai, arbeitsagentur, careers, categories, company_jobs, db, region, websearch
 from .config import CONFIG
 from .discover import NOT_A_COMPANY, _host_key, _is_known, _same, _watched_keys, company_key
 from .fetcher import BOT_HEADERS, Page, fetch_api, fetch_polite
@@ -379,16 +379,86 @@ def check_company(c: dict, ai_site: str | None, home: Page | None, watched: set[
         website_from = "ai"
         if note:
             notes.append(f"AI website: {note}")
-    if home is None:
+    found = careers.find_career(home, c["name"])  # no website: only the job systems and the web search
+    if home is None and not found.career_url:
         return {"career_state": "red", "status": "watched" if _is_known(c["name_key"], watched) else "no_career_page",
                 "notes": " · ".join(notes) or "No website found", "website": None, "website_from": None,
-                "career_url": None, "ats_type": None, "feed_url": None}
-    found = careers.find_career(home, c["name"])
+                "career_url": None, "ats_type": None, "feed_url": None, "career_step": None,
+                "career_how": "No website found" + (f"; {found.note}" if found.note else "")}
     known = _is_known(c["name_key"], watched) or bool(found.career_url and _is_known(_host_key(found.career_url), watched))
     status = "watched" if known else "new" if found.career_url else "no_career_page"
-    return {"website": home.url, "website_from": website_from, "career_url": found.career_url,
+    website, website_from = (home.url, website_from) if home else (found.website, "search" if found.website else None)
+    return {"website": website, "website_from": website_from, "career_url": found.career_url,
             "ats_type": found.ats_type, "feed_url": found.feed_url, "career_state": found.state,
-            "status": status, "notes": " · ".join(filter(None, notes + [found.note]))}
+            "status": status, "notes": " · ".join(filter(None, notes + [found.note])),
+            "career_step": found.step, "career_how": found.note}
+
+
+# ---- once: every "No careers page" company again, with the 6 steps ----------------------
+
+FINDER_RULE = "1"  # bump when the careers-page finder gets better: "No careers page" companies are checked again
+REJECTED = re.compile(r"(?:AI|OSM|Known) website: ([\w.-]+\.[a-z]{2,}) loaded, but its name doesn't match")
+
+
+def finder_rule() -> str:
+    """The web search counts too: when you add TINYFISH_API_KEY later, they are checked once more with it."""
+    return FINDER_RULE + ("+search" if websearch.search_enabled() else "")
+
+
+def recheck_due() -> bool:
+    return db.get_setting("finder_rule") != finder_rule()
+
+
+def recheck_no_career_pages(progress: dict) -> Counter:
+    """Every "No careers page" company once more (not the ones you set yourself).
+    Returns how many were found per step (1-6), "none" and "failed"."""
+    started, used_before = time.monotonic(), Counter(websearch.usage) + Counter(careers.usage)
+    todo = [c for c in db.company_rows() if c["status"] == "no_career_page" and c["status_by"] != "you"]
+    progress.update(step="Looking again for the careers pages of \"No careers page\" companies…", done=0, total=len(todo))
+    watched, stats = _watched_keys(), Counter()
+
+    def one(c: dict) -> None:
+        try:
+            home, how, why = None, c["hint_from"] or c["website_from"] or "osm", ""
+            if c["website"]:
+                home, why = careers.check_website(c["website"], c["name"])  # c24bank.com turned out to be a parked domain
+            if home is None and (m := REJECTED.search(c["notes"] or "")):  # rejected by the old, stricter name check
+                home, why = careers.check_website(m[1], c["name"])
+            if home:
+                c["hint_from"] = c["website_from"] or how
+            fields = check_company(c, None, home, watched)
+            if why and not fields["career_url"]:  # e.g. "durr.com: The site answered with an error (HTTP 502)"
+                fields["notes"] = fields["career_how"] = f"Website {why}; " + fields["career_how"].removeprefix("No website found; ")
+            db.update_company(c["id"], fields)
+            with _lock:
+                stats[fields.get("career_step") or "none"] += 1
+                progress["careers"] += bool(fields.get("career_url"))
+                progress["feeds"] += bool(fields.get("feed_url"))
+            if fields.get("career_url"):
+                log.info("Companies: %s: careers page found again (step %s, %s)", c["name"], fields["career_step"], fields["career_how"])
+        except Exception as e:  # one bad company never stops the others
+            log.warning("Companies: looking again for the careers page of %s failed (%s)", c["name"], e)
+            with _lock:
+                stats["failed"] += 1
+        with _lock:
+            progress["done"] += 1
+            done, found = progress["done"], sum(n for k, n in stats.items() if isinstance(k, int))
+        if done % 20 == 0 or done == len(todo):  # so you can watch it in the log
+            log.info("Companies: re-check %d of %d done, %d careers pages found so far (%.0f min)",
+                     done, len(todo), found, (time.monotonic() - started) / 60)
+
+    with ThreadPoolExecutor(CONFIG["companies"]["workers"]) as pool:
+        list(pool.map(one, todo))
+    db.set_setting("finder_rule", finder_rule())
+    used = Counter(websearch.usage) + Counter(careers.usage) - used_before
+    log.info("Companies: %d \"No careers page\" companies checked again in %.0f s: %s found (%s), %d still none, "
+             "%d failed; used %d web searches, %d Jina pages, %d browser pages, 0 AI requests",
+             len(todo), time.monotonic() - started, sum(n for k, n in stats.items() if isinstance(k, int)),
+             ", ".join(f"step {k}: {stats[k]}" for k in sorted(k for k in stats if isinstance(k, int))) or "-",
+             stats["none"], stats["failed"], used["searches"], used["jina"], used["browser"])
+    progress["notes"].append(f"{sum(n for k, n in stats.items() if isinstance(k, int))} of {len(todo)} \"No careers "
+                             f"page\" companies have a careers page now")
+    return stats
 
 
 # ---- re-checking careers pages found with older, looser rules ----------------------------
@@ -460,7 +530,8 @@ def progress() -> dict:
 def start(kind: str = "run", text: str = "", label: str = "", night_limit: bool = True) -> bool:
     """Start a run in the background. False if one is already running (only one at a time).
     kind "import": the companies in `text` (names or a link), marked with `label`;
-    kind "lookalikes": companies similar to the ones whose jobs you saved or applied to.
+    kind "lookalikes": companies similar to the ones whose jobs you saved or applied to;
+    kind "recheck": look again for the careers pages of the "No careers page" companies.
     night_limit False: no stop before the morning, even if started at night."""
     with _lock:
         if _progress["running"]:
@@ -492,6 +563,9 @@ def _run(kind: str = "run", text: str = "", label: str = "", night_limit: bool =
     _progress["stop_at"] = night_deadline() if night_limit else None
     try:
         ids = None  # None = all companies that are due
+        if kind == "recheck":  # once after an update: the "No careers page" companies, nothing else
+            recheck_no_career_pages(_progress)
+            return
         recheck_career_pages()
         company_jobs.reread_after_area_change()
         if kind == "import":

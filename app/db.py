@@ -200,6 +200,8 @@ MIGRATIONS["companies"] = {
     "contact_url": "TEXT",           # the page the email was on
     "contact_checked_at": "TEXT",    # when the Impressum was read (once)
     "jobs_part_hash": "TEXT",        # the page's job part when the AI last read it: unchanged = no AI request
+    "career_step": "INTEGER",        # how its careers page was found: 1-6 (careers.STEPS), empty = not found
+    "career_how": "TEXT",            # e.g. "Careers page (web search), no applicant system found", or why none was found
 }
 
 AFTER_ADDING = {

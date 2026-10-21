@@ -178,6 +178,9 @@ def board_url(b: ats.Board) -> str | None:
         "Recruitee": lambda: f"https://{b.key}.recruitee.com",
         "Workday": lambda: f"https://{b.key}.{b.extra['wd']}.myworkdayjobs.com/"
                            + (f"{b.extra['lang']}/" if b.extra.get("lang") else "") + b.extra["site"],
+        "PowerApps": lambda: b.extra["page"],
+        "Oracle": lambda: f"https://{b.key}/hcmUI/CandidateExperience/{b.extra['lang']}/sites/{b.extra['site']}/jobs",
+        "SuccessFactors": lambda: f"https://{b.key}{b.extra['path']}/search/?q=&locale={b.extra['locale']}",
     }.get(b.system, lambda: None)()
 
 

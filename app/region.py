@@ -373,7 +373,7 @@ def it_type(c: dict) -> bool:
         or any(k.endswith((":osm:it", ":osm:software", ":osm:telecommunication")) for k in sources)
 
 
-IMPRESSUM = re.compile(r"impressum|imprint|legal[- ]?notice|anbieterkennzeichnung", re.I)
+IMPRESSUM = careers.IMPRESSUM
 CONTACT = re.compile(r"kontakt|contact", re.I)
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}", re.I)
 AT = re.compile(r"\s*[\[({]\s*(?:at|ät|@)\s*[\])}]\s*|\s+(?:at|ät)\s+", re.I)

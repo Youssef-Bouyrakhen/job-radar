@@ -90,7 +90,7 @@ def check_url(url: str, browser: bool = True) -> CheckResult:
 
 
 def _from_page(page: Page, url: str, method: str) -> CheckResult | None:
-    board = ats.detect(page.html)  # career page with an embedded Personio/Workday/... list
+    board = ats.detect(page.html) or ats.detect_job_site(page.url, page.html)  # an embedded Personio/Workday/... list
     if board:
         return _from_board(board, url)
     jobs, name = generic.extract(page.html, page.url)

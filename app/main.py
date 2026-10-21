@@ -51,6 +51,8 @@ async def lifespan(app: FastAPI):
     if background:
         scheduler.start()
         threading.Thread(target=recheck_no_jobs, daemon=True, name="recheck-no-jobs").start()  # once per rule change
+        if companies.recheck_due():  # once per finder change: the "No careers page" companies (shown on the Companies page)
+            companies.start("recheck")
     yield
     if background:
         scheduler.stop()
@@ -252,9 +254,10 @@ def coverage():
 
 
 @app.post("/api/companies/run")
-def run_companies(until_done: bool = False):
+def run_companies(until_done: bool = False, kind: str = "run"):
     # until_done: no morning stop (for a run started by hand at night); a run already going is just reported on
-    companies.start(night_limit=not until_done)
+    # kind=recheck: look again for the careers pages of all "No careers page" companies
+    companies.start("recheck" if kind == "recheck" else "run", night_limit=not until_done)
     return {"progress": companies.progress()}
 
 

@@ -2,30 +2,48 @@
 
 1. Website: the OpenStreetMap tag if there is one, otherwise the AI's guess. It only counts
    if it loads and really belongs to the company (its name is in the address or on the page).
-2. Careers page: links on the homepage (Karriere, Jobs, Stellen, Careers, Join us), then the
-   sitemap, then the usual addresses (/karriere, /jobs, /career).
+   A short address (eb-sim.de for "EB - Sustainable Investment Management") counts when its
+   Impressum names the company.
+2. Careers page, in this order; the first that works wins and its step is saved (STEPS):
+   1 homepage links (Karriere, Jobs, Stellen, ...), also to another website (c24.de -> powerappsportals.com)
+   2 the usual addresses: jobs. / karriere. / career(s). subdomains, the sitemap, /karriere, /jobs ...
+   3 the homepage in a hidden browser, when its menu is built with JavaScript
+   4 known job systems guessed from the name (Personio, Softgarden, Join, Recruitee, ...)
+   5 a web search "<company> Karriere" (TinyFish, free; job portals like Indeed are skipped)
+   6 Jina Reader for a careers page built with JavaScript that steps 1-3 found but couldn't read
 3. Applicant system: embedded Personio, Join, Softgarden, Recruitee, d.vinci, rexx, onlyfy,
-   SmartRecruiters, Greenhouse, Lever, Workday or SuccessFactors boards are recognised and
-   their direct job list is saved.
+   SmartRecruiters, Greenhouse, Lever, Workday, Power Pages, Oracle Recruiting or SuccessFactors
+   boards are recognised and their direct job list is saved.
 
 Everything goes through fetch_polite: honest User-Agent, robots.txt, max 1 request/s per
-site. No logins, no bot-protection tricks, and only links that actually loaded are saved.
+site. No logins, no bot-protection tricks (a site that refuses us is left alone), and only
+links that actually loaded are saved.
 """
+import html
 import re
+import threading
 import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
+from . import websearch
 from .discover import ANCHOR, CAREERS_LINK, _belongs_to, _fold, _words, board_url, company_key
-from .extractors import ats
-from .fetcher import Page, fetch_polite, robots_sitemaps
+from .extractors import ats, generic
+from .fetcher import BOT_NAME, Page, browser_available, fetch_polite, fetch_with_browser, robots_allows, robots_sitemaps
 from .source_types import is_portal
 
 # Social networks, maps, directories: never a company's own website
 NOT_A_WEBSITE = ("facebook.com", "instagram.com", "twitter.com", "x.com", "youtube.com", "google.com",
                  "goo.gl", "wikipedia.org", "kununu.com", "northdata.de", "gelbeseiten.de", "dasoertliche.de",
                  "11880.com", "cylex.de", "wlw.de", "firmenwissen.de", "unternehmensregister.de")
+# Web search results that are never the company's own careers page
+NOT_OWN_JOBS = ("indeed.", "stepstone.", "linkedin.", "kununu.", "glassdoor.", "xing.", "jobware.", "monster.",
+                "jobteaser.", "studysmarter.", "berufsstart.", "studyflix.", "workingstudentjobs.", "jobstairs.",
+                "adzuna.", "kimeta.", "connecticum.", "campusjaeger.", "absolventa.", "meinestadt.", "jooble.",
+                "arbeitsagentur.", "northdata.", "wikipedia.", "facebook.", "instagram.", "youtube.", "tiktok.")
 PARKED = re.compile(r"domain (?:is|may be) for sale|diese domain (?:kaufen|steht zum verkauf)|"
+                    r"domain not available|domain nicht verf[üu]gbar|"
                     r"domain kaufen|buy this domain|sedoparking|parkingcrew|this domain is parked|"
                     r"domain wurde registriert|hier entsteht eine neue", re.I)
 TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
@@ -50,6 +68,12 @@ JOB_WORDS = re.compile(r"stellenangebot|offene[n]? stellen|\bjobs?\b|karriere|be
                        r"vacanc|job openings|career|ausschreibung", re.I)
 
 
+STEPS = {1: "homepage link", 2: "usual address", 3: "browser (JavaScript menu)", 4: "known job system",
+         5: "web search", 6: "Jina Reader"}
+usage = Counter()  # hidden-browser pages since the app started (web search and Jina: websearch.usage)
+_browser = threading.Lock()  # one hidden browser at a time: it needs a lot of memory
+
+
 @dataclass
 class Career:
     career_url: str | None = None
@@ -57,6 +81,8 @@ class Career:
     feed_url: str | None = None
     state: str = "red"           # green: job feed / amber: careers page / red: nothing found
     note: str = ""
+    step: int | None = None      # how it was found (STEPS), None = not found
+    website: str | None = None   # the company's own website, when the web search found it
 
 
 # ---- small helpers ---------------------------------------------------------------
@@ -123,6 +149,32 @@ def belongs(page: Page, name: str) -> bool:
     return len(words) >= 2 and sum(w in _compact(title) for w in words) >= 2
 
 
+IMPRESSUM = re.compile(r"impressum|imprint|legal[- ]?notice|anbieterkennzeichnung", re.I)
+
+
+def _short_form(domain: str, name: str) -> bool:
+    """eb-sim.de for "EB - Sustainable Investment Management": the address is a short form of the
+    name (its letters in the same order, starting with the same letter)."""
+    full = company_key(name)
+    if len(domain) < 2 or not full or domain[0] != full[0] or len(domain) >= len(full):
+        return False
+    letters = iter(full)
+    return all(ch in letters for ch in domain)
+
+
+def impressum_names(home: Page, name: str) -> bool:
+    """Does the website's Impressum name the company? (By law every German company website has one.)"""
+    links = [urljoin(home.url, href.strip()) for href, text in ANCHOR.findall(home.html)
+             if IMPRESSUM.search(href + " " + re.sub(r"<[^>]+>", " ", text))]
+    for url in list(dict.fromkeys(links))[:2] or [urljoin(home.url, "/impressum")]:
+        if _site(url) != _site(home.url):
+            continue
+        page = fetch_polite(url)
+        if page.ok and company_key(name) in _compact(html.unescape(_text_head(page.html, len(page.html)))):  # "EB &ndash; ..."
+            return True
+    return False
+
+
 def check_website(url: str | None, name: str) -> tuple[Page | None, str]:
     """(homepage, note). The homepage is None if it doesn't load or isn't this company's."""
     url = normalize_url(url or "")
@@ -139,7 +191,9 @@ def check_website(url: str | None, name: str) -> tuple[Page | None, str]:
     if PARKED.search(page.html[:20000]):
         return None, f"{host(page.url)} is a parked domain"
     if not belongs(page, name):
-        return None, f"{host(page.url)} loaded, but its name doesn't match {name}"
+        domain = _compact(host(page.url).split(".")[-2] if "." in host(page.url) else host(page.url))
+        if not (_short_form(domain, name) and impressum_names(page, name)):
+            return None, f"{host(page.url)} loaded, but its name doesn't match {name}"
     return page, ""
 
 
@@ -174,12 +228,13 @@ def _feeds_of_known_board(b: ats.Board) -> list[str]:
     return [u for u in (feed, board_url(b)) if u]
 
 
-def find_systems(html: str) -> list[tuple[str, str, list[str]]]:
+def find_systems(html: str, url: str = "") -> list[tuple[str, str, list[str]]]:
     """Applicant systems linked or embedded in a page: (system, company id, addresses to try)."""
     found = []
-    if board := ats.detect(html):
+    if board := ats.detect(html) or (url and ats.detect_job_site(url, html)):
         if board.system != "StudySmarter":  # a job portal, not a company's applicant system
-            found.append((board.system, board.key, _feeds_of_known_board(board)))
+            key = board.extra.get("site", board.key) if board.system == "Oracle" else board.key
+            found.append((board.system, key, _feeds_of_known_board(board)))
     text = html.replace("\\/", "/")
     for system, pattern, templates in EXTRA_SYSTEMS:
         for m in re.finditer(pattern, text, re.I):
@@ -193,8 +248,11 @@ def find_systems(html: str) -> list[tuple[str, str, list[str]]]:
 
 
 def _board_belongs(system: str, key: str, name: str) -> bool:
+    """key: the company's id in the system (for Oracle its site name: "career-synlab", or just "CX_1")."""
     if system == "SuccessFactors":
         key = key.rsplit("=", 1)[-1]  # career5.successfactors.eu/career?company=acmeP -> acmeP
+    if system == "Oracle" and re.fullmatch(r"(?:CX|careers?|jobs?)(?:_\d+)?", key, re.I):
+        return True  # a generic site name: only trusted because the company's own page links to it
     return _belongs_to(key, name)
 
 
@@ -208,17 +266,27 @@ def _first_loading(urls: list[str]) -> str | None:
 
 # ---- 3. the careers page ---------------------------------------------------------------
 
-def _career_links(page: Page, pattern: re.Pattern = CAREERS_LINK) -> list[str]:
-    """Careers links on a page that stay on the company's own site (or go to an applicant system)."""
+def not_own_jobs(url: str) -> bool:
+    """A job portal, social network or directory: never the company's own careers page."""
+    h = host(url)
+    return is_portal(url) or any(h == d or h.endswith("." + d) for d in NOT_A_WEBSITE) \
+        or any(d in h for d in NOT_OWN_JOBS)
+
+
+def _career_links(page: Page, pattern: re.Pattern = CAREERS_LINK, other_sites: bool = False) -> list[str]:
+    """Careers links on a page that stay on the company's own site (or go to an applicant system).
+    other_sites: also a "Karriere" link to another website (c24.de -> c24-recruiting.powerappsportals.com)."""
     links = []
     for href, text in ANCHOR.findall(page.html):
         url = urljoin(page.url, href.strip())
         if not url.startswith("http"):
             continue
-        label = href + " " + re.sub(r"<[^>]+>", " ", text)
-        if not pattern.search(label):
+        words = re.sub(r"<[^>]+>", " ", text)
+        if not pattern.search(href + " " + words):
             continue
-        if (_site(url) == _site(page.url) or find_systems(url)) and not is_editorial(url):
+        own = _site(url) == _site(page.url) or find_systems(url)
+        other = other_sites and pattern.search(words) and not not_own_jobs(url)
+        if (own or other) and not is_editorial(url):
             links.append(url.split("#")[0])
     links = list(dict.fromkeys(links))
     # Applicant systems first, then the main careers page: its address ends with a careers word
@@ -301,7 +369,7 @@ def _is_career_page(page: Page, home: Page) -> bool:
 
 def _system_on(page: Page, name: str) -> tuple[str, str] | None:
     """(system, job-list address that loaded) for an applicant system on this page."""
-    for system, key, urls in find_systems(page.url + " " + page.html):
+    for system, key, urls in find_systems(page.url + " " + page.html, page.url):
         if not _board_belongs(system, key, name):
             continue
         if url := _first_loading(urls):
@@ -309,42 +377,183 @@ def _system_on(page: Page, name: str) -> tuple[str, str] | None:
     return None
 
 
-def find_career(home: Page, name: str) -> Career:
-    """Look for the careers page and its applicant system, starting from the homepage."""
-    if found := _system_on(home, name):  # the homepage itself embeds the job list
-        return Career(home.url, found[0], found[1], "green", f"{found[0]} job list on the homepage")
+def _js_menu(home: Page) -> bool:
+    """A homepage whose menu is built with JavaScript: hardly any links in the downloaded HTML."""
+    return len(ANCHOR.findall(home.html)) < 15 or bool(re.search(
+        r'id=["\'](?:root|app|__next|__nuxt)["\']|__NEXT_DATA__|ng-version=|data-reactroot|window\.__NUXT__', home.html[:300000]))
 
-    candidates = _career_links(home)[:3]
-    how = "homepage link"
-    if not candidates:
-        candidates, how = _from_sitemap(home), "sitemap"
-    if not candidates:
-        candidates, how = [urljoin(home.url, p) for p in COMMON_PATHS], "usual address"
 
-    tried = 0
-    for url in candidates:
-        if tried >= 5:
-            break
-        tried += 1
-        if direct := find_systems(url):  # the link goes straight to an applicant system
-            system, key, urls = direct[0]
-            if _board_belongs(system, key, name) and (feed := _first_loading(urls + [url])):
-                return Career(url, system, feed, "green", f"{system} job list ({how})")
-            continue
-        page = follow_script_redirect(fetch_polite(url))
-        if not _is_career_page(page, home):
-            continue
-        if found := _system_on(page, name):
-            return Career(page.url, found[0], found[1], "green", f"{found[0]} job list ({how})")
+def _looks_empty(page: Page) -> bool:
+    """A careers address whose text is built with JavaScript: little visible text in the HTML."""
+    return len(_text_head(page.html, len(page.html)).split()) < 150
+
+
+class _Search:
+    """The steps for one company: each address is tried once, pages built with JavaScript are
+    remembered for Jina Reader (step 6)."""
+
+    def __init__(self, name: str, home: Page | None):
+        self.name, self.home = name, home
+        self.tried: set[str] = set()
+        self.js_pages: list[str] = []
+
+    def career(self, url: str, page: Page, step: int, note: str = "") -> Career:
+        how = STEPS[step] + (f": {note}" if note else "")
+        if found := _system_on(page, self.name):
+            return Career(page.url, found[0], found[1], "green", f"{found[0]} job list ({how})", step)
         # One step further: "Offene Stellen" / "Alle Jobs" often leads to the applicant system
-        for deeper in _career_links(page, JOB_LIST_LINK)[:2]:
+        for deeper in _career_links(page, JOB_LIST_LINK, other_sites=True)[:2]:
             if direct := find_systems(deeper):
                 system, key, urls = direct[0]
-                if _board_belongs(system, key, name) and (feed := _first_loading(urls + [deeper])):
-                    return Career(page.url, system, feed, "green", f"{system} job list ({how})")
+                if _board_belongs(system, key, self.name) and (feed := _first_loading(urls + [deeper])):
+                    return Career(page.url, system, feed, "green", f"{system} job list ({how})", step)
                 continue
             sub = fetch_polite(deeper)
-            if sub.ok and (found := _system_on(sub, name)):
-                return Career(page.url, found[0], found[1], "green", f"{found[0]} job list ({how})")
-        return Career(page.url, None, None, "amber", f"Careers page ({how}), no applicant system found")
-    return Career(note="No careers page found (homepage links, sitemap and usual addresses checked)")
+            if sub.ok and (found := _system_on(sub, self.name)):
+                return Career(page.url, found[0], found[1], "green", f"{found[0]} job list ({how})", step)
+        return Career(page.url, None, None, "amber", f"Careers page ({how}), no applicant system found", step)
+
+    def attempt(self, urls: list[str], step: int, limit: int, must_name: bool = False) -> Career | None:
+        """Try up to `limit` new addresses. must_name: the page must name the company (another website)."""
+        tried = 0
+        for url in urls:
+            if url in self.tried or tried >= limit:
+                continue
+            self.tried.add(url)
+            tried += 1
+            if direct := find_systems(url):  # straight to an applicant system
+                system, key, feeds = direct[0]
+                if _board_belongs(system, key, self.name) and (feed := _first_loading(feeds + [url])):
+                    return Career(url, system, feed, "green", f"{system} job list ({STEPS[step]})", step)
+                continue
+            page = follow_script_redirect(fetch_polite(url))
+            if not page.ok:
+                continue
+            other = not self.home or _site(page.url) != _site(self.home.url)
+            if (must_name or other) and not belongs(page, self.name) and not _system_on(page, self.name):
+                continue  # another website that doesn't name the company
+            problem = career_page_problem(page, self.home.url if self.home else None)
+            if problem and "no job words" in problem and _looks_empty(page):
+                self.js_pages.append(page.url)
+            if not problem or _system_on(page, self.name):
+                return self.career(url, page, step)
+        return None
+
+    def run(self) -> Career:
+        home, name = self.home, self.name
+        if home:
+            # 1. homepage links, also to another website
+            if found := _system_on(home, name):
+                return Career(home.url, found[0], found[1], "green", f"{found[0]} job list on the homepage ({STEPS[1]})", 1)
+            if found := self.attempt(_career_links(home, other_sites=True), 1, 4):
+                return found
+            # 2. the usual addresses: subdomains, sitemap, paths
+            site = _site(home.url)
+            subdomains = [f"https://{s}.{site}/" for s in ("jobs", "karriere", "career", "careers") if valid_host(f"{s}.{site}")]
+            if found := self.attempt(subdomains, 2, 4) or self.attempt(_from_sitemap(home), 2, 3) \
+                    or self.attempt([urljoin(home.url, p) for p in COMMON_PATHS], 2, 4):
+                return found
+            # 3. a menu built with JavaScript: the homepage in a hidden browser
+            if _js_menu(home) and browser_available() and robots_allows(home.url, BOT_NAME):
+                with _browser:
+                    usage["browser"] += 1
+                    shown = fetch_with_browser(home.url)
+                if shown.ok:
+                    if found := _system_on(shown, name):
+                        return Career(home.url, found[0], found[1], "green", f"{found[0]} job list ({STEPS[3]})", 3)
+                    if found := self.attempt(_career_links(shown, other_sites=True), 3, 4):
+                        return found
+        # 4. known job systems guessed from the name: only boards that have jobs, a name long enough to be sure,
+        # and only systems where each company has its own address (a wrong guess costs their servers nothing)
+        for slug in _slugs(name):
+            for url in (f"https://{slug}.jobs.personio.de", f"https://{slug}.jobs.personio.com", f"https://{slug}.recruitee.com",
+                        f"https://{slug}.softgarden.io/de/vacancies"):
+                if found := self._guess(url):
+                    return found
+        # 5. web search "<company> Karriere"
+        if found := self.web_search():
+            return found
+        # 6. careers pages built with JavaScript: read them with Jina Reader
+        for url in self.js_pages[:2]:
+            if found := self._jina(url):
+                return found
+        checked = ("homepage links, usual addresses, " + ("browser, " if _js_menu(home) else "") if home else "") + "job systems" \
+                  + (", web search" if websearch.search_enabled() else "") + (", Jina Reader" if self.js_pages else "")
+        return Career(note=f"No careers page found ({checked} checked)")
+
+    def _guess(self, url: str) -> Career | None:
+        from .sources import check_url  # sources -> ... -> this module: load late
+        if url in self.tried or not valid_host(host(url)):
+            return None
+        self.tried.add(url)
+        try:
+            result = check_url(url, browser=False)
+        except Exception:
+            return None
+        if result.status != "green":
+            return None
+        if board := ats.detect(url):
+            feeds = _feeds_of_known_board(board)
+            return Career(board_url(board) or url, board.system, feeds[0] if feeds else url, "green",
+                          f"{board.system} job list ({STEPS[4]})", 4)
+        system = find_systems(url)[0][0]  # Softgarden: its page lists the jobs
+        return Career(url, system, url, "green", f"{system} job list ({STEPS[4]})", 4)
+
+    def web_search(self) -> Career | None:
+        results = websearch.search(f"{self.name} Karriere")
+        own = _site(self.home.url) if self.home else None
+        ranked = []
+        for n, r in enumerate(results):
+            url = r["url"]
+            if not url.startswith("http") or not_own_jobs(url) or is_editorial(url):
+                continue
+            if find_systems(url):
+                ranked.append((0, n, url))  # a known job system
+            elif own and _site(url) == own:
+                ranked.append((1, n, url))  # the company's own website
+            elif not own and _named_like(host(url), self.name):
+                ranked.append((2, n, url))  # a website named like the company (c24.de for C24 Bank)
+        found = self.attempt([u for _, _, u in sorted(ranked)], 5, 3, must_name=True)
+        if found and not self.home and not find_systems(found.career_url):
+            found.website = f"{urlparse(found.career_url).scheme}://{urlparse(found.career_url).netloc}/"
+        return found
+
+    def _jina(self, url: str) -> Career | None:
+        text = websearch.read_page(url)
+        if not text:
+            return None
+        for system, key, feeds in find_systems(text):
+            if _board_belongs(system, key, self.name) and (feed := _first_loading(feeds)):
+                return Career(url, system, feed, "green", f"{system} job list ({STEPS[6]})", 6)
+        if JOB_WORDS.search(text) and (generic.GENDER.search(text) or generic.JOB_WORD.search(text)):
+            return Career(url, None, None, "amber", f"Careers page built with JavaScript ({STEPS[6]})", 6)
+        return None
+
+
+GENERIC_TAILS = ("", "group", "gruppe", "holding", "online", "karriere", "jobs", "career", "careers", "de", "deutschland")
+
+
+def _named_like(hostname: str, name: str) -> bool:
+    """A website named after the company, found by the web search: c24.de for "C24 Bank", acme-group.com
+    for "Acme". Not duerrdental.com for "Dürr": another word in the address is another company."""
+    domain = _compact(hostname.split(".")[-2] if "." in hostname else hostname)
+    plain = name.translate(str.maketrans("äöüÄÖÜ", "aouAOU"))  # durr.com for Dürr (not only duerr.com)
+    return bool(domain) and any((len(domain) >= 3 and key.startswith(domain))
+                                or (domain.startswith(key) and domain[len(key):] in GENERIC_TAILS)
+                                for key in {company_key(name), company_key(plain)} if key)
+
+
+LEGAL_ONLY = re.compile(r"\b(?:gmbh|mbh|ag|se|kg|kgaa|ug|ohg|gbr|co|e\.?\s?v|haftungsbeschraenkt)\b\.?", re.I)
+
+
+def _slugs(name: str) -> list[str]:
+    """Job-system addresses from the name: "public-cloud", and with words _words leaves out ("publiccloudgroup")."""
+    short = _words(name)
+    full = re.sub(r"[^a-z0-9]+", " ", LEGAL_ONLY.sub(" ", _fold(name))).split()
+    return [s for s in dict.fromkeys(["-".join(full), "".join(full), "-".join(short), "".join(short)]) if 5 <= len(s) <= 63]
+
+
+def find_career(home: Page | None, name: str) -> Career:
+    """Look for the careers page and its applicant system: steps 1-6 (STEPS), the first that works wins.
+    home None: the company's website isn't known, only the job systems and the web search are tried."""
+    return _Search(name, home).run()

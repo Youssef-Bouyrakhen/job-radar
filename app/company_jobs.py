@@ -27,10 +27,10 @@ from datetime import date, datetime, timedelta, timezone
 
 from bs4 import BeautifulSoup
 
-from . import ai, db, telegram
+from . import ai, db, telegram, websearch
 from .config import CONFIG
 from .dedup import dedup_key
-from .discover import NEARBY, _is_known, _same, _watched_keys, _with_search, board_url, company_key
+from .discover import NEARBY, _belongs_to, _is_known, _same, _watched_keys, _with_search, board_url, company_key
 from .extractors import Job, ats, clean, generic
 from .fetcher import fetch_polite
 from .filters import detect_hours, get_filter
@@ -161,7 +161,31 @@ def read_without_ai(c: dict) -> dict:
         if part:
             return {"ai_part": part, "ai_links": links, "page_url": page.url}
         note = note or "The careers page shows no job titles (maybe they load with JavaScript)"
+        if found := _read_with_jina(c["name"], page.url):
+            return found
     return {"jobs": [], "method": None, "note": note or "No careers page to read"}
+
+
+MD_LINK = re.compile(r"\[([^\]]{3,200})\]\((https?://[^)\s]+)[^)]*\)")
+
+
+def _read_with_jina(company: str, url: str) -> dict | None:
+    """A job list built with JavaScript, read the way a browser shows it (Jina Reader, free).
+    An applicant system in it is read directly (and remembered); otherwise the AI gets its job lines."""
+    text = websearch.read_page(url)
+    if not text:
+        return None
+    if (board := ats.detect(text)) and board.system in ats.FETCHERS and _belongs_to(
+            board.extra.get("site", board.key) if board.system == "Oracle" else board.key, company):
+        try:
+            return {"jobs": ats.fetch_jobs(board, "")[:MAX_JOBS], "method": f"{board.system} feed",
+                    "feed_url": board_url(board)}
+        except Exception as e:
+            log.info("Companies: the %s list found by Jina Reader for %s could not be read (%s)", board.system, company, e)
+    as_link = lambda m: '<a href="%s">%s</a>' % (m[2], m[1])
+    html_text = "\n".join("<p>%s</p>" % MD_LINK.sub(as_link, line) for line in text.splitlines())
+    part, links = relevant_part(html_text, url)
+    return {"ai_part": part, "ai_links": links, "page_url": url} if part else None
 
 
 # ---- 2. saving them through the normal job flow ----------------------------------------
@@ -522,6 +546,8 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False) -> int:
                 progress["warnings"].append(ai.stop_note(e, "some job lists will be read next run"))
                 continue
         fields, new = save_jobs(c, r["jobs"])
+        if r.get("feed_url"):  # an applicant system Jina Reader found: read directly next time
+            fields["feed_url"] = r["feed_url"]
         db.save_company_check(c["id"], {**fields, "jobs_method": r.get("method"), "jobs_note": r.get("note"),
                                         "jobs_part_hash": part_hash}, stamp="jobs_read_at")
         new_good += sum(1 for j in new if j["filter_passed"])
