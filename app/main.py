@@ -257,7 +257,8 @@ def coverage():
 def run_companies(until_done: bool = False, kind: str = "run"):
     # until_done: no morning stop (for a run started by hand at night); a run already going is just reported on
     # kind=recheck: look again for the careers pages of all "No careers page" companies
-    companies.start("recheck" if kind == "recheck" else "run", night_limit=not until_done)
+    # kind=read: read the jobs of every company never read (AI pages beyond the per-run limit wait for the night)
+    companies.start(kind if kind in ("recheck", "read") else "run", night_limit=not until_done)
     return {"progress": companies.progress()}
 
 

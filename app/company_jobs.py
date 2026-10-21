@@ -586,6 +586,23 @@ def run(progress: dict, ids: set[int] | None = None) -> None:
         _score_and_send()
 
 
+def read_unread(progress: dict) -> None:
+    """Once, started by hand: every company with a careers page whose jobs were never read, now.
+    Feeds and structured data need no AI; the AI reads max_ai_pages_per_run pages, the others
+    stay unread and are read first in the next night runs (the AI's daily reserve stays safe)."""
+    todo = [c for c in companies_to_read(1_000_000) if not c["jobs_read_at"]]
+    new_good = read_jobs(todo, progress)
+    ids = {c["id"] for c in todo}
+    waiting = sum(1 for c in db.company_rows() if c["id"] in ids and not c["jobs_read_at"])
+    log.info("Companies: read %d of %d never-read job lists, %d new jobs (%d match your filter), %d wait for the AI",
+             progress["jobs_read"], len(todo), progress["new_jobs"], new_good, waiting)
+    progress["notes"].append(f"{progress['jobs_read']} of {len(todo)} never-read job lists read; "
+                             f"{waiting} need the AI and are read in the next night runs")
+    rank(progress)
+    if new_good:
+        _score_and_send()
+
+
 def rank(progress: dict) -> None:
     """Fit score for every company, and the Initiativ list."""
     progress["step"] = "Ranking companies…"

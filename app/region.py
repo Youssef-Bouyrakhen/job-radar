@@ -438,21 +438,24 @@ def _contact(c: dict) -> dict:
 
 
 def settle(progress: dict) -> dict:
-    """Give every checked town company its final status. Returns {status: how many changed}."""
+    """Give every checked company with a careers page, and every checked town company, its final status.
+    Returns {status: how many changed}."""
     from .company_jobs import size_of
     changed = {s: 0 for s in FINAL}
     contacts = []
     for c in db.company_rows():
         # Watched links, Initiativ and Skipped are final already; a status you chose is never changed
-        if not c["town"] or c["status_by"] == "you" or c["status"] not in ("new", "no_career_page") or not c["last_checked"]:
+        if c["status_by"] == "you" or c["status"] not in ("new", "no_career_page") or not c["last_checked"]:
             continue
         sources = json.loads(c["sources"] or "{}")
-        if c["career_url"]:
+        if c["career_url"]:  # any company, also outside the towns (the ranking made the Initiativ ones before)
             if c["status"] == "new" and c["jobs_read_at"]:  # read, no good job right now, not Initiativ
-                note = "Careers page read every week; its good jobs come to you" + \
+                note = "Careers page read every day at 19:00; its good jobs come to you" + \
                        ("" if c["jobs_method"] else " (its job list couldn't be read: open the careers page yourself)")
                 db.update_company(c["id"], {"status": "watched", "status_note": note})
                 changed["watched"] += 1
+        elif not c["town"]:
+            continue  # the rules below are for the town companies only
         elif not c["website"] and all(k.endswith(":register") for k in sources):
             db.update_company(c["id"], {"status": "skipped", "status_note": "Only in the company register (2019) and no "
                                         "website found: probably closed, or a company without staff"})

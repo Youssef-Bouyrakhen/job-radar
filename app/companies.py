@@ -531,7 +531,8 @@ def start(kind: str = "run", text: str = "", label: str = "", night_limit: bool 
     """Start a run in the background. False if one is already running (only one at a time).
     kind "import": the companies in `text` (names or a link), marked with `label`;
     kind "lookalikes": companies similar to the ones whose jobs you saved or applied to;
-    kind "recheck": look again for the careers pages of the "No careers page" companies.
+    kind "recheck": look again for the careers pages of the "No careers page" companies;
+    kind "read": read the jobs of every company never read (company_jobs.read_unread).
     night_limit False: no stop before the morning, even if started at night."""
     with _lock:
         if _progress["running"]:
@@ -565,6 +566,10 @@ def _run(kind: str = "run", text: str = "", label: str = "", night_limit: bool =
         ids = None  # None = all companies that are due
         if kind == "recheck":  # once after an update: the "No careers page" companies, nothing else
             recheck_no_career_pages(_progress)
+            return
+        if kind == "read":  # once, by hand: the jobs of every company never read, then the statuses
+            company_jobs.read_unread(_progress)
+            _step("the final statuses", lambda: region.settle(_progress))
             return
         recheck_career_pages()
         company_jobs.reread_after_area_change()
