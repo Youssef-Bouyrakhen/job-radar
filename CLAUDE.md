@@ -12,6 +12,8 @@ The owner is a beginner: explain in plain language and give exact commands.
 - `app/main.py` - web server and the API the dashboard calls (`/api/info` returns the version)
 - `app/__init__.py` - `VERSION`; bump it with every change you deploy
 - `app/config.py` - loads `config.yaml`, then `config.local.yaml` on top (personal, not in git)
+- `app/clock.py` - German time (Europe/Berlin, summer/winter time) for everything shown or planned;
+  the server runs on UTC, the database stores UTC
 - `app/db.py` - SQLite, one file: `data/jobradar.db` (`JOBRADAR_DB` env var overrides the path)
 - `app/scheduler.py` - background checks (APScheduler)
 - `app/checker.py` - checks links, saves new jobs; `app/sources.py` - is a link trackable

@@ -9,20 +9,22 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from .checker import check_due_links
+from .clock import GERMANY, now
 from .config import CONFIG
 
-scheduler = BackgroundScheduler()
+# German time, summer / winter time included: "19:00" is 19:00 in Germany all year (the server's clock runs on UTC)
+scheduler = BackgroundScheduler(timezone=GERMANY)
 
 
 def start() -> None:
     scheduler.add_job(check_due_links, "interval", seconds=TICK.total_seconds(), id="check_due_links",
                       max_instances=1, coalesce=True, misfire_grace_time=None,
-                      next_run_time=datetime.now() + timedelta(seconds=20))
+                      next_run_time=now() + timedelta(seconds=20))
     apps = CONFIG["applications"]
     if apps.get("enabled"):  # replies to your applications (the "Bewerbungen" label)
         from . import applications
         scheduler.add_job(applications.scheduled, "interval", minutes=apps["check_every_minutes"], id="applications",
-                          max_instances=1, coalesce=True, next_run_time=datetime.now() + timedelta(seconds=60))
+                          max_instances=1, coalesce=True, next_run_time=now() + timedelta(seconds=60))
     hour = CONFIG["companies"].get("daily_run_hour")
     if hour is not None:  # Company Discovery Engine once a day (German time), like pressing "Run discovery"
         from . import companies  # imported here: companies needs the checker's modules first
@@ -36,7 +38,7 @@ def start() -> None:
     if CONFIG["companies"].get("auto_resume", True):  # Companies runs go on by themselves while there is work
         from . import auto_resume
         scheduler.add_job(auto_resume.tick, "interval", seconds=TICK.total_seconds(), id="auto_resume",
-                          max_instances=1, coalesce=True, next_run_time=datetime.now() + timedelta(minutes=2))
+                          max_instances=1, coalesce=True, next_run_time=now() + timedelta(minutes=2))
     weekly = CONFIG["companies"].get("weekly_summary") or {}
     if weekly.get("day"):  # Sunday evening: one Telegram message with the week's numbers
         from . import weekly as summary
@@ -46,7 +48,6 @@ def start() -> None:
 
 
 TICK = timedelta(minutes=5)
-GERMANY = "Europe/Berlin"  # the server's clock runs on UTC: "19:00" means 19:00 in Germany
 
 
 def next_check_time(due: datetime | None) -> datetime | None:

@@ -26,7 +26,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import httpx
 
-from . import db, details
+from . import clock, db, details
 from .config import CONFIG
 from .fetcher import BOT_HEADERS
 from .filters import hours_of, max_per_week
@@ -202,7 +202,7 @@ def _max_hours(job: dict) -> float | None:
 def _age_days(job: dict) -> float:
     when = job["posted_at"] or job["first_seen"]
     if len(when) == 10:  # a day only: that day in Germany
-        return (date.today() - date.fromisoformat(when)).days
+        return (clock.today() - date.fromisoformat(when)).days
     return (datetime.now(timezone.utc) - datetime.fromisoformat(when)).total_seconds() / 86400
 
 

@@ -24,11 +24,11 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 
 from . import ai, db, telegram, websearch
+from .clock import GERMANY, today
 from .config import CONFIG
 from .dedup import dedup_key
 from .discover import NEARBY, _belongs_to, _is_known, _same, _watched_keys, _with_search, board_url, company_key
@@ -200,7 +200,7 @@ def _posted_days(job: Job) -> int | None:
         day = datetime.fromisoformat(job.posted).date() if "T" in job.posted else date.fromisoformat(job.posted[:10])
     except ValueError:
         return None
-    return (date.today() - day).days
+    return (today() - day).days
 
 
 def save_jobs(c: dict, jobs: list[Job]) -> tuple[dict, list[dict]]:
@@ -631,7 +631,6 @@ def rank(progress: dict) -> None:
 
 # ---- every day at 19:00: the jobs of every watched and Initiativ company --------------------
 
-GERMANY = ZoneInfo("Europe/Berlin")
 
 
 def _as_link(c: dict, active: set[int], yours: set[str]) -> bool:

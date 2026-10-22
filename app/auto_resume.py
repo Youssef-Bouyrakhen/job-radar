@@ -22,12 +22,12 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 
-from . import ai, companies, company_jobs, db, websearch
+from . import ai, clock, companies, company_jobs, db, websearch
 from .config import CONFIG
 
 log = logging.getLogger("jobradar")
 
-GERMANY = companies.GERMANY
+GERMANY = clock.GERMANY
 BEFORE_FIXED = timedelta(minutes=30)  # no start this long before the 03:00 / 19:00 runs
 STOP_BEFORE = timedelta(minutes=15)   # an auto run stops starting new companies this long before them
 RETRY_AFTER = timedelta(hours=1)      # no progress although AI and web search were there: try again later
@@ -100,7 +100,7 @@ def _decide(now: datetime, state: dict, left: dict) -> tuple[str, datetime | Non
     if not total:
         return "done", None, ""
     fixed = _fixed_times(now)
-    if fixed and fixed[0][0] - now <= BEFORE_FIXED:
+    if fixed and fixed[0][0].timestamp() - now.timestamp() <= BEFORE_FIXED.total_seconds():  # real time, also on clock-change night
         return "window", fixed[0][0], fixed[0][1]
     # The last run got nowhere: start again only when its reason is gone, or the work changed (the night
     # run found new companies, you changed something)

@@ -18,13 +18,13 @@ import imaplib
 import logging
 import os
 import re
-from datetime import date, timedelta
+from datetime import timedelta
 from email import policy
 from urllib.parse import urljoin
 
 import httpx
 
-from . import db
+from . import clock, db
 from .config import CONFIG
 from .extractors import Job, alerts
 from .fetcher import USER_AGENT, _polite_wait
@@ -123,7 +123,7 @@ def _logout(imap: imaplib.IMAP4_SSL) -> None:
 
 def ids_since(imap: imaplib.IMAP4_SSL, days_back: int) -> dict[bytes, str]:
     """Emails of the open label from the last N days: UID -> Gmail's own message id."""
-    since = date.today() - timedelta(days=days_back)
+    since = clock.today() - timedelta(days=days_back)
     status, data = imap.uid("search", None, "SINCE", f"{since.day}-{MONTHS[since.month - 1]}-{since.year}")
     uids = data[0].split() if status == "OK" and data and data[0] else []
     return _gmail_ids(imap, uids)

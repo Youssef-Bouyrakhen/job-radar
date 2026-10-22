@@ -12,7 +12,7 @@ import threading
 import time
 from collections import Counter
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
+from .clock import GERMANY  # the free searches start again at midnight
 
 import httpx
 
@@ -24,7 +24,6 @@ SEARCH_URL = "https://api.search.tinyfish.ai"
 SEARCH_GAP = 3.0   # seconds between searches: 20 a minute, TinyFish allows 30
 JINA_URL = "https://r.jina.ai/"
 JINA_GAP = 3.2     # seconds between pages: under Jina's 20 a minute without a key
-GERMANY = ZoneInfo("Europe/Berlin")  # the free searches start again at midnight
 
 usage = Counter()  # searches / jina / search_errors / jina_errors since the app started
 _lock = threading.Lock()

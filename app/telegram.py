@@ -12,7 +12,7 @@ from datetime import date, datetime
 
 import httpx
 
-from . import ai, db, must_apply
+from . import ai, clock, db, must_apply
 from .config import CONFIG
 
 log = logging.getLogger("jobradar")
@@ -71,26 +71,26 @@ def send(text: str) -> None:
 def _parse(value: str) -> datetime | date:
     if len(value) == 10:
         return date.fromisoformat(value)
-    return datetime.fromisoformat(value).astimezone()  # local time
+    return clock.german(datetime.fromisoformat(value))
 
 
 def posted_label(value: str) -> str:
     when = _parse(value)
     if isinstance(when, datetime):
-        hours = (datetime.now().astimezone() - when).total_seconds() / 3600
+        hours = (clock.now() - when).total_seconds() / 3600
         if hours < 1:
             return "posted just now"
         if hours < 24:
             return f"posted {int(hours)} h ago"
         when = when.date()
-    days = (date.today() - when).days
+    days = (clock.today() - when).days
     if days <= 0:
         return "posted today"
     if days == 1:
         return "posted yesterday"
     if days < 30:
         return f"posted {days} days ago"
-    year = "" if when.year == date.today().year else f" {when.year}"  # "13 Oct 2025" for old ads
+    year = "" if when.year == clock.today().year else f" {when.year}"  # "13 Oct 2025" for old ads
     return f"posted on {when.day} {when:%b}{year}"
 
 

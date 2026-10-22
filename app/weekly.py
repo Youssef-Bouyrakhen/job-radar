@@ -5,9 +5,9 @@ N new Initiativ candidates" for the last 7 days. No AI.
 """
 import html
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
-from . import ai, db, telegram
+from . import ai, clock, db, telegram
 from .config import CONFIG
 
 log = logging.getLogger("jobradar")
@@ -35,7 +35,7 @@ def send_summary(force: bool = False) -> bool:
     if not telegram.enabled():
         log.info("Weekly summary not sent: Telegram is off or paused")
         return False
-    today = date.today().isoformat()
+    today = clock.today().isoformat()
     if not force and db.get_setting("weekly_summary_sent") == today:
         return False
     telegram.send(message())

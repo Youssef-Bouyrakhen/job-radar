@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from . import db, details
+from .clock import GERMANY
 from .config import CONFIG, DEFAULTS
 
 log = logging.getLogger("jobradar")
@@ -145,7 +146,6 @@ NEURONS = {"Cloudflare"}
 # (09:00 in Germany), the others at midnight UTC (02:00 in Germany; in winter 08:00 / 01:00).
 # Groq has no fixed time: each request comes back 24 hours after it was made (it says when in its answers).
 PACIFIC = ZoneInfo("America/Los_Angeles")
-GERMANY = ZoneInfo("Europe/Berlin")
 RESET_ZONE = {"Gemini": PACIFIC}
 ROLLING = {"Groq"}
 REPORT_TTL = 3600  # a provider's own numbers (Groq, OpenRouter) count this many seconds, then the counter again

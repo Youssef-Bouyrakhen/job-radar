@@ -1,9 +1,12 @@
 """Shared pieces for all job extractors."""
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from bs4 import BeautifulSoup
+
+from .. import clock
+from ..clock import GERMANY
 
 
 @dataclass
@@ -50,7 +53,7 @@ def to_iso(value) -> str:
             return f"{m[3]}-{int(m[2]):02d}-{int(m[1]):02d}"
         return m[0]
     if dt.tzinfo is None:
-        dt = dt.astimezone()  # no timezone given: assume local (German) time
+        dt = dt.replace(tzinfo=GERMANY)  # no timezone given: German time (the server runs on UTC)
     return dt.isoformat(timespec="seconds")
 
 
@@ -60,7 +63,7 @@ _NUMBER_WORDS = {"a": 1, "an": 1, "one": 1, "einem": 1, "einer": 1, "ein": 1, "e
 def relative_date(text: str) -> str:
     """'vor 3 Tagen', 'Posted 2 Days Ago', 'heute', 'yesterday', ... -> ISO date ("" if unknown)."""
     t = (text or "").lower()
-    today = date.today()
+    today = clock.today()
     if re.search(r"heute|today|just posted|gerade|minute|stunde|hour", t):
         m = re.search(r"(\d+)\s*(?:stunde|hour|std)", t)
         if m:

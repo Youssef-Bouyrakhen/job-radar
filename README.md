@@ -515,6 +515,8 @@ still need it stay unchecked and the next night goes on with them.
       daily limit when it is reached. After a "daily limit reached" answer a provider stays red until its
       own real reset ("resets at 09:00": Gemini at midnight US Pacific time, Cloudflare / OpenRouter at
       00:00 UTC, Groq bit by bit) - also after a restart. Refused requests no longer count as used.
+- [x] **German time everywhere (v10.9)**: dashboard, AI reset times, Telegram, logs and the 03:00 / 19:00
+      runs use Europe/Berlin with summer / winter time, also when the PC's time zone or clock is wrong.
 - [x] **Company Discovery Engine, Phase A** (v8.3): **Companies** page. Collects employers from the
       Arbeitsagentur (all IT jobs), OpenStreetMap and your own data, merges duplicates, finds and
       checks websites and careers pages, detects 12 applicant systems. Polite crawler (robots.txt,

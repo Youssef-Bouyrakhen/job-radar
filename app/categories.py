@@ -11,9 +11,8 @@ import json
 import logging
 import re
 from collections import Counter
-from datetime import date
 
-from . import ai, db
+from . import ai, clock, db
 from .config import CONFIG
 from .discover import company_key
 
@@ -160,14 +159,14 @@ BATCH = 80
 
 def _budget_left() -> int:
     day, used = (db.get_setting("category_ai") or ":0").split(":")
-    used = int(used) if day == date.today().isoformat() else 0
+    used = int(used) if day == clock.today().isoformat() else 0
     return max(0, CONFIG["companies"]["max_category_ai_per_day"] - used)
 
 
 def _spend() -> None:
     day, used = (db.get_setting("category_ai") or ":0").split(":")
-    used = int(used) if day == date.today().isoformat() else 0
-    db.set_setting("category_ai", f"{date.today().isoformat()}:{used + 1}")
+    used = int(used) if day == clock.today().isoformat() else 0
+    db.set_setting("category_ai", f"{clock.today().isoformat()}:{used + 1}")
 
 
 def ask_ai(progress: dict, first: set[int] | None = None) -> int:

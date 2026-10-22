@@ -3,7 +3,7 @@
    If GET jobs fails (file opened directly), the page runs on demo data.
    ========================================================= */
 // Must match VERSION in app/__init__.py. If they differ, an old Job Radar is still running.
-const DASHBOARD_VERSION = '10.8';
+const DASHBOARD_VERSION = '10.9';
 
 const ENDPOINTS = {
   jobs:        () => ['GET',    '/api/jobs?view=everything'],
@@ -190,13 +190,24 @@ const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const dateOf = j => j.posted_at || j.first_seen;
-const ageDays = iso => iso ? Math.max(0, Math.floor((Date.now() - new Date(iso)) / 864e5)) : 0;
+// All times in German time (summer / winter time included), also when the PC's time zone is set wrong.
+// clockSkew: how far the PC clock is off from the server's (set from /api/info), so "5 min ago" stays right.
+const TZ = 'Europe/Berlin';
+let clockSkew = 0;
+const nowMs = () => Date.now() + clockSkew;
+// A day as a number in German time: "2026-10-16" (day only) is that day, a time is the German day it falls on
+const dayNum = x => {
+  const s = typeof x === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x) ? x : new Date(x).toLocaleDateString('en-CA', { timeZone: TZ });
+  return Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) / 864e5;
+};
+const ageDays = iso => iso ? Math.max(0, Math.floor((nowMs() - new Date(iso)) / 864e5)) : 0;
 const isOld = j => !!j.posted_at && ageDays(j.posted_at) > 30;
-const fmtShort = iso => { const d = new Date(iso); const sameYear = d.getFullYear() === new Date().getFullYear(); return d.toLocaleDateString('en-GB', sameYear ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' }); };
+const yearOf = x => new Date(x).toLocaleDateString('en-GB', { timeZone: TZ, year: 'numeric' });
+const fmtShort = iso => { const sameYear = yearOf(iso) === yearOf(nowMs()); return new Date(iso).toLocaleDateString('en-GB', sameYear ? { timeZone: TZ, day: 'numeric', month: 'short' } : { timeZone: TZ, day: 'numeric', month: 'short', year: 'numeric' }); };
 const fmtAge = iso => { if (!iso) return '–'; const d = ageDays(iso); return d === 0 ? 'today' : d <= 14 ? d + ' d ago' : fmtShort(iso); };
-const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '–';
-const fmtTime = iso => iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : null;
-const fmtAgo = iso => { if (!iso) return 'not checked yet'; const m = Math.round((Date.now() - new Date(iso)) / 6e4); return m < 1 ? 'checked just now' : m < 60 ? `checked ${m} min ago` : m < 1440 ? `checked ${Math.round(m / 60)} h ago` : `checked ${fmtShort(iso)}`; };
+const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-GB', { timeZone: TZ, day: 'numeric', month: 'short', year: 'numeric' }) : '–';
+const fmtTime = iso => iso ? new Date(iso).toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' }) : null;
+const fmtAgo = iso => { if (!iso) return 'not checked yet'; const m = Math.round((nowMs() - new Date(iso)) / 6e4); return m < 1 ? 'checked just now' : m < 60 ? `checked ${m} min ago` : m < 1440 ? `checked ${Math.round(m / 60)} h ago` : `checked ${fmtShort(iso)}`; };
 const scoreTier = s => s >= state.minScore ? 'good' : s >= 4 ? 'maybe' : 'weak';
 const scoreLabel = s => s >= 9 ? 'Top match' : s >= state.minScore ? 'Good fit' : s >= 4 ? 'Maybe' : 'Weak';
 const shortReason = r => r ? r.split('. ')[0].replace(/\.$/, '') : '';
@@ -233,10 +244,9 @@ state.source = sessionGet('jr-source', SOURCES, 'all');
 state.time = sessionGet('jr-time', TIMES, '7');
 
 // Whole calendar days since the job was posted (or first seen, if the site gives no date).
-// "2026-10-16" (day only) means that day in local time, not midnight UTC.
-const parseDay = s => /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) : new Date(s);
-const midnight = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
-const daysSince = j => Math.max(0, Math.round((midnight(Date.now()) - midnight(parseDay(dateOf(j)))) / 864e5));
+// "2026-10-16" (day only) means that day in Germany, not midnight UTC.
+const daysSince = j => Math.max(0, dayNum(nowMs()) - dayNum(dateOf(j)));
+const parseDay = s => /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T00:00:00Z`) : new Date(s);  // for sorting
 
 const matchSource = (j, source) => source === 'all' || (j.site || 'other') === source;
 const matchTime = (j, time) => time === 'any' || daysSince(j) < Number(time);
@@ -533,7 +543,7 @@ function renderSettings() {
 // AI usage bar at the top of every page: one box per provider (used / free limit today). Red after the provider
 // answered "limit reached" (or Job Radar's count is used up) until its own real reset: "resets at 09:00"
 const AI_STATUS = { active: 'Active', next: 'Next', paused: 'Paused', empty: 'Used up', limit: 'Limit reached' };
-const clockOf = iso => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '–';
+const clockOf = iso => fmtTime(iso) || '–';
 function renderAiBar() {
   const bar = $('#aiBar'), ai = state.ai;
   bar.hidden = state.demo || !ai;
@@ -623,6 +633,7 @@ function applyInfo(i) {
   if (i.min_score) state.minScore = i.min_score;
   if (i.must) Object.assign(state, { mustDays: i.must.max_days, mustScore: i.must.min_score, mustCenter: i.must.center });
   if (i.version) state.version = i.version;
+  if (i.server_time) clockSkew = new Date(i.server_time) - Date.now();  // PC clock off? use the server's
   // A mismatch is usually an old page still in the browser: reload once before warning
   let reloaded = null; try { reloaded = sessionStorage.getItem('jr-reloaded'); } catch (e) {}
   if (i.version && i.version !== DASHBOARD_VERSION && reloaded !== i.version) {
@@ -995,8 +1006,7 @@ function showCompanyJobs(c) {
 }
 // "today 19:04", "tomorrow 03:00", "12 Oct 19:00"
 const dayTime = iso => {
-  const d = new Date(iso), day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate());
-  const n = Math.round((day(d) - day(new Date())) / 864e5);
+  const n = dayNum(iso) - dayNum(nowMs());
   return `${n === 0 ? 'today' : n === 1 ? 'tomorrow' : n === -1 ? 'yesterday' : fmtShort(iso)} ${fmtTime(iso)}`;
 };
 // When its jobs were read last and are read next (and by what, on hover)

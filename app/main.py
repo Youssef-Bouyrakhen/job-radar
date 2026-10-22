@@ -5,7 +5,7 @@ import os
 import re
 import threading
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -13,13 +13,15 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (VERSION, ai, applications, auto_resume, categories, companies, company_jobs, db, must_apply, discover, gmail, region,
+from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, must_apply, discover, gmail, region,
                scheduler, telegram, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all, recheck_hours,
                       ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
 from .config import CONFIG, ROOT
 
 load_dotenv(ROOT / ".env")  # before anything reads GEMINI_API_KEY etc.
+# Log times in German time (the server's clock runs on UTC)
+logging.Formatter.converter = staticmethod(clock.log_time)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M")
 for noisy in ("httpx", "apscheduler"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
@@ -114,6 +116,7 @@ def info():
     next_check = scheduler.next_check_time(datetime.fromisoformat(due) if due else None)
     return {
         "version": VERSION,
+        "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),  # the dashboard corrects a PC clock that is off
         "check_interval_minutes": CONFIG["check_interval_minutes"],
         "last_check": db.last_check(),
         "next_check": next_check.isoformat() if next_check else None,

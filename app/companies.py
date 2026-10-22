@@ -23,11 +23,11 @@ import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import httpx
 
 from . import ai, arbeitsagentur, careers, categories, company_jobs, db, region, websearch
+from .clock import GERMANY
 from .config import CONFIG
 from .discover import NOT_A_COMPANY, _host_key, _is_known, _same, _watched_keys, company_key
 from .fetcher import BOT_HEADERS, Page, fetch_api, fetch_polite
@@ -516,7 +516,6 @@ def recheck_career_pages() -> int:
 
 # ---- the run -----------------------------------------------------------------------
 
-GERMANY = ZoneInfo("Europe/Berlin")
 NIGHT_MARGIN_MINUTES = 15  # stop starting new companies this long before night_end_hour (the running ones finish)
 COUNTERS = {"done": 0, "total": 0, "collected": 0, "new": 0, "websites": 0, "careers": 0, "feeds": 0,
             "jobs_read": 0, "new_jobs": 0, "auto_added": 0, "initiativ": 0}
