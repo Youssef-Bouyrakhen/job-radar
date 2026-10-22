@@ -375,6 +375,13 @@ region:
     Neu-Isenburg:                # with Gravenbruch, Zeppelinheim
       ags: "06438009"
       postcodes: [63263]
+    Frankfurt Airport:           # not a town: Terminals, Cargo City Nord/Süd, Gateway Gardens, The Squaire
+      osm_areas: [3891373, 5813621]   # OpenStreetMap: the Frankfurt district "Flughafen" + the airport grounds
+      postcodes: [60549, 60546, 60547] # 60549 = the airport; 60546 / 60547 = big-customer codes (Lufthansa, Fraport)
+      aa_where: "60549"          # the Arbeitsagentur search ("Frankfurt Airport" itself would find all of Frankfurt)
+      place: "flughafen|airport" # an address without postcode: "Frankfurt - Flughafen"
+      city: Frankfurt am Main
+      airport: true              # stronger skip rules, Fraport's lists, duplicates only by the same website
   max_checks_per_run: 300        # town companies whose website + careers page are checked per night, all towns together
   max_contacts_per_run: 60       # small IT companies without a careers page: Impressum emails read per night
   offeneregister: true           # read the company register (2019, 260 MB) once, keep a small extract in data/

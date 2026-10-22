@@ -908,7 +908,7 @@ const CO_STATUS_ICON = { all: 'list', new: 'sparkle', watched: 'link', initiativ
 const CO_SOURCE = { arbeitsagentur: 'Arbeitsagentur', your_jobs: 'Your jobs', osm_it: 'OSM IT office', osm_software: 'OSM software office',
                     osm_telecommunication: 'OSM telecom office', osm_company: 'OSM company', lookalike: 'Look-alike' };
 // "list:konaktiva 2026" = a list you imported; "region:Darmstadt:osm:engineer" = found by the region coverage
-const REGION_SOURCE = { aa: 'AA', osm: 'OSM', register: 'Register' };
+const REGION_SOURCE = { aa: 'AA', osm: 'OSM', register: 'Register', fraport: 'Fraport airlines', gateway: 'Gateway Gardens' };
 const coSourceName = k => k.startsWith('list:') ? k.slice(5)
   : k.startsWith('region:') ? `${REGION_SOURCE[k.split(':')[2]] || k.split(':')[2]} ${k.split(':')[1]}` : CO_SOURCE[k] || k;
 const CO_CATEGORY = { insurance: 'Insurance', finance: 'Banks/Finance', cloud: 'Cloud/Data centers/Networks',
@@ -956,7 +956,9 @@ function coSources(c) {
     : k.startsWith('ba_') ? 'IT job ads found by the keyword searches for this category on the Arbeitsagentur'
     : k.startsWith('region:') ? { aa: `Job ads of any kind in ${k.split(':')[1]} on the Arbeitsagentur`,
         osm: `On OpenStreetMap in ${k.split(':')[1]} (${k.split(':')[3] || ''})`,
-        register: `In the company register (OffeneRegister.de, 2019), seat in ${k.split(':')[1]}` }[k.split(':')[2]] || k
+        register: `In the company register (OffeneRegister.de, 2019), seat in ${k.split(':')[1]}`,
+        fraport: 'On the Airlines A-Z list of frankfurt-airport.com',
+        gateway: 'One of the companies of Gateway Gardens (its leaflet, October 2024)' }[k.split(':')[2]] || k
     : 'Office on OpenStreetMap';
   const mine = k => k.startsWith('list:') || k === 'lookalike';
   return Object.entries(c.sources || {}).sort((a, b) => mine(b[0]) - mine(a[0]) || b[1] - a[1]).map(([k, n]) =>
@@ -1162,7 +1164,7 @@ async function loadCoverage() {
 const pluralOf = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 // total: the "Whole region" row on top (its numbers aren't links: the Companies page filters one town)
 function covRow(t, total) {
-  const found = total ? `${coverage.towns.length} towns` : Object.entries(t.sources || {}).map(([k, n]) => `${k.replace(/^the /, '')} ${n}`).join(' · ');
+  const found = total ? `${coverage.towns.length} areas` : Object.entries(t.sources || {}).map(([k, n]) => `${k.replace(/^the /, '')} ${n}`).join(' · ');
   const chips = COV_STATUS.map(([k, label]) => total ? `<span class="cov-status"><span class="cov-status-n">${t[k]}</span>${label}</span>`
     : `<button type="button" class="cov-status" data-cov-town="${esc(t.town)}" data-cov-status="${k}"
       title="Show these companies"><span class="cov-status-n">${t[k]}</span>${label}</button>`).join('');

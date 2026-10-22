@@ -6,7 +6,7 @@
    b) OpenStreetMap (Overpass API): IT / telecommunication / company offices, with their website tag,
    c) your own database: jobs, email alerts, suggestions and watched links,
    d) region coverage: every business in the towns (Darmstadt, Weiterstadt, Griesheim, Pfungstadt, Langen,
-      Egelsbach, Dreieich, Neu-Isenburg) that could hire an IT student (region.py).
+      Egelsbach, Dreieich, Neu-Isenburg) and at Frankfurt Airport that could hire an IT student (region.py).
 2. Merge spelling variants ("ACME GmbH" = "Acme") and remember where each was found, how often.
 3. For the next companies in line (IT employers first): find the website and careers page
    (see careers.py). Each run checks at most companies.max_companies_per_run, so a big list
@@ -254,19 +254,21 @@ def merge(records: list[dict], collected: set[str]) -> list[dict]:
         if row["website"]:
             by_site[careers._site(row["website"])] = row["name_key"]
 
-    def find(key: str, website: str | None) -> str | None:
+    def find(key: str, website: str | None, exact: bool = False) -> str | None:
         if key in groups:
             return key
         site = careers._site(careers.normalize_url(website) or "") if website else ""
         if site and site in by_site:
             return by_site[site]
+        if exact:  # the airport: "Lufthansa Cargo" is not "Lufthansa" (region.exact_merge)
+            return None
         return next((k for k in by_prefix.get(key[:5], []) if _same(k, key)), None)
 
     for r in map(_from_domain, records):
         key = company_key(r["name"])
         if len(key) < 2:
             continue
-        found = find(key, r.get("website"))
+        found = find(key, r.get("website"), region.exact_merge(r["source"]))
         if not found:
             add_group(key, {"id": None, "name_key": key, "names": {}, "places": [], "cities": Counter(), "titles": Counter(),
                             "counts": Counter(), "website": None, "website_from": None})
@@ -724,6 +726,10 @@ def _check(ids: set[int] | None = None) -> None:
             if c.get("hint_note"):
                 fields["notes"] = " · ".join(filter(None, [c["hint_note"], fields["notes"]]))
             db.save_company_check(c["id"], fields)
+        except websearch.LimitReached:  # not saved: it stays unchecked and the next night goes on with it
+            fields = {}
+            with _lock:
+                postponed["search"] += 1
         except Exception as e:  # one bad company never stops the run
             fields = {}
             try:
@@ -746,8 +752,12 @@ def _check(ids: set[int] | None = None) -> None:
     if postponed["ai"]:
         _progress["notes"].append(f"{companies(postponed['ai'])} need the AI to find their website, but its free "
                                   f"requests are used up (scoring jobs comes first): they wait for the next night")
+    if postponed["search"]:
+        _progress["notes"].append(f"{companies(postponed['search'])} need the web search (step 5), but today's free "
+                                  f"searches are used up: they wait for the next night")
     if postponed["time"]:
         _progress["notes"].append(f"{companies(postponed['time'])} wait for the next night: the run stops before "
                                   f"{CONFIG['companies']['night_end_hour']}:00")
     if postponed:
-        log.info("Companies: %d wait for the AI, %d for time: checked next night", postponed["ai"], postponed["time"])
+        log.info("Companies: %d wait for the AI, %d for the web search, %d for time: checked next night",
+                 postponed["ai"], postponed["search"], postponed["time"])

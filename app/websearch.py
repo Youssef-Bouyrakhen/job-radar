@@ -11,6 +11,8 @@ import os
 import threading
 import time
 from collections import Counter
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -22,6 +24,7 @@ SEARCH_URL = "https://api.search.tinyfish.ai"
 SEARCH_GAP = 3.0   # seconds between searches: 20 a minute, TinyFish allows 30
 JINA_URL = "https://r.jina.ai/"
 JINA_GAP = 3.2     # seconds between pages: under Jina's 20 a minute without a key
+GERMANY = ZoneInfo("Europe/Berlin")  # the free searches start again at midnight
 
 usage = Counter()  # searches / jina / search_errors / jina_errors since the app started
 _lock = threading.Lock()
@@ -40,10 +43,29 @@ def search_enabled() -> bool:
     return bool(os.environ.get("TINYFISH_API_KEY"))
 
 
+class LimitReached(Exception):
+    """Today's free searches are used up: the company waits for the next night (it is not saved as checked)."""
+
+
+_limit_day = None  # the German date the free searches ran out
+
+
+def _today() -> date:
+    return datetime.now(GERMANY).date()
+
+
+def limit_reached() -> bool:
+    return _limit_day == _today()
+
+
 def search(query: str) -> list[dict]:
-    """[{url, title, snippet}], [] if search is off or fails (it is only a last step)."""
+    """[{url, title, snippet}], [] if search is off or fails (it is only a last step).
+    Raises LimitReached when today's free searches are used up."""
+    global _limit_day
     if not search_enabled():
         return []
+    if limit_reached():
+        raise LimitReached("the free web searches of today are used up")
     _pace("search", SEARCH_GAP)
     usage["searches"] += 1
     try:
@@ -51,6 +73,16 @@ def search(query: str) -> list[dict]:
                       headers={"X-API-Key": os.environ["TINYFISH_API_KEY"]}, timeout=30)
         r.raise_for_status()
         return [x for x in r.json().get("results", []) if x.get("url")]
+    except httpx.HTTPStatusError as e:
+        # 429 = too many (we stay under the per-minute limit, so: the day's), 402 = the free amount is used up
+        if e.response.status_code in (402, 429):
+            _limit_day = _today()
+            log.warning("Web search: the free searches of today are used up (HTTP %d): the rest waits for "
+                        "the next night", e.response.status_code)
+            raise LimitReached(f"the free web searches of today are used up (HTTP {e.response.status_code})") from e
+        usage["search_errors"] += 1
+        log.info("Web search for %r failed (%s)", query, type(e).__name__)
+        return []
     except (httpx.HTTPError, ValueError) as e:
         usage["search_errors"] += 1
         log.info("Web search for %r failed (%s)", query, type(e).__name__)

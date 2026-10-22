@@ -364,7 +364,8 @@ never changed.
 
 The **Coverage** page shows how much of a town is covered: not only IT employers, but every business
 that could hire an IT Werkstudent. The towns: **Darmstadt** (all districts), **Weiterstadt**, **Griesheim**,
-**Pfungstadt**, **Langen**, **Egelsbach**, **Dreieich** and **Neu-Isenburg**. On top: **Region covered: X%**
+**Pfungstadt**, **Langen**, **Egelsbach**, **Dreieich** and **Neu-Isenburg**, then **Frankfurt Airport**
+(see below). On top: **Region covered: X%**
 (companies with a final status) and a **Whole region** row. Per town: companies, careers pages, checked %,
 how many nights are left, and one button per status; a click opens the Companies page with only that
 town's companies in that status.
@@ -403,6 +404,24 @@ Everything goes through the polite crawler (robots.txt, max 1 request/s per site
 The AI is only used in the usual places (websites the rules can't find, job lists without a feed,
 categories, sizes) and always after scoring jobs (see **AI limits**). More towns can be added under
 `region: towns:` in config.yaml (the official municipality key `ags` and the postcodes).
+When the free web search (step 5 of the careers page search) is used up for the day, the companies that
+still need it stay unchecked and the next night goes on with them.
+
+**Frankfurt Airport** is its own row (after the 8 towns, also in **Whole region**). It is an area, not a town:
+- **OpenStreetMap**: the Frankfurt district "Flughafen" (Terminals, Cargo City Nord / Süd, Gateway Gardens,
+  The Squaire) and the airport grounds, not all of Frankfurt. Also the operators of hangars and other
+  buildings ("Flugzeughalle 5" belongs to Lufthansa Technik AG).
+- **Arbeitsagentur**: every employer with ads in postcode **60549** (the airport's postcode; 60546 / 60547
+  are the big-customer postcodes of Lufthansa and Fraport and count too). No staffing agencies.
+- **Fraport's lists**: the **Airlines A–Z** list of frankfurt-airport.com (each airline's website is read once
+  from its page there and kept in `data/fraport-airlines.json`) and the companies of **Gateway Gardens**
+  (from its leaflet, October 2024). Cargo City and The Squaire publish no list of their companies.
+- **OffeneRegister.de**: companies with an address in these postcodes, as soon as the download works again.
+- **Stronger rules**: shops, duty-free, restaurants, cafés, caterers, parking, gates, check-in and service
+  counters, car rentals, ground handling, cleaning and security staffing are Skipped right away.
+- **Duplicates** only merge with the same name or the same **website**: "Lufthansa", "Lufthansa Cargo" and
+  "Lufthansa Technik" stay separate when each has its own website; "Fraport AG Zentrale" and "Fraport AG"
+  (same website) become one (the other is Skipped with "Same website as ...").
 
 ## 4. Settings
 

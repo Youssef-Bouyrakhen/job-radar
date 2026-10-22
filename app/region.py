@@ -1,5 +1,6 @@
 """Region coverage: every business in a town that could hire an IT Werkstudent (Darmstadt, Weiterstadt,
-Griesheim, Pfungstadt, Langen, Egelsbach, Dreieich, Neu-Isenburg: region.towns in config.yaml).
+Griesheim, Pfungstadt, Langen, Egelsbach, Dreieich, Neu-Isenburg: region.towns in config.yaml), and at
+Frankfurt Airport (see "The airport" below).
 
 1. Collect (no AI, every night):
    a) OpenStreetMap: named offices of any kind, works, research institutes, universities, town halls and
@@ -17,6 +18,17 @@ Griesheim, Pfungstadt, Langen, Egelsbach, Dreieich, Neu-Isenburg: region.towns i
    for all towns together, in the order of region.towns (Darmstadt is finished before the next town starts).
 3. Every company ends with a status: Watched (careers page, read every day at 19:00), Initiativ, No careers page
    or Skipped. Small IT companies without a careers page: the contact email from their Impressum, Initiativ.
+
+The airport (region.towns "Frankfurt Airport", airport: true) is an area, not a town. It comes after the towns:
+- OpenStreetMap: the Frankfurt district "Flughafen" (with Gateway Gardens) + the airport grounds (osm_areas),
+  also the operators of hangars and other buildings ("Flugzeughalle 5" belongs to Lufthansa Technik AG).
+- Arbeitsagentur: the ads in postcode 60549; the register: companies with an address in 60549 / 60546 / 60547.
+- Fraport's public lists: the airlines A-Z list of frankfurt-airport.com (with each airline's website) and the
+  companies of Gateway Gardens. Cargo City and The Squaire publish no list of their companies.
+- Stronger rules: shops, duty-free, restaurants, parking, gates, check-in and service counters, car rentals,
+  ground handling, cleaning and security staffing are Skipped (AIRPORT_SKIP).
+- Duplicates: "Lufthansa Cargo" is not "Lufthansa" (no merging by a similar name); two names with the same
+  website are one company (merge_same_website).
 """
 import bz2
 import html as htmllib
@@ -52,10 +64,22 @@ def town_of_source(key: str) -> str | None:
     return key.split(":")[1] if key.startswith("region:") else None
 
 
+def is_airport(town: str | None) -> bool:
+    return bool(town and towns().get(town, {}).get("airport"))
+
+
+def exact_merge(key: str) -> bool:
+    """Found at the airport: merged only with the same name or the same website, never a similar name
+    ("Lufthansa Cargo" is not "Lufthansa")."""
+    return is_airport(town_of_source(key))
+
+
 def in_town(plz: str | None, place: str | None, town: str) -> bool:
     t = towns()[town]
     if plz and str(plz).strip().isdigit():
         return int(plz) in t["postcodes"]
+    if t.get("place"):  # the airport: "Frankfurt - Flughafen"
+        return bool(place and re.search(t["place"], place, re.I))
     # "Darmstadt-Eberstadt" yes, "Roßdorf bei Darmstadt" no
     return bool(place and re.match(rf"{re.escape(town)}\b", place.strip(), re.I))
 
@@ -86,6 +110,17 @@ def _parent(name: str, town: str) -> str:
     return next((parent for rule, parent in PARENTS.get(town, []) if rule.search(name)), name)
 
 
+# "Fraport AG Zentrale", "SSP Deutschland GmbH - Hauptsitz": the company itself
+HEAD_OFFICE = re.compile(r"\s*[-–,]?\s*\b(?:zentrale|hauptsitz|hauptverwaltung|headquarters?|head ?office|hq)$", re.I)
+
+
+def _clean(name: str, town: str) -> str:
+    from .companies import clean_name  # companies imports this module
+    name = clean_name(_parent(name, town))
+    # Only at the airport: the towns' companies merge by a similar name anyway
+    return (HEAD_OFFICE.sub("", name).strip() or name) if is_airport(town) else name
+
+
 # ---- 1. collecting ---------------------------------------------------------------------
 
 # OpenStreetMap office types that don't hire IT students: small practices, clubs, parties, agents
@@ -96,14 +131,27 @@ SKIP_OSM = {"lawyer", "notary", "tax_advisor", "accountant", "estate_agent", "pr
             "private_investigator", "nachlassverwalter", "diplomatic", "forestry", "vacant", "no"}
 # Student fraternities are often mapped as offices ("B! Frisia", "Landsmannschaft Cheruskia")
 FRATERNITY = re.compile(r"^[A-Z]{1,3}! |landsmannschaft|burschenschaft|wingolf|\bcorps\b|turnerschaft|verbindung", re.I)
+OSM_AMENITIES = ("university", "college", "research_institute", "townhall", "hospital")
 OSM_QUERY = """[out:json][timeout:180];
-area["de:amtlicher_gemeindeschluessel"="{ags}"]["boundary"="administrative"]->.a;
+{area}->.a;
 (nwr["office"]["name"](area.a);
  nwr["man_made"="works"]["name"](area.a);
  nwr["industrial"]["name"](area.a);
- nwr["amenity"~"^(university|college|research_institute|townhall|hospital)$"]["name"](area.a);
- nwr["research"]["name"](area.a););
+ nwr["amenity"~"^(""" + "|".join(OSM_AMENITIES) + """)$"]["name"](area.a);
+ nwr["research"]["name"](area.a);{extra});
 out center tags;"""
+# The airport's hangars, warehouses and office buildings are named "Flugzeughalle 5" or "Gebäude 534":
+# only their operator ("Lufthansa Technik AG") is a company
+AIRPORT_OSM = """
+ nwr["operator"]["building"](area.a);
+ nwr["operator"]["aeroway"="hangar"](area.a);"""
+
+
+def _osm_area(town: str) -> str:
+    t = towns()[town]
+    if t.get("osm_areas"):  # OpenStreetMap relations: area id = 3600000000 + relation id
+        return "(" + "".join(f"area({3600000000 + r});" for r in t["osm_areas"]) + ")"
+    return f'area["de:amtlicher_gemeindeschluessel"="{t["ags"]}"]["boundary"="administrative"]'
 
 
 def _osm_kind(tags: dict) -> str:
@@ -111,25 +159,31 @@ def _osm_kind(tags: dict) -> str:
         return re.sub(r"[^a-z0-9_]+", "_", tags["office"].lower())[:30]
     if tags.get("man_made") == "works" or tags.get("industrial"):
         return "works"
-    return tags.get("amenity") or "research"
+    if tags.get("amenity") in OSM_AMENITIES or tags.get("research") or not tags.get("operator"):
+        return tags.get("amenity") or "research"
+    return "operator"  # a building at the airport (also a fire station or car park: its operator is the company)
 
 
 def collect_osm(town: str, progress: dict) -> list[dict]:
-    from .companies import clean_name, overpass  # companies imports this module
-    elements = overpass(OSM_QUERY.format(ags=towns()[town]["ags"]), f"OpenStreetMap ({town})", progress)
+    from .companies import overpass  # companies imports this module
+    query = OSM_QUERY.format(area=_osm_area(town), extra=AIRPORT_OSM if is_airport(town) else "")
+    elements = overpass(query, f"OpenStreetMap ({town})", progress)
     records = []
     for e in elements:
         tags = e.get("tags", {})
-        kind, name = _osm_kind(tags), tags.get("name", "").strip()
+        kind = _osm_kind(tags)
+        name = (tags.get("operator") if kind == "operator" else tags.get("name", "")).strip()
         if kind in SKIP_OSM or FRATERNITY.search(name):
             continue
         if kind == "townhall":  # every town's is just "Rathaus": they must not merge into one company
             name = _hall(town)
         center = e.get("center") or e
-        website = tags.get("website") or tags.get("contact:website") or tags.get("url")
-        records.append({"name": clean_name(_parent(name, town)), "source": source(town, f"osm:{kind}"),
+        # A building's website is the building's ("The Squaire"), not its operator's
+        website = None if kind == "operator" else tags.get("website") or tags.get("contact:website") or tags.get("url")
+        records.append({"name": _clean(name, town), "source": source(town, f"osm:{kind}"),
                         "website": website, "hint_from": "osm" if website else None,
-                        "city": tags.get("addr:city") or town, "lat": center.get("lat"), "lon": center.get("lon")})
+                        "city": tags.get("addr:city") or towns()[town].get("city", town),
+                        "lat": center.get("lat"), "lon": center.get("lon")})
     log.info("Region %s: %d places from OpenStreetMap (%d left out: lawyers, clubs, ...)",
              town, len(records), len(elements) - len(records))
     return records
@@ -140,14 +194,14 @@ AA_MAX_PAGES = 40  # 100 ads per page; Darmstadt has about 1,500
 
 def collect_aa(town: str, progress: dict) -> list[dict]:
     """One record per ad of any kind (so a company with 12 ads counts 12 times)."""
-    from .companies import _ad_record, clean_name
+    from .companies import _ad_record
     records, seen = [], set()
     for page in range(1, AA_MAX_PAGES + 1):
         progress["step"] = f"Arbeitsagentur: all employers in {town} (page {page})"
-        params = {"wo": town, "umkreis": 0, "size": 100, "page": page, "zeitarbeit": "false", "pav": "false"}
+        params = {"wo": towns()[town].get("aa_where", town), "umkreis": 0, "size": 100, "page": page, "zeitarbeit": "false", "pav": "false"}
         offers = fetch_api(arbeitsagentur.API, params=params, headers=arbeitsagentur.HEADERS).get("ergebnisliste", [])
         for o in offers:
-            ref, firm = o.get("referenznummer"), clean_name(_parent(o.get("firma") or "", town))
+            ref, firm = o.get("referenznummer"), _clean(o.get("firma") or "", town)
             address = ((o.get("stellenlokationen") or [{}])[0].get("adresse") or {})
             if not firm or ref in seen or not in_town(address.get("plz"), address.get("ort"), town):
                 continue
@@ -176,13 +230,25 @@ def _register_file(town: str):
     return db.DB_PATH.parent / f"offeneregister-{town}.json"
 
 
+def _register_town(office: str, plz: str | None, names: list[str]) -> str | None:
+    """Which of these towns a register entry belongs to. The airport's companies are registered in Frankfurt
+    am Main: only their postcode counts."""
+    for town in names:
+        if is_airport(town):
+            if plz and int(plz) in towns()[town]["postcodes"]:
+                return town
+        elif office == town and (not plz or in_town(plz, None, town)):  # Griesheim near Darmstadt, not another one
+            return town
+    return None
+
+
 def _download_register(names: list[str], progress: dict) -> None:
     """Stream the whole register once (about 5 million lines, 2-5 minutes) and keep these towns' active
     companies. Nothing big is saved: only one extract per town (a few hundred KB)."""
     if not robots_allows(REGISTER_URL, BOT_NAME):
         raise httpx.TransportError("OffeneRegister's robots.txt asks automated visitors not to download it")
     found, lines, buffer = {t: [] for t in names}, 0, b""
-    wanted = [t.encode() for t in names]
+    wanted = [w.encode() for t in names for w in (map(str, towns()[t]["postcodes"]) if is_airport(t) else [t])]
     decompressor = bz2.BZ2Decompressor()
     with httpx.stream("GET", REGISTER_URL, headers=BOT_HEADERS, timeout=120, follow_redirects=True) as r:
         r.raise_for_status()
@@ -199,13 +265,12 @@ def _download_register(names: list[str], progress: dict) -> None:
                     continue
                 d = json.loads(line)
                 attrs = d.get("all_attributes") or {}
-                town = re.sub(r"\s*\(.*\)$", "", attrs.get("registered_office") or "")  # "Langen (Hessen)"
-                if d.get("current_status") != "currently registered" or town not in found \
-                        or attrs.get("_registerArt") not in REGISTER_TYPES:
+                if d.get("current_status") != "currently registered" or attrs.get("_registerArt") not in REGISTER_TYPES:
                     continue
+                office = re.sub(r"\s*\(.*\)$", "", attrs.get("registered_office") or "")  # "Langen (Hessen)"
                 address = d.get("registered_address") or ""
                 plz = re.search(r"\b(\d{5})\b", address)
-                if plz and not in_town(plz[1], None, town):  # Griesheim near Darmstadt, not another one
+                if not (town := _register_town(office, plz[1] if plz else None, names)):
                     continue
                 found[town].append({"name": d["name"], "address": address.rstrip(".")})
             progress["step"] = f"OffeneRegister: reading the company register once ({lines / 1_000_000:.1f} of about 5.3 million lines)…"
@@ -236,7 +301,6 @@ def _register_entries(town: str, progress: dict) -> list[dict]:
 def collect_register(town: str, progress: dict, known: list[dict]) -> list[dict]:
     """IT-sounding register companies as new records; the others only if they are known already (from the
     other sources or earlier runs): then they get the town too."""
-    from .companies import clean_name
     entries = _register_entries(town, progress)
     keys = {company_key(r["name"]) for r in known} | {c["name_key"] for c in db.company_rows()}
     by_prefix: dict[str, list[str]] = {}
@@ -244,19 +308,80 @@ def collect_register(town: str, progress: dict, known: list[dict]) -> list[dict]
         by_prefix.setdefault(k[:5], []).append(k)
     records = []
     for e in entries:
-        name = clean_name(_parent(e["name"], town))
+        name = _clean(e["name"], town)
         key = company_key(name)
         if len(key) < 2 or REGISTER_SHELL.search(name):
             continue
         is_known = key in keys or any(_same(key, k) for k in by_prefix.get(key[:5], []))
         if REGISTER_IT.search(name) or is_known:
-            records.append({"name": name, "source": source(town, "register"), "city": town})
+            records.append({"name": name, "source": source(town, "register"), "city": towns()[town].get("city", town)})
     log.info("Region %s: %d of %d register companies used (IT names, or known already)", town, len(records), len(entries))
     return records
 
 
+FRAPORT_AIRLINES = ("https://www.frankfurt-airport.com/de/fluege-und-airlines/airlines-a-z/_jcr_content/root/"
+                    "content/airlinefilter.model.json")  # the data of frankfurt-airport.com's "Airlines A-Z" page
+# Links on an airline's page that are never the airline's own website
+NOT_AIRLINE_SITE = re.compile(r"frankfurt-airport|fraport|facebook|instagram|youtube|linkedin|twitter|x\.com|tiktok|"
+                              r"google|apple\.com|getyourguide|booking\.com|survey|xing", re.I)
+AIRLINE_WORDS = {"air", "airlines", "airline", "airways", "royal", "international", "express", "city"}
+# The companies of Gateway Gardens (Fraport's business quarter at the airport), from its leaflet "Site overview,
+# as of October 2024" (gateway-gardens.de). It is a PDF with a site map: the names are kept here, not read
+# from the PDF every night. Its hotels, restaurants, shops and medical practices are left out.
+GATEWAY_GARDENS = ("Gate Gourmet", "AGENDIS", "Air France", "Getinge", "HOYA Surgical Optics", "Mundipharma", "Siemens",
+                   "Keyence", "Air Liquide", "Schaeffler", "Lufthansa", "emeis Deutschland", "Bechtle",
+                   "Schiff-Martini & Cie.", "Aramark", "Goldbeck", "ZVEI", "msg systems", "Windstar Medical",
+                   "House of Logistics & Mobility (HOLM)", "Die Autobahn GmbH", "KION Group", "Deutsche Bahn", "Eisai")
+
+
+def _airline_sites_file():
+    return db.DB_PATH.parent / "fraport-airlines.json"
+
+
+def _airline_site(name: str, link: str) -> str | None:
+    """The airline's own website, from its page on frankfurt-airport.com: the first link named like it."""
+    page = fetch_polite(link)
+    if not page.ok:
+        return None
+    words = [w for w in _words(name) if w not in AIRLINE_WORDS and len(w) >= 3] or [company_key(name)]
+    for href, _ in ANCHOR.findall(page.html):
+        host = urlparse(href.strip()).hostname or ""
+        if href.startswith("http") and not NOT_AIRLINE_SITE.search(host) \
+                and any(w in host.replace("-", "").replace(".", "") for w in words):
+            return f"https://{host}/"
+    return None
+
+
+def collect_fraport(town: str, progress: dict) -> list[dict]:
+    """Fraport's public lists: every airline at the airport (with its website: read once per airline and
+    kept in data/fraport-airlines.json) and the companies of Gateway Gardens."""
+    if not robots_allows(FRAPORT_AIRLINES, BOT_NAME):
+        raise httpx.TransportError("frankfurt-airport.com's robots.txt asks automated visitors not to read the airline list")
+    airlines = fetch_api(FRAPORT_AIRLINES).get("results") or []
+    if not airlines:
+        raise httpx.TransportError("the airline list of frankfurt-airport.com was empty")
+    path = _airline_sites_file()
+    sites = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    city = towns()[town].get("city", town)
+    records = []
+    for n, a in enumerate(airlines, 1):
+        name = (a.get("name") or "").strip()
+        if not name:
+            continue
+        if name not in sites and a.get("link", "").startswith("https://www.frankfurt-airport.com/"):
+            progress["step"] = f"Fraport: the website of {name} ({n} of {len(airlines)} airlines)"
+            sites[name] = _airline_site(name, a["link"])
+        records.append({"name": _clean(name, town), "source": source(town, "fraport"), "website": sites.get(name),
+                        "hint_from": "fraport" if sites.get(name) else None, "city": city})
+    path.write_text(json.dumps(sites, ensure_ascii=False, indent=1), encoding="utf-8")
+    records += [{"name": _clean(name, town), "source": source(town, "gateway"), "city": city} for name in GATEWAY_GARDENS]
+    log.info("Region %s: %d airlines from Fraport's list (%d with a website), %d Gateway Gardens companies", town,
+             len(airlines), sum(bool(sites.get(a.get("name"))) for a in airlines), len(GATEWAY_GARDENS))
+    return records
+
+
 def collect(records: list[dict], progress: dict) -> tuple[list[dict], set[str]]:
-    """All towns, all three sources. Returns (records, the source keys that were collected this time).
+    """All towns, all their sources. Returns (records, the source keys that were collected this time).
     A source that fails keeps its companies from earlier runs and is tried again the next night."""
     global _register_failed
     found, collected, _register_failed = [], set(), None
@@ -264,6 +389,8 @@ def collect(records: list[dict], progress: dict) -> tuple[list[dict], set[str]]:
     for town in towns():
         steps = [("OpenStreetMap", lambda: collect_osm(town, progress)),
                  ("the Arbeitsagentur", lambda: collect_aa(town, progress))]
+        if is_airport(town):
+            steps.append(("Fraport's lists", lambda: collect_fraport(town, progress)))
         if CONFIG["region"].get("offeneregister"):
             steps.append(("OffeneRegister", lambda: collect_register(town, progress, records + found)))
         for label, step in steps:
@@ -323,6 +450,38 @@ NOT_TARGET_JOB = re.compile(
     r"g[äa]rtner|zahnmedizin|\bzfa\b|\bmfa\b|medizinische[rn]? fachangestellte|arzthelfer|physiotherap|"
     r"ergotherap|apothek|\bpta\b|sicherheitsmitarbeiter|empfang|rezeption|hotelfach|elektroniker", re.I)
 SMALL_AD_COUNT = 9  # a company with this many ads or fewer, all for such jobs, is skipped
+# Frankfurt Airport: businesses that are only there for the passengers or only do the work on the ground
+AIRPORT_SKIP = (
+    ("a shop or duty-free", re.compile(
+        r"duty[- ]?free|travel retail|heinemann|airport retail|\bshops?\b|\bstores?\b|boutique|souvenir|"
+        r"wechselstube|currency exchange|reisebank|global blue|tax[- ]?free|\bmarkt\b", re.I)),
+    ("a restaurant, café, bar or caterer", re.compile(
+        r"catering|gourmet|sky ?chefs|aramark|\bssp\b|mcdonald|burger king|starbucks|kuffler|gastronomie|"
+        r"\bbars?\b|lounge|\bfood|\bthe move\b|casino", re.I)),
+    ("a hotel", re.compile(
+        r"hotel|radisson|hilton|marriott|sheraton|hyatt|holiday inn|steigenberger|\bmoxy\b|meininger|\bibis\b|"
+        r"novotel|mercure|b.?mine|staycity|hampton|best western|park inn|ipartment|smartments", re.I)),
+    ("parking", re.compile(r"\bpark(?:en|haus|platz)\b|parking|apcoa|valet|park ?(?:&|and|\+|n) ?fly", re.I)),
+    ("a gate, check-in or service counter", re.compile(
+        r"\bgates? [a-z]?\d|check-?in|schalter|\bcounter\b|(?<!technisches )service ?cent(?:er|re)\b|ticket", re.I)),
+    ("a car rental or transfer counter", re.compile(
+        r"autovermietung|mietwagen|car rental|rent[- ]?a[- ]?car|\bsixt\b|europcar|hertz|\bavis\b|enterprise rent|"
+        r"\bbudget\b|buchbinder|airport transfer|limousin|chauffeur", re.I)),
+    ("ground handling only", re.compile(
+        r"ground ?(?:services|handling)|bodenverkehrsdienst|\bhandling\b|swissport|wisag|aviapartner|menzies|"
+        r"\bdnata\b|flugzeugabfertigung", re.I)),
+    ("a cleaning company", re.compile(r"cleaning|reinigung|kl[üu]h\b|piepenbrock|dussmann|facility services", re.I)),
+    ("a security staffing company", re.compile(
+        r"securitas|frasec|\bi-sec\b|\bicts\b|k[öo]tter|sicherheitsdienst|luftsicherheit|aviation security|"
+        r"airport security|security services|sicherheitsgesellschaft|wachschutz|bewachung", re.I)),
+    ("not a company that hires (travel agency, leisure, shell company or empty office)", re.compile(
+        r"reiseb[üu]ro|flugsimulator|vorrats|^(?:empty|vacant|leer|n/?a)$", re.I)),
+)
+# Airport ads for jobs that are never office / IT jobs
+AIRPORT_JOB = re.compile(
+    r"flugbegleit|cabin crew|flight attendant|vorfeld|\bramp\b|bodenverkehrsdienst|gep[äa]ck|luftsicherheit|"
+    r"passagier|fluggast|check-?in|passenger|abfertig|enteis|de-?icing|sicherheitskontroll|kontrollkraft|"
+    r"\bsecurity\b|frachtumschlag|umschlag|flugzeugreinig|stapler|ladearbeit|lagerist", re.I)
 
 
 def is_staffing(c: dict) -> bool:
@@ -334,15 +493,21 @@ def skip_reason(c: dict) -> str | None:
     """Why this company is skipped without checking its website, or None."""
     from .companies import IT_SOURCES, REGIONAL
     from .filters import get_filter
-    name, sources = c["name"], json.loads(c["sources"] or "{}")
+    name, sources, airport = c["name"], json.loads(c["sources"] or "{}"), is_airport(c["town"])
     if is_staffing(c):
         return "a staffing agency"
-    if (m := NOT_TARGET.search(name)) and not REGIONAL.search(name):
+    if airport:
+        for label, rule in AIRPORT_SKIP:
+            if m := rule.search(name):
+                return f"{label} at the airport (\"{m[0]}\" in its name)"
+    # "Flughafen" in a name keeps a town's company ("Flughafen Restaurant" is still a restaurant at the airport)
+    if (m := NOT_TARGET.search(name)) and (airport or not REGIONAL.search(name)):
         return f"a shop, restaurant, care or craft business (\"{m[0]}\" in its name)"
     titles = json.loads(c["ad_titles"] or "[]")
     only_ads = all(k.endswith(":aa") or k == "your_jobs" for k in sources) and not any(sources.get(s) for s in IT_SOURCES)
     ads = sum(n for k, n in sources.items() if k.endswith(":aa"))
-    if only_ads and titles and ads <= SMALL_AD_COUNT and all(NOT_TARGET_JOB.search(t) for t in titles) \
+    not_office = lambda t: NOT_TARGET_JOB.search(t) or airport and AIRPORT_JOB.search(t)
+    if only_ads and titles and ads <= SMALL_AD_COUNT and all(not_office(t) for t in titles) \
             and not any(get_filter().it.find(t) for t in titles):
         return f"only ads for non-office jobs, e.g. \"{titles[0][:60]}\""
     return None
@@ -353,10 +518,14 @@ SKIP_NOTE = "Skipped by rule: "
 
 def triage() -> int:
     """The rules for town companies that weren't checked yet. A company skipped by an older rule that
-    doesn't apply any more goes back in line. Never touches a status you chose. Returns how many skipped."""
+    doesn't apply any more goes back in line. Never touches a status you chose. At the airport also companies
+    checked before (found elsewhere first) that are New or No careers page: the airport's stronger rules
+    count for them too (Watched and Initiativ stay). Returns how many skipped."""
     skipped = 0
     for c in db.company_rows():
-        if not c["town"] or c["status_by"] == "you" or c["last_checked"]:
+        if not c["town"] or c["status_by"] == "you":
+            continue
+        if c["last_checked"] and not (is_airport(c["town"]) and c["status"] in ("new", "no_career_page") and not c["link_id"]):
             continue
         reason = skip_reason(c)
         if reason and c["status"] != "skipped":
@@ -386,7 +555,9 @@ def to_check(exclude: set[int]) -> list[dict]:
 
 def _mentions_town(page: Page, town: str) -> bool:
     text = careers._text_head(page.html, len(page.html))
-    return bool(re.search(rf"\b{re.escape(town)}\b", text, re.I)) or \
+    # The airport's companies name their city: "Frankfurt am Main", "Frankfurt Airport"
+    place = towns()[town].get("city", town).split()[0] if is_airport(town) else town
+    return bool(re.search(rf"\b{re.escape(place)}\b", text, re.I)) or \
         any(str(p) in text for p in towns()[town]["postcodes"])
 
 
@@ -498,12 +669,45 @@ def skip_staffing() -> int:
     return skipped
 
 
+SAME_SITE = "Same website as "
+
+
+def merge_same_website() -> int:
+    """Frankfurt Airport: two of its names with the same website (the same address, not only the same group
+    domain) are one company ("SIEMENS AG" and "Siemens AG", "Condor" and "Condor Flugdienst GmbH").
+    "Lufthansa Cargo" with its own website stays its own company. The one kept: a status you chose, a watched
+    link, a careers page, the shortest name (the website's owner: "Condor", not "Condor Technik"), the most
+    sources, the oldest. The others are Skipped with a note; a Watched or Initiativ one never is.
+    Returns how many were merged."""
+    groups: dict[str, list[dict]] = {}
+    for c in db.company_rows():
+        if c["website"] and is_airport(c["town"]):
+            groups.setdefault(careers.host(c["website"]), []).append(c)
+    merged = 0
+    for site, group in groups.items():
+        if len(group) < 2:
+            continue
+        live = [c for c in group if not (c["status_note"] or "").startswith(SAME_SITE)]
+        keep = min(live or group, key=lambda c: (c["status_by"] != "you", not c["link_id"], not c["career_url"],
+                                                 len(c["name_key"]), -sum(json.loads(c["sources"] or "{}").values()),
+                                                 c["id"]))
+        for c in group:
+            if c is keep or c["status_by"] == "you" or c["link_id"] or c["status"] not in ("new", "no_career_page"):
+                continue
+            db.update_company(c["id"], {"status": "skipped",
+                                        "status_note": f"{SAME_SITE}{keep['name']} ({site}): counted as one company"})
+            merged += 1
+    if merged:
+        log.info("Region: %d airport companies have the same website as another one: merged", merged)
+    return merged
+
+
 def settle(progress: dict) -> dict:
     """Give every checked company with a careers page, and every checked town company, its final status.
     Returns {status: how many changed}."""
     from .company_jobs import size_of
     changed = {s: 0 for s in FINAL}
-    changed["skipped"] += skip_staffing()
+    changed["skipped"] += skip_staffing() + merge_same_website()
     contacts = []
     for c in db.company_rows():
         # Watched links, Initiativ and Skipped are final already; a status you chose is never changed

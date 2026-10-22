@@ -91,6 +91,12 @@ DEFAULTS = {
             "Egelsbach": {"ags": "06438003", "postcodes": [63329], "hall": "Gemeinde Egelsbach"},
             "Dreieich": {"ags": "06438002", "postcodes": [63303]},
             "Neu-Isenburg": {"ags": "06438009", "postcodes": [63263]},
+            # Not a town: the airport area (Terminals, Cargo City Nord/Süd, Gateway Gardens, The Squaire).
+            # osm_areas: the Frankfurt district "Flughafen" + the airport grounds; 60549 is its postcode,
+            # 60546 / 60547 the big-customer postcodes of Lufthansa and Fraport
+            "Frankfurt Airport": {"osm_areas": [3891373, 5813621], "postcodes": [60549, 60546, 60547],
+                                  "aa_where": "60549", "place": r"flughafen|airport", "city": "Frankfurt am Main",
+                                  "airport": True},
         },
         "max_checks_per_run": 300,
         "max_contacts_per_run": 60,
