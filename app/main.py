@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (VERSION, ai, applications, categories, companies, company_jobs, db, must_apply, discover, gmail, region,
+from . import (VERSION, ai, applications, auto_resume, categories, companies, company_jobs, db, must_apply, discover, gmail, region,
                scheduler, telegram, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all, recheck_hours,
                       ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
@@ -256,7 +256,7 @@ def list_companies():
 @app.get("/api/coverage")
 def coverage():
     """Region coverage: per town how many companies, careers pages, and how many have a final status."""
-    return {**region.coverage(), "progress": companies.progress()}
+    return {**region.coverage(), "progress": companies.progress(), "auto": auto_resume.status()}
 
 
 @app.post("/api/companies/run")

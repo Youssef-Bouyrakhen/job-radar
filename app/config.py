@@ -61,6 +61,7 @@ DEFAULTS = {
         "ai_seconds_between_requests": 12,
         "max_size_lookups_per_run": 200,
         "daily_run_hour": 3,
+        "auto_resume": True,  # every 5 minutes: go on with the work that is left (auto_resume.py)
         "night_end_hour": 7,
         "lookalikes_every_days": 7,
         "max_lookalikes": 15,

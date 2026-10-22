@@ -1159,7 +1159,8 @@ async function loadCoverage() {
   try { coverage = await api('coverage'); } catch (e) { coverage = { error: 'Could not load the coverage: ' + e.message }; }
   renderCoverage(); renderNav();
   clearTimeout(covTimer);
-  if (coverage.progress?.running && state.tab === 'coverage') covTimer = setTimeout(loadCoverage, 5000);
+  // A run can start by itself (auto-resume): look again every minute, every 5 s while one is going
+  if (state.tab === 'coverage' && !coverage.error) covTimer = setTimeout(loadCoverage, coverage.progress?.running ? 5000 : 60000);
 }
 const pluralOf = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 // total: the "Whole region" row on top (its numbers aren't links: the Companies page filters one town)
@@ -1182,6 +1183,8 @@ function renderCoverage() {
   const parts = ['<span>Every business in the region that could hire an IT Werkstudent</span>'];
   if (state.demo) parts.push('<span>Demo data: connect the backend to see the coverage</span>');
   else if (r && !r.error) parts.push(`<span>${r.per_night} more companies checked per night${r.run_hour != null ? ` (${r.run_hour}:00)` : ''}</span>`);
+  // "Auto-resume: running" / "waiting for AI until 09:00" / "all done": runs go on by themselves
+  if (r?.auto?.text) parts.push(`<span class="cov-auto cov-auto--${esc(r.auto.state)}">${esc(r.auto.text)}</span>`);
   if (p.running) parts.push(`<span class="status-line is-checking"><span class="status-dot"></span>${esc(p.step)}${p.total ? ` · ${p.done} of ${p.total}` : ''}</span>`);
   if (r?.error) parts.push(`<span class="demo-note">${esc(r.error)}</span>`);
   $('#coverageSummary').innerHTML = parts.join('');

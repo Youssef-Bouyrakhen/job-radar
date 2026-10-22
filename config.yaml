@@ -325,6 +325,7 @@ companies:
   max_initiativ_reasons_per_run: 60
   daily_run_hour: 3              # run discovery by itself once a day (German time); null = off
   night_end_hour: 7              # a night run stops starting new companies 15 min before this (German time); the rest waits
+  auto_resume: true              # every 5 min: if there is work left and no run is going, go on by itself (not near 03:00 / 19:00)
   # Phase C
   lookalikes_every_days: 7       # the daily run also asks the AI for look-alike companies this often (1 request)
   max_lookalikes: 15             # look-alike companies asked for per request

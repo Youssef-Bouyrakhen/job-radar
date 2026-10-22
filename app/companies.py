@@ -530,20 +530,33 @@ def progress() -> dict:
     return {**_progress, "warnings": list(_progress["warnings"]), "notes": list(_progress["notes"])}
 
 
-def start(kind: str = "run", text: str = "", label: str = "", night_limit: bool = True) -> bool:
+def start(kind: str = "run", text: str = "", label: str = "", night_limit: bool = True,
+          stop_at: float | None = None) -> bool:
     """Start a run in the background. False if one is already running (only one at a time).
     kind "import": the companies in `text` (names or a link), marked with `label`;
     kind "lookalikes": companies similar to the ones whose jobs you saved or applied to;
     kind "recheck": look again for the careers pages of the "No careers page" companies;
-    kind "read": read the jobs of every company never read (company_jobs.read_unread).
-    night_limit False: no stop before the morning, even if started at night."""
+    kind "read": read the jobs of every company never read (company_jobs.read_unread);
+    kind "auto": the queue only, no collecting (started by auto_resume.py).
+    night_limit False: no stop before the morning, even if started at night.
+    stop_at: stop starting new companies at this time (time.time()) instead."""
     with _lock:
         if _progress["running"]:
             return False
         _progress.update(running=True, kind=kind, step="Starting…", **COUNTERS, warnings=[], notes=[], error="",
                          finished_at=None)
-    threading.Thread(target=_run, args=(kind, text, label, night_limit), daemon=True, name="companies").start()
+    threading.Thread(target=_run, args=(kind, text, label, night_limit, stop_at), daemon=True, name="companies").start()
     return True
+
+
+def scheduled_run() -> None:
+    """The 03:00 night run. A run still going (auto-resume, or one you started) is waited for, at most
+    an hour, instead of skipping the night."""
+    for _ in range(60):
+        if start():
+            return
+        time.sleep(60)
+    log.warning("Companies: the night run didn't start, another run was still going after an hour")
 
 
 def night_deadline() -> float | None:
@@ -561,14 +574,22 @@ def too_late(progress: dict) -> bool:
     return bool(progress.get("stop_at")) and time.time() >= progress["stop_at"]
 
 
-def _run(kind: str = "run", text: str = "", label: str = "", night_limit: bool = True) -> None:
+def _run(kind: str = "run", text: str = "", label: str = "", night_limit: bool = True,
+         stop_at: float | None = None) -> None:
     from . import company_import  # it imports this module
     started = time.monotonic()
-    _progress["stop_at"] = night_deadline() if night_limit else None
+    _progress["stop_at"] = stop_at or (night_deadline() if night_limit else None)
     try:
         ids = None  # None = all companies that are due
         if kind == "recheck":  # once after an update: the "No careers page" companies, nothing else
             recheck_no_career_pages(_progress)
+            return
+        if kind == "auto":  # auto-resume: what is waiting in the queue, the same steps as the night run
+            _step("the region rules", region.triage)
+            _step("checking the companies", lambda: _check(None))
+            categories.run(_progress, None)
+            company_jobs.run(_progress, None)
+            _step("the final region statuses", lambda: region.settle(_progress))
             return
         if kind == "read":  # once, by hand: the jobs of every company never read, then the statuses
             company_jobs.read_unread(_progress)

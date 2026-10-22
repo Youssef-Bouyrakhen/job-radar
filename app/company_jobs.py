@@ -677,6 +677,9 @@ def next_reads(rows: list[dict]) -> None:
             c["next_read_how"] = f"night run at {night_hour:02d}:00 (once a week{'' if c['jobs_read_at'] else '; first read, in line'})"
 
 
+reading_watched = threading.Event()  # set while the 19:00 read is going
+
+
 def read_watched() -> dict:
     """Read the job list of every watched company once (19:00, German time), so a good new job
     reaches you the same day. Waits while a Companies run is going (they read the same pages)."""
@@ -691,7 +694,11 @@ def read_watched() -> dict:
     started = time.monotonic()
     todo = watched_to_read()
     progress = {"step": "", "done": 0, "total": 0, "jobs_read": 0, "new_jobs": 0, "warnings": []}
-    new_good = read_jobs(todo, progress)
+    reading_watched.set()  # auto-resume doesn't start a run meanwhile
+    try:
+        new_good = read_jobs(todo, progress)
+    finally:
+        reading_watched.clear()
     seconds = time.monotonic() - started
     log.info("Watched careers pages: read %d of %d in %.0f s, %d new jobs (%d match your filter)%s",
              progress["jobs_read"], len(todo), seconds, progress["new_jobs"], new_good,

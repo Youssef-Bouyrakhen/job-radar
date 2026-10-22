@@ -309,6 +309,20 @@ is never overwritten by a later run.
 
 Discovery also runs by itself **once a day at 03:00** (German time; set `daily_run_hour: null` in config.yaml to turn it off).
 
+**Auto-resume** (`auto_resume: true`): you don't need to start runs by hand. Every 5 minutes, if no run is
+going and there is still work (companies never checked, or careers pages whose job list was never read), a
+run starts by itself and works through the queue (the same steps as the night run, without collecting the
+sources again). After a restart or deploy it goes on by itself within 5 minutes, where it stopped.
+- **No endless loops**: a run that got nowhere isn't repeated. When the work left needs the AI and all free
+  AI requests are used up, it waits until an AI is available again; when the web search is used up, until
+  midnight; otherwise 1, 2, 4 … max 24 hours. New work (e.g. from the night run) starts it again.
+- **Never at the same time as 03:00 / 19:00**: no start in the 30 minutes before, it stops starting new
+  companies 15 minutes before, and it waits while the 19:00 read is going. The 03:00 run waits for a run
+  that is still finishing instead of being skipped. Same polite crawler and web search limits as always.
+- **All done**: it does nothing until new work appears.
+- The **Coverage** page shows it, e.g. "Auto-resume: running", "waiting for AI until 02:00 tomorrow" or
+  "all done".
+
 Each company shows **N good**: its Werkstudent / part-time jobs that pass your keyword filter and are
 in the area (Darmstadt / Frankfurt, remote, or nationwide like "Bundesweit"). Hover it to see why the
 others don't count (e.g. "1 Werkstudent job filtered out (Not IT-related) · 4 outside the area (Dortmund)").
