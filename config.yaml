@@ -256,10 +256,12 @@ cerebras:
   model: gpt-oss-120b
 
 # AI requests per provider and day (counted by Job Radar, shown in the AI bar at the top).
-# Estimates of the free limits (Cloudflare: cloudflare.daily_neurons). When a provider says its daily quota is gone, it counts as
-# used up until the next day (00:00 UTC).
+# Estimates of the free limits (Cloudflare: cloudflare.daily_neurons). Groq and OpenRouter say their real numbers
+# themselves, Gemini says its limit when it is reached; those beat the estimates. When a provider says its daily
+# limit is gone, it stays off until its real reset: Gemini at midnight US Pacific time (09:00 in Germany), the
+# others at 00:00 UTC (02:00 in Germany), Groq bit by bit (each request comes back after 24 hours).
 ai_budget:
-  daily_requests: {Gemini: 50, Groq: 50, OpenRouter: 50, GitHub: 150}
+  daily_requests: {Gemini: 20, Groq: 1000, OpenRouter: 50, GitHub: 150}
   # Priorities: 1. scoring jobs + Must apply blocker check (may use everything),
   # then each kind of work stops when only this % of today's requests is left:
   # 2. application emails the rules can't sort, 3. reading careers pages without a feed

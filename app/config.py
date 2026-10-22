@@ -42,7 +42,7 @@ DEFAULTS = {
     "mistral": {"enabled": False, "model": "mistral-small-latest"},
     "cerebras": {"enabled": False, "model": "gpt-oss-120b"},
     "ai_budget": {
-        "daily_requests": {"Gemini": 50, "Groq": 50, "OpenRouter": 50, "GitHub": 150, "Mistral": 300, "Cerebras": 300},
+        "daily_requests": {"Gemini": 20, "Groq": 1000, "OpenRouter": 50, "GitHub": 150, "Mistral": 300, "Cerebras": 300},
         "keep_percent": {"mail": 10, "jobs": 30, "low": 60},
     },
     "companies": {

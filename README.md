@@ -511,6 +511,10 @@ still need it stay unchecked and the next night goes on with them.
       scored as soon as any provider is free. The **AI usage bar** at the top of every page shows
       used / estimated limit per provider, the active one (green), empty ones (red), the reset time
       and how many jobs wait for a score.
+- [x] **Honest AI limits (v10.8)**: Groq and OpenRouter report their real requests left, Gemini its real
+      daily limit when it is reached. After a "daily limit reached" answer a provider stays red until its
+      own real reset ("resets at 09:00": Gemini at midnight US Pacific time, Cloudflare / OpenRouter at
+      00:00 UTC, Groq bit by bit) - also after a restart. Refused requests no longer count as used.
 - [x] **Company Discovery Engine, Phase A** (v8.3): **Companies** page. Collects employers from the
       Arbeitsagentur (all IT jobs), OpenStreetMap and your own data, merges duplicates, finds and
       checks websites and careers pages, detects 12 applicant systems. Polite crawler (robots.txt,

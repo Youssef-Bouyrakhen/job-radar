@@ -108,6 +108,8 @@ button.switch { border: 0; padding: 0; cursor: pointer; }
 .ai-box--empty { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
 .ai-box--empty .ai-tag, .ai-box--empty .ai-count { color: var(--danger); }
 .ai-box--empty .ai-meter span { background: var(--danger); }
+.ai-when { margin-top: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.ai-box--empty .ai-when { color: var(--danger); font-weight: 600; }
 .ai-info { flex: none; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 0 6px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .ai-waiting.has-waiting { color: var(--text); font-weight: 600; }
 .ai-bar.is-empty .ai-reset { color: var(--danger); font-weight: 600; }

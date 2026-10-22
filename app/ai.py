@@ -13,6 +13,7 @@ import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -93,7 +94,13 @@ JOBS (JSON)
 
 
 class RateLimited(Exception):
-    pass
+    """The provider said "limit reached". until: its daily limit is gone, back at this time (its real reset).
+    wait: only a short limit (per minute), seconds until it takes requests again. limit: its real daily limit,
+    if it said so."""
+    def __init__(self, message: str = "", until: datetime | None = None, wait: float | None = None,
+                 limit: int | None = None):
+        super().__init__(message)
+        self.until, self.wait, self.limit = until, wait, limit
 
 
 class Overloaded(Exception):
@@ -134,6 +141,15 @@ OPENAI_STYLE_URLS = {
 # so it never needs the Workers Paid plan.
 NEURONS = {"Cloudflare"}
 
+# When each provider's free day starts again, on its own clock: Gemini at midnight US Pacific time
+# (09:00 in Germany), the others at midnight UTC (02:00 in Germany; in winter 08:00 / 01:00).
+# Groq has no fixed time: each request comes back 24 hours after it was made (it says when in its answers).
+PACIFIC = ZoneInfo("America/Los_Angeles")
+GERMANY = ZoneInfo("Europe/Berlin")
+RESET_ZONE = {"Gemini": PACIFIC}
+ROLLING = {"Groq"}
+REPORT_TTL = 3600  # a provider's own numbers (Groq, OpenRouter) count this many seconds, then the counter again
+
 # ---- daily budget and priorities ---------------------------------------------------
 # Every request is counted per provider and day (data: ai_usage). Work that matters less only
 # runs while enough of today's requests are left (ai_budget: keep_percent), so scoring never runs out:
@@ -156,25 +172,136 @@ def stop_note(e: Exception, later: str) -> str:
     return f"The AI's free limit is used up: {later}."
 
 
+def _zone(name: str):
+    return RESET_ZONE.get(name, timezone.utc)
+
+
+def quota_day(name: str) -> str:
+    """The provider's own "today" for the counter: the UTC date, for Gemini the Pacific date ("2026-10-22 PT")."""
+    day = datetime.now(_zone(name)).date().isoformat()
+    return f"{day} PT" if name in RESET_ZONE else day
+
+
+def reset_at(name: str) -> datetime:
+    """When the provider's next free day starts (its midnight)."""
+    zone = _zone(name)
+    return datetime.combine(datetime.now(zone).date() + timedelta(days=1), datetime.min.time(), zone)
+
+
+# A provider that answered "today's limit is used up" stays off until its real reset, also after a restart
+# (data: setting "ai_limits"). Its real daily limit is kept too when it said it (Gemini does in the answer).
+_limits: dict | None = None
+
+
+def _saved_limits() -> dict:
+    global _limits
+    if _limits is None:
+        _limits = json.loads(db.get_setting("ai_limits") or "{}")
+        _limits.setdefault("until", {})
+        _limits.setdefault("daily", {})
+    return _limits
+
+
+def blocked_until(name: str) -> datetime | None:
+    """After a "daily limit reached" answer: when the provider is back (None = not blocked)."""
+    until = _saved_limits()["until"].get(name)
+    if until and datetime.fromisoformat(until) > datetime.now(timezone.utc):
+        return datetime.fromisoformat(until)
+    return None
+
+
+def _hit_daily_limit(name: str, until: datetime, limit: int | None) -> None:
+    saved = _saved_limits()
+    saved["until"][name] = until.astimezone(timezone.utc).isoformat(timespec="seconds")
+    if limit:
+        saved["daily"][name] = limit
+    db.set_setting("ai_limits", json.dumps(saved))
+
+
+# What the providers themselves say is left: Groq in every answer (headers), OpenRouter on request (/key)
+_reported: dict[str, dict] = {}   # provider -> {"limit", "remaining", "at": time.monotonic(), "full_at": datetime}
+
+
+def _report(name: str) -> dict | None:
+    if name == "OpenRouter":
+        _ask_openrouter_left()
+    r = _reported.get(name)
+    return r if r and time.monotonic() - r["at"] < REPORT_TTL else None
+
+
+_openrouter_asked = 0.0
+
+
+def _ask_openrouter_left() -> None:
+    """OpenRouter tells how many free-model requests are left today (costs no request). At most every 5 minutes,
+    in between each answer takes one off (ask_json)."""
+    global _openrouter_asked
+    if time.monotonic() - _openrouter_asked < 300:
+        return
+    _openrouter_asked = time.monotonic()  # also on failure: don't ask again at once
+    try:
+        free = httpx.get("https://openrouter.ai/api/v1/key", timeout=5,
+                         headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}).json()["data"]["free_model_daily_requests"]
+        _reported["OpenRouter"] = {"limit": int(free["limit"]), "remaining": int(free["remaining"]), "at": time.monotonic()}
+    except Exception as e:
+        log.debug("OpenRouter: could not ask for its free requests left (%s)", e)
+
+
+def _note_headers(name: str, r: httpx.Response) -> None:
+    """Groq says its daily requests (limit, left, when all are back) in every answer."""
+    h = r.headers
+    if name in ROLLING and h.get("x-ratelimit-limit-requests") and h.get("x-ratelimit-remaining-requests"):
+        full = _seconds(h.get("x-ratelimit-reset-requests"))
+        _reported[name] = {"limit": int(h["x-ratelimit-limit-requests"]), "remaining": int(h["x-ratelimit-remaining-requests"]),
+                           "at": time.monotonic(), "full_at": datetime.now(timezone.utc) + timedelta(seconds=full or 0)}
+
+
+def _seconds(text: str | None) -> float | None:
+    """ "41s", "1m26.4s", "585ms", "2h3m", "30" -> seconds (None if empty)."""
+    if not text:
+        return None
+    text = str(text).strip()
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    parts = re.findall(r"([\d.]+)(ms|h|m|s)", text)
+    return sum(float(n) * {"ms": 0.001, "h": 3600, "m": 60, "s": 1}[u] for n, u in parts) if parts else None
+
+
 def budget_of(name: str) -> int:
-    """Estimated free requests a day (Cloudflare: neurons). A config.yaml without a provider (e.g. GitHub) gets the default."""
+    """Free requests a day (Cloudflare: neurons): the provider's own number if it said it, else the estimate
+    from config.yaml. A config.yaml without a provider (e.g. GitHub) gets the default."""
     if name in NEURONS:
         return int(_section(name)["daily_neurons"])
+    if name in _saved_limits()["daily"]:
+        return int(_saved_limits()["daily"][name])
     limits = {**DEFAULTS["ai_budget"]["daily_requests"], **(CONFIG["ai_budget"].get("daily_requests") or {})}
     return int(limits.get(name, 0))
 
 
 def used_today() -> dict[str, int]:
-    """Requests used today per provider (Cloudflare: neurons)."""
-    neurons = db.ai_neurons_today()
-    return {**db.ai_usage_today(), **{p: math.ceil(neurons.get(p, 0)) for p in NEURONS}}
+    """Requests used in each provider's own today (Cloudflare: neurons), as counted by Job Radar."""
+    found = {}
+    for p in providers():
+        day = quota_day(p)
+        found[p] = math.ceil(db.ai_neurons_on(day).get(p, 0)) if p in NEURONS else db.ai_usage_on(day).get(p, 0)
+    return found
 
 
 def usage() -> list[dict]:
-    """Per provider with a key: requests (or neurons) used today, the daily budget, how many are left."""
-    used = used_today()
-    return [{"name": p, "used": used.get(p, 0), "budget": budget_of(p), "left": max(0, budget_of(p) - used.get(p, 0)),
-             "unit": "neurons" if p in NEURONS else "requests"} for p in providers()]
+    """Per provider with a key: requests (or neurons) used today, the daily limit, how many are left, and where
+    the numbers come from: "provider" (it said so itself) or "counter" (Job Radar counted)."""
+    used, rows = used_today(), []
+    for p in providers():
+        budget, n, source = budget_of(p), used.get(p, 0), "counter"
+        real = _report(p)
+        if real:
+            budget, n, source = real["limit"], real["limit"] - real["remaining"], "provider"
+        left = 0 if blocked_until(p) else max(0, budget - n)
+        rows.append({"name": p, "used": n, "budget": budget, "left": left, "source": source,
+                     "unit": "neurons" if p in NEURONS else "requests"})
+    return rows
 
 
 def _keep(priority: str) -> int:
@@ -226,43 +353,63 @@ def providers() -> list[str]:
     return found
 
 
-def _ready(name: str, used: dict[str, int]) -> bool:
-    """Not paused and still has requests left today."""
-    return time.monotonic() >= _paused.get(name, 0) and used.get(name, 0) < budget_of(name)
+def _left() -> dict[str, int]:
+    return {u["name"]: u["left"] for u in usage()}
+
+
+def _ready(name: str, left: dict[str, int]) -> bool:
+    """Not paused, not at its daily limit and still has requests left today."""
+    return time.monotonic() >= _paused.get(name, 0) and left.get(name, 0) > 0
 
 
 def next_provider() -> str | None:
     """The provider the next request goes to, None if all are paused or used up."""
-    used = used_today()
-    return next((p for p in providers() if _ready(p, used)), None)
+    left = _left()
+    return next((p for p in providers() if _ready(p, left)), None)
 
 
 def provider_status() -> dict:
-    """For the AI usage bar and Settings: each provider with used / estimated limit today and its
-    status - active (gets the next request), next (a backup), paused (limit hit or servers busy,
-    back in a few minutes) or empty (today's requests used up)."""
-    now = time.monotonic()
+    """For the AI usage bar and Settings: each provider with used / limit today and its status - active
+    (gets the next request), next (a backup), paused (a short limit or servers busy, back in a few minutes),
+    limit (it answered "today's limit reached") or empty (Job Radar's count of today's requests is used up).
+    back_at: when a paused / limit / empty one works again; resets_at: when its free day starts again."""
+    now, utc_now = time.monotonic(), datetime.now(timezone.utc)
     active, rows = None, []
     for u in usage():
         name = u["name"]
         paused = max(0.0, _paused.get(name, 0) - now)
-        if u["left"] <= 0:
-            status = "empty"
+        until, real = blocked_until(name), _report(name)
+        resets = None if name in ROLLING else reset_at(name)
+        back = None
+        if until:
+            status, back = "limit", until
+        elif u["left"] <= 0:
+            status, back = "empty", (real or {}).get("full_at") or resets
         elif paused:
-            status = "paused"
+            status, back = "paused", utc_now + timedelta(seconds=paused)
         elif active is None:
             status, active = "active", name
         else:
             status = "next"
-        rows.append({**u, "model": model_of(name), "status": status, "paused_minutes": math.ceil(paused / 60)})
-    reset = datetime.combine(datetime.now(timezone.utc).date() + timedelta(days=1), datetime.min.time(), timezone.utc)
+        iso = lambda t: t.astimezone(timezone.utc).isoformat(timespec="seconds") if t else None
+        rows.append({**u, "model": model_of(name), "status": status, "paused_minutes": math.ceil(paused / 60),
+                     "back_at": iso(back), "resets_at": iso(resets)})
+    waiting = [r["back_at"] for r in rows if r["back_at"]]
     return {
         "active": active,
         "model": model_of(active) if active else None,
         "providers": rows,
-        "all_empty": bool(rows) and all(r["status"] == "empty" for r in rows),
-        "reset_at": reset.isoformat(timespec="seconds"),  # the daily counts start again (UTC midnight)
+        "all_empty": bool(rows) and all(r["status"] in ("limit", "empty") for r in rows),
+        "next_back_at": min(waiting) if waiting else None,  # the first provider that works again
     }
+
+
+def next_reset() -> datetime | None:
+    """The next time any provider's free day starts again (more requests left)."""
+    found = [reset_at(p) for p in providers() if p not in ROLLING]
+    found += [r["full_at"] for p in providers() if p in ROLLING and (r := _report(p)) and r.get("full_at")
+              and r["full_at"] > datetime.now(timezone.utc)]
+    return min(found) if found else None
 
 
 _last_call = 0.0
@@ -291,24 +438,28 @@ def ask_json(prompt: str, schema: dict, temperature: float, priority: str = "low
         raise BudgetSaved("AI requests left today are kept for more important work")
     error = None
     for name in providers():
-        if not _ready(name, used_today()):
-            continue  # paused, or this provider's free requests for today are used up
+        if not _ready(name, _left()):
+            continue  # paused, at its daily limit, or this provider's free requests for today are used up
         if (prompt_limit(name) or len(prompt)) < len(prompt):
             continue  # too long for this provider's free tier
-        db.count_ai_request(name)
+        day = quota_day(name)
+        db.count_ai_request(name, day)  # counted before: requests running at the same time see it
         try:
             answer = _ask_gemini_api(prompt, schema, temperature) if name == "Gemini" \
                 else _ask_openai_style(name, prompt, schema, temperature)
         except (RateLimited, Overloaded) as e:
-            if isinstance(e, RateLimited) and "day" in str(e).lower():  # its daily quota is gone: skip it until tomorrow
-                if name in NEURONS:
-                    db.count_ai_neurons(name, budget_of(name))
-                else:
-                    db.use_up_ai(name, budget_of(name))
-            minutes = 10 if isinstance(e, RateLimited) else 3
-            _paused[name] = time.monotonic() + minutes * 60
-            log.warning("%s: %s, pausing it for %d min and using the next AI provider (%s)",
-                        name, "limit reached" if isinstance(e, RateLimited) else "servers busy", minutes, str(e)[:160])
+            db.count_ai_request(name, day, -1)  # a refused request doesn't count at the provider either
+            if isinstance(e, RateLimited) and e.until:  # today's limit is gone: off until its real reset
+                _hit_daily_limit(name, e.until, e.limit)
+                log.warning("%s: daily limit reached%s, off until %s German time, using the next AI provider (%s)",
+                            name, f" ({e.limit} requests)" if e.limit else "",
+                            e.until.astimezone(GERMANY).strftime("%d.%m. %H:%M"), str(e)[:160])
+            else:
+                wait = (e.wait if isinstance(e, RateLimited) else None) or (600 if isinstance(e, RateLimited) else 180)
+                _paused[name] = time.monotonic() + wait
+                log.warning("%s: %s, pausing it for %s and using the next AI provider (%s)",
+                            name, "limit reached" if isinstance(e, RateLimited) else "servers busy",
+                            f"{math.ceil(wait / 60)} min" if wait >= 60 else f"{math.ceil(wait)} s", str(e)[:160])
             error = e
             continue
         except Exception as e:  # e.g. a broken answer or "request too large": the next provider may manage
@@ -316,6 +467,8 @@ def ask_json(prompt: str, schema: dict, temperature: float, priority: str = "low
             log.warning("%s failed (%s), pausing it for 5 min and using the next AI provider", name, str(e)[:160])
             error = e
             continue
+        if name in _reported and name not in ROLLING:  # OpenRouter: one less until it is asked again
+            _reported[name]["remaining"] = max(0, _reported[name]["remaining"] - 1)
         if _active != name:
             log.info("AI provider now: %s (%s)", name, model_of(name))
         _active = name
@@ -338,19 +491,19 @@ def _ask_openai_style(name: str, prompt: str, schema: dict, temperature: float) 
     url = OPENAI_STYLE_URLS[name].format(account=os.environ.get("CLOUDFLARE_ACCOUNT_ID", ""))
     r = httpx.post(url, headers={"Authorization": f"Bearer {os.environ[key]}"}, json=body, timeout=180)
     data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    _note_headers(name, r)
     if name in NEURONS:
         _count_neurons(name, data)
     if not data.get("error") and data.get("errors"):  # Cloudflare's own error format
         data["error"] = {"message": "; ".join(str(e.get("message", e) if isinstance(e, dict) else e) for e in data["errors"])}
     if "daily free allocation" in str((data.get("error") or {}).get("message", "")).lower():
-        raise RateLimited("day: Cloudflare's free neurons for today are used up")
+        raise RateLimited("day: Cloudflare's free neurons for today are used up", until=reset_at(name))
     status = r.status_code
     code = (data.get("error") or {}).get("code")
     if status == 200 and isinstance(code, int):  # OpenRouter sometimes reports errors inside a 200
         status = code
-    if status == 429:  # GitHub says which limit in a header: "UserByModelByDay" = today's requests are gone
-        raise RateLimited(f"{r.headers.get('x-ratelimit-type', '')} "
-                          f"{str((data.get('error') or {}).get('message', ''))[:200]}".strip())
+    if status == 429:
+        raise _limit_error(name, r, str((data.get("error") or {}).get("message", ""))[:200])
     if isinstance(status, int) and status >= 500:
         raise Overloaded(f"HTTP {status}")
     if status != 200 or not data.get("choices"):
@@ -363,6 +516,38 @@ def _ask_openai_style(name: str, prompt: str, schema: dict, temperature: float) 
     return answer
 
 
+def _limit_error(name: str, r: httpx.Response, message: str) -> RateLimited:
+    """A "limit reached" answer of Groq / OpenRouter / Cloudflare: a short limit (per minute) is a pause,
+    a daily one keeps the provider off until it is back - Groq says when (retry-after), OpenRouter too
+    (X-RateLimit-Reset), otherwise at its midnight. GitHub names the limit in a header ("UserByModelByDay")."""
+    text = f"{r.headers.get('x-ratelimit-type', '')} {message}".lower()
+    wait = _seconds(r.headers.get("retry-after"))
+    if not any(w in text for w in ("per day", "per-day", "byday", "(rpd)", "(tpd)")):
+        return RateLimited(message, wait=wait)
+    now = datetime.now(timezone.utc)
+    until = reset_at(name)
+    if name in ROLLING and wait:
+        until = now + timedelta(seconds=wait)
+    elif (ms := _seconds(r.headers.get("x-ratelimit-reset"))) and ms / 1000 > now.timestamp():
+        until = datetime.fromtimestamp(ms / 1000, timezone.utc)
+    return RateLimited(f"day: {message}", until=until)
+
+
+def _gemini_limit(error: dict) -> RateLimited:
+    """Gemini's "limit reached" names the limit: "...PerDay..." = today's requests are gone (back at midnight
+    US Pacific time, it also says how many there are), "...PerMinute..." = wait the retryDelay."""
+    details = error.get("details") or []
+    violations = [v for d in details for v in d.get("violations") or []]
+    ids = ", ".join(v.get("quotaId", "") for v in violations)
+    message = f"{error.get('message', '')[:160]}{f' [{ids}]' if ids else ''}"
+    daily = [v for v in violations if "perday" in v.get("quotaId", "").lower()]
+    if daily or "per day" in message.lower():
+        value = str((daily or [{}])[0].get("quotaValue", ""))
+        return RateLimited(f"day: {message}", until=reset_at("Gemini"), limit=int(value) if value.isdigit() else None)
+    wait = next((_seconds(d["retryDelay"]) for d in details if d.get("retryDelay")), None)
+    return RateLimited(message, wait=wait)
+
+
 def _count_neurons(name: str, data: dict) -> None:
     """Cloudflare reports the neurons of each answer. Without that number: the price from config.yaml."""
     u = data.get("usage") or {}
@@ -371,7 +556,7 @@ def _count_neurons(name: str, data: dict) -> None:
         cfg = _section(name)
         neurons = (u.get("prompt_tokens", 0) * cfg["neurons_per_m_input"]
                    + u.get("completion_tokens", 0) * cfg["neurons_per_m_output"]) / 1e6
-    db.count_ai_neurons(name, float(neurons))
+    db.count_ai_neurons(name, quota_day(name), float(neurons))
 
 
 def _ask_gemini_api(prompt: str, schema: dict, temperature: float) -> list | dict:
@@ -394,7 +579,7 @@ def _ask_gemini_api(prompt: str, schema: dict, temperature: float) -> list | dic
             break
         time.sleep(15 * (attempt + 1))  # "model is overloaded": usually gone after a few seconds
     if r.status_code == 429:
-        raise RateLimited(r.json().get("error", {}).get("message", "")[:200])
+        raise _gemini_limit(r.json().get("error", {}))
     if r.status_code in (500, 503):
         raise Overloaded(f"HTTP {r.status_code}")
     if r.status_code != 200:

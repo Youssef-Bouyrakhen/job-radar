@@ -7,7 +7,8 @@ After a restart or deploy the scheduler starts again, the next tick (within 5 mi
 is left and goes on: nothing is lost, a company is only saved when its check is finished.
 
 No endless loops: a run that ended without any progress (the work left didn't get smaller) is not repeated
-right away. It waits until an AI is available again (all free providers used up: until they start again),
+right away. It waits until an AI is available again (all free providers at their limit: until the first one's
+real reset; the rest of today kept for scoring jobs: until a provider's free day starts again),
 until midnight (the free web searches of today are used up), or 1, 2, 4 ... max 24 hours (anything else).
 It also starts again when the amount of work changes (the night run found new companies).
 
@@ -58,13 +59,18 @@ def ai_blocked() -> bool:
     return ai.enabled() and (ai.next_provider() is None or not ai._allowed("jobs"))
 
 
+def ai_saved() -> bool:
+    """An AI could take the request, but the rest of today is kept for scoring jobs (ai_budget.keep_percent)."""
+    return ai.next_provider() is not None and not ai._allowed("jobs")
+
+
 def ai_back_at(now: datetime) -> datetime:
-    """When an AI is available again: a pause ends in a few minutes, a used-up day at the providers' reset."""
-    status = ai.provider_status()
-    if not status["all_empty"] and ai._allowed("jobs"):
-        minutes = max([p["paused_minutes"] for p in status["providers"] if p["status"] == "paused"] or [5])
-        return now + timedelta(minutes=minutes)
-    return datetime.fromisoformat(status["reset_at"]).astimezone(GERMANY)
+    """When an AI is available again. Every provider at its limit or paused: when the first one is back (each at its
+    own real reset). Kept for scoring jobs: when the next provider's free day starts again (more requests left)."""
+    back = ai.next_reset() if ai_saved() else ai.provider_status()["next_back_at"]
+    if isinstance(back, str):
+        back = datetime.fromisoformat(back)
+    return back.astimezone(GERMANY) if back else now + timedelta(minutes=5)
 
 
 def _fixed_times(now: datetime) -> list[tuple[datetime, str]]:
@@ -100,7 +106,9 @@ def _decide(now: datetime, state: dict, left: dict) -> tuple[str, datetime | Non
     # run found new companies, you changed something)
     why = state.get("waiting_for") if state.get("left") == total else None
     if why == "ai" and ai_blocked():
-        return "ai", ai_back_at(now), "the companies left need the AI, all free AI requests are used up"
+        if ai_saved():
+            return "ai_saved", ai_back_at(now), "the AI left today is kept for scoring jobs"
+        return "ai", ai_back_at(now), "the companies left need the AI, every free AI is at its limit"
     if why == "ai_off" and not ai.enabled():
         return "ai_off", None, "the companies left need the AI, which is off"
     if why == "search" and websearch.limit_reached():
@@ -174,6 +182,7 @@ def status() -> dict:
         "done": "Auto-resume: all done (starts again when new work appears)",
         "window": f"Auto-resume: waits for {why}",
         "ai": f"Auto-resume: waiting for AI until {_clock(until, now) if until else 'later'} ({todo})",
+        "ai_saved": f"Auto-resume: waits, {why}, goes on at {_clock(until, now) if until else 'later'} ({todo})",
         "ai_off": f"Auto-resume: waits, {why} ({todo})",
         "search": f"Auto-resume: waiting for the web search until {_clock(until, now) if until else 'midnight'} ({todo})",
         "retry": f"Auto-resume: {why}, tries again at {_clock(until, now) if until else 'later'} ({todo})",

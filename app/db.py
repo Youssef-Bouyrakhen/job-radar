@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS companies (
 );
 
 CREATE TABLE IF NOT EXISTS ai_usage (
-    day      TEXT NOT NULL,      -- UTC date
+    day      TEXT NOT NULL,      -- the provider's own day: UTC date, Gemini "2026-10-22 PT" (Pacific)
     provider TEXT NOT NULL,      -- Gemini / Groq / OpenRouter / Mistral / Cerebras
     requests INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, provider)
@@ -653,39 +653,31 @@ def save_place(name: str, found: tuple[float, float] | None) -> None:
                      (name.lower(), *(found or (None, None))))
 
 
-def _today() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
-
-
-def ai_usage_today() -> dict[str, int]:
+def ai_usage_on(day: str) -> dict[str, int]:
+    """Requests per provider on one day (the provider's own day, see ai.quota_day)."""
     with connect() as conn:
-        return dict(conn.execute("SELECT provider, requests FROM ai_usage WHERE day = ?", (_today(),)).fetchall())
+        return dict(conn.execute("SELECT provider, requests FROM ai_usage WHERE day = ?", (day,)).fetchall())
 
 
-def count_ai_request(provider: str) -> None:
+def count_ai_request(provider: str, day: str, n: int = 1) -> None:
+    """n = -1: a request the provider refused ("limit reached", "busy") is taken off again."""
     with connect() as conn:
-        conn.execute("INSERT INTO ai_usage (day, provider, requests) VALUES (?, ?, 1) "
-                     "ON CONFLICT(day, provider) DO UPDATE SET requests = requests + 1", (_today(), provider))
+        conn.execute("INSERT INTO ai_usage (day, provider) VALUES (?, ?) ON CONFLICT(day, provider) DO NOTHING",
+                     (day, provider))
+        conn.execute("UPDATE ai_usage SET requests = MAX(0, requests + ?) WHERE day = ? AND provider = ?",
+                     (n, day, provider))
 
 
-def ai_neurons_today() -> dict[str, float]:
+def ai_neurons_on(day: str) -> dict[str, float]:
     with connect() as conn:
-        return dict(conn.execute("SELECT provider, neurons FROM ai_usage WHERE day = ?", (_today(),)).fetchall())
+        return dict(conn.execute("SELECT provider, neurons FROM ai_usage WHERE day = ?", (day,)).fetchall())
 
 
-def count_ai_neurons(provider: str, neurons: float) -> None:
+def count_ai_neurons(provider: str, day: str, neurons: float) -> None:
     with connect() as conn:
         conn.execute("INSERT INTO ai_usage (day, provider, neurons) VALUES (?, ?, ?) "
                      "ON CONFLICT(day, provider) DO UPDATE SET neurons = neurons + excluded.neurons",
-                     (_today(), provider, neurons))
-
-
-def use_up_ai(provider: str, budget: int) -> None:
-    """The provider said its daily quota is gone: count it as used up for today."""
-    with connect() as conn:
-        conn.execute("INSERT INTO ai_usage (day, provider, requests) VALUES (?, ?, ?) "
-                     "ON CONFLICT(day, provider) DO UPDATE SET requests = MAX(requests, excluded.requests)",
-                     (_today(), provider, budget))
+                     (day, provider, neurons))
 
 
 def link_kinds() -> dict[int, dict]:
