@@ -275,8 +275,9 @@ telegram:
   # At most this many messages per round; the rest follow in the next round (5 min later).
   max_messages_per_run: 15
 
-# Your area: a job farther than max_km from `center` (and not remote / Homeoffice / Bundesweit) shows
-# "Outside your area (<city>)", is never Must apply and never sent to Telegram. No known place: "Location unknown".
+# Your area: a job farther than max_km from `center` (and not FULLY remote: hybrid uses the office city) shows
+# "Outside your area (<city>)", is never Must apply and never sent to Telegram. No known place: "Location unknown"
+# (shown in the list, not sent to Telegram).
 area:
   center: Darmstadt     # one of companies.places
   max_km: 40
@@ -384,4 +385,5 @@ region:
       airport: true              # stronger skip rules, Fraport's lists, duplicates only by the same website
   max_checks_per_run: 300        # town companies whose website + careers page are checked per night, all towns together
   max_contacts_per_run: 60       # small IT companies without a careers page: Impressum emails read per night
+  never_skip: [Euler Hermes, Alstom]   # never Skipped by the rules, always checked normally (name start)
   offeneregister: true           # read the company register (2019, 260 MB) once, keep a small extract in data/

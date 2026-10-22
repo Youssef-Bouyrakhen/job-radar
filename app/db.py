@@ -511,7 +511,7 @@ def fix_job(job_id: int, title: str, company: str, location: str, dedup: str) ->
 def jobs_without_area() -> list[dict]:
     with connect() as conn:
         return [dict(r) for r in conn.execute(
-            f"""SELECT id, title, location FROM jobs WHERE {shown_sql(None)}
+            f"""SELECT id, title, location, description FROM jobs WHERE {shown_sql(None)}
                 AND (area IS NULL OR area = 'unknown')""")]
 
 
@@ -697,7 +697,8 @@ def link_kinds() -> dict[int, dict]:
 
 def jobs_to_notify(min_score: int | None, ai_on: bool, limit: int) -> list[dict]:
     """Good new jobs not sent yet. Not sent: jobs from the very first check of a link
-    (that would be a flood), jobs outside your area, and - while Gemini is on - jobs still waiting for a score."""
+    (that would be a flood), jobs outside your area or with an unknown place (only shown in the list; sent
+    later if their place turns out to be near), and - while Gemini is on - jobs still waiting for a score."""
     waiting_for_ai = "AND (ai_score IS NOT NULL OR ai_attempts >= 3)" if ai_on else ""
     with connect() as conn:
         rows = conn.execute(
@@ -705,7 +706,7 @@ def jobs_to_notify(min_score: int | None, ai_on: bool, limit: int) -> list[dict]
                        ai_score, ai_reason, area
                 FROM jobs
                 WHERE {shown_sql(min_score)} AND notified = 0 AND baseline = 0 {waiting_for_ai}
-                AND COALESCE(area, '') != 'outside'
+                AND area IN ('near', 'remote')
                 ORDER BY COALESCE(ai_score, 0) DESC, first_seen DESC LIMIT ?""",
             (limit,),
         ).fetchall()

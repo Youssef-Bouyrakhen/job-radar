@@ -494,6 +494,8 @@ def skip_reason(c: dict) -> str | None:
     from .companies import IT_SOURCES, REGIONAL
     from .filters import get_filter
     name, sources, airport = c["name"], json.loads(c["sources"] or "{}"), is_airport(c["town"])
+    if any(c["name_key"].startswith(company_key(n)) for n in CONFIG["region"].get("never_skip") or []):
+        return None  # you said: check it normally
     if is_staffing(c):
         return "a staffing agency"
     if airport:

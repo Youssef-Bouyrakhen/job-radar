@@ -80,7 +80,7 @@ def _walk(obj):
         for item in obj:
             yield from _walk(item)
     elif isinstance(obj, dict):
-        types = obj.get("@type")
+        types = obj.get("@type") or obj.get("type")  # ATOSS (Greenhouse) writes "type" without the @
         if "JobPosting" in (types if isinstance(types, list) else [types]):
             yield obj
         for key in ("@graph", "itemListElement", "item", "mainEntity"):

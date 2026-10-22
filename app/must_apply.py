@@ -3,8 +3,9 @@
 1. Werkstudent / working student / studentische Hilfskraft, the ad states the hours and they are max 20 h/week
 2. AI score 8 or higher
 3. posted in the last 3 days (no posting date: first seen)
-4. in your area: within 40 km of Darmstadt (area: in config.yaml), or remote / Homeoffice / Bundesweit.
-   A job without a known place is never in the area (never "0 km").
+4. in your area: within 40 km of Darmstadt (area: in config.yaml), or FULLY remote (fully_remote: "100% remote",
+   "Homeoffice deutschlandweit", a place that is only "Remote"; hybrid / "remote options" -> the office city).
+   A job without a known place is never in the area (never "0 km"), and never sent to Telegram.
 5. no blockers: the AI checks "2+ years experience", staffing agency, Master-only in the scoring request
 6. at least one low-competition sign: from the company's own careers page / applicant system, a small or
    mid-size company, the company posted Werkstudent jobs before, or its category is Insurance,
@@ -37,6 +38,23 @@ STUDENT = re.compile(r"werk\s?-?student|working[- ]student|studentische[rn]?\s+(
 FULL_TIME = re.compile(r"vollzeit|full[- ]?time", re.I)
 REMOTE = re.compile(r"remote|home\s?-?office|mobiles? arbeiten|bundesweit|deutschlandweit|germany[- ]wide|"
                     r"nationwide|[üu]berregional|ortsunabh[äa]ngig|anywhere", re.I)
+# Only a FULLY remote job is in your area. These say so anywhere in the ad:
+FULLY_REMOTE = re.compile(
+    r"100\s?%\s*(?:remote|home\s?-?office|mobil)|\bfull(?:y)?[- ]remote|remote[- ]only|only remote|nur remote|"
+    r"(?:komplett|vollst[äa]ndig|ausschlie(?:ß|ss)lich|zu 100\s?%)\s+(?:remote|im home\s?-?office|mobil)|"
+    r"(?:remote|home\s?-?office)\W{0,3}(?:\w+\W+){0,2}?(?:deutschlandweit|bundesweit|germany[- ]wide|aus ganz deutschland)|"
+    r"(?:deutschlandweit|bundesweit)\W{0,3}(?:\w+\W+){0,2}?(?:remote|home\s?-?office)|ortsunabh[äa]ngig|"
+    r"work from anywhere", re.I)
+OPTION_BEFORE = re.compile(r"bis zu|up to|max(?:imal)?\.?|partly|teils", re.I)
+OPTION_AFTER = re.compile(r"^[^.|]{0,50}?\b(?:m[öo]glich|possible|optional|option|nach (?:der |erfolgreicher )?einarbeitung|"
+                          r"nach absprache|on request|auf wunsch)\b", re.I)
+# ... and these make "remote" only a part of it: then the office city counts
+PARTLY_REMOTE = re.compile(r"hybrid|teilweise|anteilig|optional|options?\b|m[öo]glich|possible|within the eu|"
+                           r"\btage?\b|\bdays?\b|flexib|on-?site|vor ort|im b[üu]ro", re.I)
+# What is left of "Remote, Deutschland" / "Homeoffice (DE)" without these is not a city
+NOT_A_CITY = re.compile(r"remote|home\s?-?office|mobiles? arbeiten|bundesweit|deutschlandweit|germany[- ]wide|"
+                        r"nationwide|[üu]berregional|ortsunabh[äa]ngig|anywhere|deutschland|germany|\bde\b|\bdeu\b|"
+                        r"\beu\b|europe|europa|\bdach\b|\bmobil\w*|\bwork\b|\bfrom\b|\bin\b|[\W\d_]+", re.I)
 STAFFING_FIRM = re.compile(r"personal(?:dienst|service|vermittlung|leasing|beratung)|zeitarbeit|staffing|"
                            r"recruit|\b(?:hays|randstad|adecco|manpower|ferchau|gulp|brunel|orizon|amadeus fire|"
                            r"tempton|piening|univativ|studitemps|jobvalley|zenjob|westhouse|computer futures)\b", re.I)
@@ -117,20 +135,37 @@ NOT_A_PLACE = re.compile(r"^(?:de|deu|deutschland|germany|d)$", re.I)
 
 def _places(location: str) -> list[str]:
     parts = [re.sub(r"\s*\(.*?\)", "", p).strip(" -") for p in re.split(r"[,;/|]| oder | or | und | and ", location)]
-    return [p for p in dict.fromkeys(parts) if len(p) >= 2 and not NOT_A_PLACE.match(p)][:8] or [location]
+    # "Hamburg (Hybrid)", "Remote, Hamburg": only the city is looked up
+    parts = [p for p in dict.fromkeys(parts) if len(p) >= 2 and not NOT_A_PLACE.match(p) and NOT_A_CITY.sub("", p)]
+    return parts[:8] or [location]
+
+
+def fully_remote(place: str, title: str = "", description: str = "") -> bool:
+    """Only a fully remote job: "100% remote", "remote only", "Homeoffice deutschlandweit" anywhere in the ad,
+    or a place that is only "Remote" / "Bundesweit" (no city, not "hybrid"; LinkedIn's "Berlin (Remote)" too).
+    "Hamburg, hybrid", "remote options" or "remote within the EU" as a benefit: not remote, the city counts."""
+    text = f"{place} | {title} | {description}"
+    for m in FULLY_REMOTE.finditer(text):
+        # "bis zu 100% Homeoffice ... möglich", "up to 100% remote possible": an option, not a remote job
+        if not OPTION_BEFORE.search(text[max(0, m.start() - 12):m.start()]) \
+                and not OPTION_AFTER.search(text[m.end():m.end() + 60]):
+            return True
+    if re.search(r"\(\s*remote\s*\)", f"{place} | {title}", re.I) and not PARTLY_REMOTE.search(place):
+        return True  # the workplace type of LinkedIn and many job systems: "(Remote)" = fully remote
+    return bool(REMOTE.search(place)) and not PARTLY_REMOTE.search(place) and not NOT_A_CITY.sub("", place)
 
 
 def area_of(job: dict) -> tuple[str, float | None]:
     """("remote" / "near" / "outside" / "unknown", km). No place = "unknown", never the company's office:
     Debeka has an office in Darmstadt, its Werkstudent job was in Koblenz."""
     place = job.get("location") or ""
-    if REMOTE.search(f"{place} | {job['title']}"):
+    if fully_remote(place, job["title"], job.get("description") or ""):
         return "remote", None
     # "Dortmund, Berlin, Darmstadt, Dresden": the nearest of the places counts
-    found = [km for part in _places(place) if (km := km_from_center(part)) is not None]
+    found = [km for part in _places(place) if (km := km_from_center(part)) is not None] if place else []
     km = min(found) if found else None
     if km is None and " · " in job["title"]:  # some alert emails put "Company · City (Remote)" into the title
-        km = km_from_center(job["title"].rsplit(" · ", 1)[1])
+        km = km_from_center(re.sub(r"\s*\(.*?\)", "", job["title"].rsplit(" · ", 1)[1]))
     if km is None:
         return "unknown", None
     return ("near" if km <= area()["max_km"] else "outside"), km
@@ -282,7 +317,7 @@ def prepare() -> None:
     log.info("Must apply: %d recent good job(s) will be scored again (blocker check)", n)
 
 
-AREA_RULE = "2"  # bump when the area / hours rules change: current jobs and the Must apply box are checked again
+AREA_RULE = "3"  # bump when the area / hours rules change: current jobs and the Must apply box are checked again
 
 
 def recheck_jobs() -> Counter | None:

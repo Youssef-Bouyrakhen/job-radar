@@ -163,8 +163,18 @@ The first view in the sidebar (and the one the page opens with) shows only the j
 1. **Werkstudent** / working student / studentische Hilfskraft, at most 20 h/week if the ad says.
 2. **AI score 8** or higher.
 3. **Posted in the last 3 days** (no posting date: when Job Radar first saw it).
-4. **Within 30 km of Darmstadt**, or remote / Homeoffice / Bundesweit (places are looked up once on
-   OpenStreetMap and remembered).
+4. **Within 40 km of Darmstadt**, or **fully** remote (places are looked up once on OpenStreetMap and
+   remembered).
+
+**Your area** (also for Telegram):
+- **Fully remote** counts: "100% remote", "remote only", "Homeoffice deutschlandweit", or a place that is
+  only "Remote" / "Bundesweit". Hybrid, "remote options", "bis zu 100% Homeoffice möglich" or "remote within
+  the EU" as a benefit don't: then the office city counts (ATOSS: Hamburg → outside your area).
+- **The place** comes from the job list, then the job's own page: its structured data (also Greenhouse /
+  Personio pages), a "Standort / Location" line, its meta tags, or the job system's data in the page
+  (Avelios: "Standort Munich" → outside your area).
+- **Location unknown**: shown in the list, but **no Telegram message** (it's sent later if its place turns
+  out to be in your area). Outside your area: never sent.
 5. **No blockers**: the AI checks "2+ years experience", staffing agency and "Master students only" in the
    same request that scores the job.
 6. At least one **low-competition sign**: found on the company's own careers page / applicant system,
@@ -419,6 +429,7 @@ still need it stay unchecked and the next night goes on with them.
 - **OffeneRegister.de**: companies with an address in these postcodes, as soon as the download works again.
 - **Stronger rules**: shops, duty-free, restaurants, cafés, caterers, parking, gates, check-in and service
   counters, car rentals, ground handling, cleaning and security staffing are Skipped right away.
+  Companies listed under `region: never_skip:` (Euler Hermes, Alstom) are never Skipped by a rule.
 - **Duplicates** only merge with the same name or the same **website**: "Lufthansa", "Lufthansa Cargo" and
   "Lufthansa Technik" stay separate when each has its own website; "Fraport AG Zentrale" and "Fraport AG"
   (same website) become one (the other is Skipped with "Same website as ...").

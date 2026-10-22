@@ -135,8 +135,10 @@ def ai_extract(company: str, part: str, links: list[str], page_url: str) -> list
             continue
         seen.add(title.lower())
         n = a.get("link")
+        # All links say "Bewerben": the one whose address ends with the title is the job's own page (Avelios)
+        named = next((u for u in links if u.split("#")[0].rstrip("/").lower().endswith("/" + _slug(title))), None)
         # A job without its own link: the careers page itself, marked with the title (no made-up address)
-        url = links[n - 1] if isinstance(n, int) and 1 <= n <= len(links) else f"{page_url.split('#')[0]}#job-{_slug(title)}"
+        url = links[n - 1] if isinstance(n, int) and 1 <= n <= len(links) else named or f"{page_url.split('#')[0]}#job-{_slug(title)}"
         jobs.append(Job(title=title, url=url, company=company, location=clean(a.get("location")),
                         employment=clean(a.get("employment"))))
     return jobs[:MAX_JOBS]

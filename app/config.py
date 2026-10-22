@@ -100,6 +100,9 @@ DEFAULTS = {
         },
         "max_checks_per_run": 300,
         "max_contacts_per_run": 60,
+        # Never Skipped by the rules, always checked normally (their only ads at the airport are sales /
+        # technician jobs, but they are big office employers)
+        "never_skip": ["Euler Hermes", "Alstom"],
         "offeneregister": True,
     },
     # Your area: jobs farther than max_km from center (and not remote / Bundesweit) are shown as
