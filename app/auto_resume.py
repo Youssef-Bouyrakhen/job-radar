@@ -12,9 +12,9 @@ real reset; the rest of today kept for scoring jobs: until a provider's free day
 until midnight (the free web searches of today are used up), or 1, 2, 4 ... max 24 hours (anything else).
 It also starts again when the amount of work changes (the night run found new companies).
 
-Never at the same time as the fixed runs: no start in the 30 minutes before 03:00 (night run) and 19:00
-(watched read), an auto run stops starting new companies 15 minutes before them, and nothing starts while
-the 19:00 read is going. The polite crawler and the web search limits are the same as always.
+Never at the same time as the fixed runs of the day plan (schedule.py): no start in the 30 minutes before
+03:00 (night run), 08:00 (LinkedIn), 13:00 (read, Monday to Friday) and 19:00 (read), an auto run stops
+starting new companies 15 minutes before them, and nothing starts while one of them is going. The polite crawler and the web search limits are the same as always.
 The state is kept in the database (settings "auto_resume"), so it survives a restart.
 """
 import json
@@ -22,13 +22,13 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 
-from . import ai, clock, companies, company_jobs, db, websearch
+from . import ai, clock, companies, company_jobs, db, linkedin, schedule, websearch
 from .config import CONFIG
 
 log = logging.getLogger("jobradar")
 
 GERMANY = clock.GERMANY
-BEFORE_FIXED = timedelta(minutes=30)  # no start this long before the 03:00 / 19:00 runs
+BEFORE_FIXED = timedelta(minutes=30)  # no start this long before the fixed runs (schedule.py)
 STOP_BEFORE = timedelta(minutes=15)   # an auto run stops starting new companies this long before them
 RETRY_AFTER = timedelta(hours=1)      # no progress although AI and web search were there: try again later
 BOOT = uuid.uuid4().hex               # this start of Job Radar: a run of an earlier start was stopped by a restart
@@ -77,14 +77,9 @@ def ai_back_at(now: datetime) -> datetime:
 
 
 def _fixed_times(now: datetime) -> list[tuple[datetime, str]]:
-    """The next 03:00 night run and 19:00 watched read (German time)."""
-    cfg, found = CONFIG["companies"], []
-    for hour, label in ((cfg.get("daily_run_hour"), "night run"), (cfg.get("watched_read_hour"), "watched read")):
-        if hour is None:
-            continue
-        at = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-        found.append((at if at > now else at + timedelta(days=1), f"the {hour:02d}:00 {label}"))
-    return sorted(found)
+    """The next start of each fixed run of the day plan (schedule.py): 08:00 LinkedIn, 13:00 read (Monday
+    to Friday), 19:00 read, 03:00 night run (German time)."""
+    return schedule.fixed_times(now)
 
 
 def _next_midnight(now: datetime) -> datetime:
@@ -98,7 +93,9 @@ def _decide(now: datetime, state: dict, left: dict) -> tuple[str, datetime | Non
     if p["running"]:
         return ("running", None, "") if p["kind"] == "auto" else ("busy", None, "another Companies run is going")
     if company_jobs.reading_watched.is_set():
-        return "busy", None, "the 19:00 watched read is going"
+        return "busy", None, f"the {company_jobs.READS[company_jobs.reading_kind['now'] or 'evening'][1]} is going"
+    if linkedin.running():
+        return "busy", None, "the LinkedIn search is going"
     total = sum(left.values())
     if not total:
         return "done", None, ""

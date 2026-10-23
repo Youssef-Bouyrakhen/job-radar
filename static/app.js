@@ -1213,9 +1213,15 @@ function renderCoverage() {
   // "Auto-resume: running" / "waiting for AI until 09:00" / "all done": runs go on by themselves
   if (r?.auto?.text) parts.push(`<span class="cov-auto cov-auto--${esc(r.auto.state)}">${esc(r.auto.text)}</span>`);
   // The last 19:00 read of the watched companies; the ones the AI didn't get to are never hidden
-  const w = r?.watched_read;
-  if (w) parts.push(`<span>19:00 read ${fmtShort(w.at)} ${fmtTime(w.at)}: ${w.read} of ${w.companies} companies, ${w.new_jobs} new jobs, ${w.new_good} match your filter, the AI read ${w.ai_used} pages</span>`);
+  // The day plan (schedule.py): the next start of each fixed run, and the one that is running now
+  if (r?.plan?.length) parts.push(`<span class="cov-plan">${r.plan.map(p => p.running
+    ? `<strong class="cov-plan-now">${esc(p.label)}: running now</strong>`
+    : `<span title="${esc(p.note)}">${esc(p.label)}: ${fmtShort(p.next_at)} ${fmtTime(p.next_at)}</span>`).join(' · ')}</span>`);
+  const m = r?.midday_read, w = r?.watched_read;
+  if (m) parts.push(`<span>13:00 read ${fmtShort(m.at)} ${fmtTime(m.at)}: ${m.read} of ${m.companies} busy companies, ${m.new_jobs} new jobs, ${m.new_good} match your filter</span>`);
+  if (w) parts.push(`<span>19:00 read ${fmtShort(w.at)} ${fmtTime(w.at)}: ${w.read} of ${w.companies} companies${w.not_today ? ` (${w.not_today} quiet ones another evening)` : ''}, ${w.new_jobs} new jobs, ${w.new_good} match your filter, the AI read ${w.ai_used} pages</span>`);
   parts.push(...linkedinLine(r?.linkedin));
+  if (m?.ai_skipped && !(w && w.at > m.at)) parts.push(`<span class="cov-skipped">${m.ai_skipped} companies skipped at 13:00, no AI left, will read in the next run</span>`);
   if (w?.ai_skipped) parts.push(`<span class="cov-skipped">${w.ai_skipped} companies skipped, no AI left, will read in the next run${w.ai_waiting ? ` (${w.ai_waiting} still waiting)` : ' (all read since)'}</span>`);
   if (p.running) parts.push(`<span class="status-line is-checking"><span class="status-dot"></span>${esc(p.step)}${p.total ? ` · ${p.done} of ${p.total}` : ''}</span>`);
   if (r?.error) parts.push(`<span class="demo-note">${esc(r.error)}</span>`);

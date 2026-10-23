@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, must_apply, discover, gmail, linkedin,
-               region, scheduler, telegram, weekly)
+               region, schedule, scheduler, telegram, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all, recheck_hours,
                       ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
 from .config import CONFIG, ROOT
@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
     logging.getLogger("jobradar").info(
         "Application emails: %s", f"on (Gmail label \"{applications.settings()['label']}\", read-only)"
         if applications.enabled() else "off")
+    schedule.log_plan()  # the fixed runs of the day and when each one starts next
     # JOBRADAR_NO_SCHEDULER=1: a test copy that never checks sources or sends alerts by itself
     background = os.environ.get("JOBRADAR_NO_SCHEDULER") != "1"
     if background:
@@ -260,7 +261,8 @@ def list_companies():
 def coverage():
     """Region coverage: per town how many companies, careers pages, and how many have a final status."""
     return {**region.coverage(), "progress": companies.progress(), "auto": auto_resume.status(),
-            "watched_read": company_jobs.last_watched_read(), "linkedin": linkedin.status()}
+            "watched_read": company_jobs.last_watched_read(), "midday_read": company_jobs.last_watched_read("midday"),
+            "linkedin": linkedin.status(), "plan": schedule.status()}
 
 
 @app.post("/api/companies/run")

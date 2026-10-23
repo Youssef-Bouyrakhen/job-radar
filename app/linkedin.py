@@ -180,6 +180,10 @@ def search(sleep=time.sleep) -> dict:
         _lock.release()
 
 
+def running() -> bool:
+    return _lock.locked()
+
+
 def new_this_week() -> int:
     since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
     return sum(1 for c in db.company_rows() if c["origin_note"] == NOTE and (c["first_seen"] or "") >= since)

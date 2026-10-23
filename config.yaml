@@ -320,6 +320,14 @@ companies:
   max_job_reads_per_run: 120     # companies whose job list is read per run
   recheck_after_days: 7          # read a company's jobs again after this long (never more than once a week)
   watched_read_hour: 19          # Watched companies: their jobs are read every day at this hour (German time); null = off
+                                 # (busy ones every day, quiet ones every quiet_every_days)
+  midday_read_hour: 13           # only the busy Watched / Initiativ companies, Monday to Friday; null = off
+  midday_read_days: mon-fri
+  busy_days: 30                  # busy: a new job in the last 30 days (or never read, or skipped by the AI last time)
+  quiet_days: 60                 # quiet: no new job in the last 60 days: read at 19:00 only every quiet_every_days
+  quiet_every_days: 3            # about a third of the quiet companies each evening
+  full_collect_day: sun          # 03:00: OpenStreetMap / Arbeitsagentur / register collected again only in the night to Sunday;
+                                 # the other nights only check new companies and the ones left from the day before
   max_ai_pages_per_run: 30       # job lists the AI reads per run (when there is no feed)
   max_ai_pages_watched: 400      # 19:00 read and auto-resume: as many as the AIs have left today (the reserve
                                  # for scoring jobs stays), at most this many
@@ -354,7 +362,7 @@ companies:
 # Only company name, LinkedIn page and place are kept; the companies go into Companies (checked first).
 linkedin:
   enabled: true
-  hour: 11                       # once a day (German time); not at 03:00 or 19:00
+  hour: 8                        # once a day (German time); not at 03:00, 13:00 or 19:00
   location: "Darmstadt, Hessen, Deutschland"
   distance_miles: 25             # LinkedIn only offers 10 / 25 / 50 miles; then each job's place must be at most area.max_km (40 km) from Darmstadt
   keywords_per_day: 2            # in turn: the whole list once a week

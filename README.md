@@ -307,7 +307,20 @@ is never overwritten by a later run.
    Initiativ and a one-line AI reason why an Initiativbewerbung could fit you. If one later posts a
    Werkstudent job, it moves back to New. Statuses you set yourself are never changed.
 
-Discovery also runs by itself **once a day at 03:00** (German time; set `daily_run_hour: null` in config.yaml to turn it off).
+**The day plan** (German time; the Coverage page shows the next start of each and which one is running,
+and the log lists them at startup). Telegram alerts and your watched links go on all day, as always.
+
+| When | What |
+|---|---|
+| 03:00 every night | Discovery: the queue (new companies, the ones left from the day before). All areas are collected again (OpenStreetMap, Arbeitsagentur, register …) only in the **night to Sunday** (`full_collect_day`), or when the last full collect is more than a week ago |
+| 08:00 every day | LinkedIn search (see below) |
+| 13:00 Monday to Friday | The **busy** Watched / Initiativ companies (`midday_read_hour`) |
+| 19:00 every day | Busy companies, and the **quiet** ones every third evening (about a third of them each evening) |
+
+**Busy**: a new job in the last 30 days (`busy_days`), never read yet, or skipped by the AI last time.
+**Quiet**: no new job in the last 60 days (`quiet_days`). A new job is one whose ad has a posting date in that
+time, or one that appeared after the company's first read (the first read's jobs may be months old).
+Everything in between is read every evening. Set `daily_run_hour: null` (or the other hours) to turn a run off.
 
 **Auto-resume** (`auto_resume: true`): you don't need to start runs by hand. Every 5 minutes, if no run is
 going and there is still work (companies never checked, or careers pages whose job list was never read), a
@@ -316,8 +329,8 @@ sources again). After a restart or deploy it goes on by itself within 5 minutes,
 - **No endless loops**: a run that got nowhere isn't repeated. When the work left needs the AI and all free
   AI requests are used up, it waits until an AI is available again; when the web search is used up, until
   midnight; otherwise 1, 2, 4 … max 24 hours. New work (e.g. from the night run) starts it again.
-- **Never at the same time as 03:00 / 19:00**: no start in the 30 minutes before, it stops starting new
-  companies 15 minutes before, and it waits while the 19:00 read is going. The 03:00 run waits for a run
+- **Never at the same time as the day plan** (03:00, 08:00, 13:00 on weekdays, 19:00): no start in the 30 minutes
+  before, it stops starting new companies 15 minutes before, and it waits while one of them is going. The 03:00 run waits for a run
   that is still finishing instead of being skipped. Same polite crawler and web search limits as always.
 - **All done**: it does nothing until new work appears.
 - The **Coverage** page shows it, e.g. "Auto-resume: running", "waiting for AI until 02:00 tomorrow" or
@@ -333,8 +346,8 @@ OpenStreetMap is busy, Job Radar tries 3 times; if it still fails, the companies
 
 In the night run a company's jobs are read **at most once a week** (`recheck_after_days: 7`, it can't
 go lower), and its website / careers page is looked for only once. **Watched** and **Initiativ** companies
-are read **every day at 19:00** (`watched_read_hour`); the AI only reads a page again when its job part
-changed. The Companies page shows for each company when it was last read and when it is read next.
+are read at **13:00** (busy ones, Monday to Friday) and **19:00** (busy ones every day, quiet ones every third
+day), see the day plan above; the AI only reads a page again when its job part changed. The Companies page shows for each company when it was last read and when it is read next.
 
 **Import list** (Companies page): paste company names (one per line), or the link of a page that
 lists companies, e.g. a career fair's exhibitor list, tech hub members, h_da dual-study partners
@@ -350,7 +363,7 @@ name and go through the same steps. This also happens by itself once a week duri
 
 Companies you **skipped** are never added back by an import, a look-alike search or "Find new sources".
 
-**LinkedIn (companies hiring in IT)**: once a day at 11:00, LinkedIn's public job search (no login, no
+**LinkedIn (companies hiring in IT)**: once a day at 08:00, LinkedIn's public job search (no login, no
 cookies, never your account) is searched around Darmstadt (25 miles, jobs of the last 30 days) for 2
 keywords in turn (Werkstudent IT, Informatik, Software, Entwickler / Developer, Data, Cloud, IT-Support /
 Administrator, Security, SAP, Praktikum IT): the whole list once a week. Very gentle: at most 5 pages per
@@ -431,7 +444,7 @@ Duplicates merge with the companies already known (same name or same website). T
    on top of the usual 150; one town after the other, in the order above, Darmstadt first): website (the OpenStreetMap tag, then a guess from the name, e.g. `acme-software.de`, which only
    counts if the page names the town or one of its postcodes; the AI last), careers page, jobs, fit score.
 3. **Final status** for every town company:
-   - **Watched**: has a careers page; it's read every day at 19:00 and good jobs come to you (with good jobs it
+   - **Watched**: has a careers page; it's read at 13:00 / 19:00 (see the day plan) and good jobs come to you (with good jobs it
      also becomes a watched link).
    - **Initiativ**: IT jobs but no student job (as before), or a **small IT company without a careers
      page**: Job Radar reads its **Impressum** and shows the contact email (`max_contacts_per_run: 60`).

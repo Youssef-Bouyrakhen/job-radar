@@ -551,6 +551,21 @@ def start(kind: str = "run", text: str = "", label: str = "", night_limit: bool 
     return True
 
 
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def collect_due(now: datetime | None = None) -> bool:
+    """The full collect (OpenStreetMap, Arbeitsagentur, register ... of all areas) only in the night to
+    companies.full_collect_day (Sunday), or when the last one is more than a week ago (e.g. the server was off on
+    a Sunday night). Not known yet (before v11.5 it wasn't saved): the next Sunday."""
+    now = (now or datetime.now(GERMANY)).astimezone(GERMANY)
+    day = CONFIG["companies"].get("full_collect_day")
+    if not day or now.weekday() == DAYS.index(day[:3].lower()):
+        return True
+    last = db.get_setting("collected_at")
+    return bool(last) and datetime.fromisoformat(last) < now - timedelta(days=7)
+
+
 def scheduled_run() -> None:
     """The 03:00 night run. A run still going (auto-resume, or one you started) is waited for, at most
     an hour, instead of skipping the night."""
@@ -609,7 +624,11 @@ def _run(kind: str = "run", text: str = "", label: str = "", night_limit: bool =
                     company_import.find_lookalikes(_progress)
                 except company_import.ImportProblem as e:
                     log.info("Look-alikes skipped: %s", e)
-            _collect()
+            if collect_due():
+                _collect()
+            else:  # the other nights: the queue only (new companies, the ones left from the day before)
+                log.info("Companies: no collecting tonight (all areas are collected again in the night to %s)",
+                         CONFIG["companies"]["full_collect_day"].capitalize())
         _step("the region rules", region.triage)  # shops, restaurants, craftsmen in the towns are skipped before any web request
         if ids is None or ids:
             _step("checking the companies", lambda: _check(ids))
@@ -664,6 +683,7 @@ def _collect() -> None:
     rows = merge(records, collected)
     _progress["new"] = db.save_companies(rows)
     _progress["collected"] = len(rows)
+    db.set_setting("collected_at", db.now())
     region.assign_towns()
     log.info("Companies: %d companies (%d new) from %d records", len(rows), _progress["new"], len(records))
 

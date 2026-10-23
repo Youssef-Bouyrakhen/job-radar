@@ -55,6 +55,12 @@ DEFAULTS = {
         "max_job_reads_per_run": 120,
         "recheck_after_days": 7,
         "watched_read_hour": 19,
+        "midday_read_hour": 13,  # the busy companies only, Monday to Friday (German time); None = off
+        "midday_read_days": "mon-fri",
+        "busy_days": 30,  # busy: a new job in this many days (read at 13:00 and 19:00)
+        "quiet_days": 60,  # quiet: no new job in this many days (read at 19:00 every quiet_every_days)
+        "quiet_every_days": 3,
+        "full_collect_day": "sun",  # the 03:00 run collects all areas again only in the night to this day
         "max_ai_pages_per_run": 30,
         "max_ai_pages_watched": 400,  # 19:00 read and auto-resume: what the AIs have left, at most this
         "max_auto_added_per_run": 10,
@@ -84,7 +90,7 @@ DEFAULTS = {
     # LinkedIn's public job search (no login): companies near Darmstadt that hire in IT (linkedin.py)
     "linkedin": {
         "enabled": True,
-        "hour": 11,  # once a day, German time (not 03:00 or 19:00)
+        "hour": 8,  # once a day, German time (not 03:00, 13:00 or 19:00)
         "location": "Darmstadt, Hessen, Deutschland",
         "distance_miles": 25,  # LinkedIn only has 10 / 25 / 50 miles; then each place: at most area.max_km
         "keywords_per_day": 2,  # 10 keywords, 2 a day: each one once a week

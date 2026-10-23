@@ -6,8 +6,8 @@
    saved; they go through the normal flow: keyword filter, duplicates, AI score, Telegram.
    Also the first time a company is read: you never saw its jobs, so a good one is new to you
    (only jobs that pass the filter and the AI score are sent, so this is no flood).
-   Watched and Initiativ companies are read every day at 19:00 (read_watched); the AI only reads a
-   page again when its job part changed.
+   Watched and Initiativ companies are read at 13:00 (busy ones, Monday to Friday) and 19:00 (busy ones every
+   day, quiet ones every third day), see schedule.py; the AI only reads a page again when its job part changed.
 2. Fit score (0-100): small / mid-size companies, distance, share of IT jobs, Werkstudent jobs
    now or before (strong bonus), fresh jobs. Big companies get fewer points but stay visible.
 3. The best companies with good jobs become watched links (max 10 per run), marked "auto-added".
@@ -719,44 +719,114 @@ def next_reads(rows: list[dict]) -> None:
 reading_watched = threading.Event()  # set while the 19:00 read is going
 
 
-def read_watched() -> dict:
-    """Read the job list of every watched company once (19:00, German time), so a good new job
-    reaches you the same day. Waits while a Companies run is going (they read the same pages)."""
+def last_new_jobs() -> dict[str, str]:
+    """{job source ("<company> (Companies)"): when its newest NEW job came, ISO}. New: posted on that day (when
+    the ad says so), or found after the company's first read (the first read's jobs may be months old)."""
+    with db.connect() as conn:
+        rows = conn.execute("SELECT source, first_seen, posted_at FROM jobs WHERE source LIKE '% (Companies)'").fetchall()
+    first: dict[str, str] = {}
+    for r in rows:
+        first[r["source"]] = min(first.get(r["source"], r["first_seen"]), r["first_seen"])
+    last: dict[str, str] = {}
+    for r in rows:
+        when = r["posted_at"][:10] if r["posted_at"] else r["first_seen"] if r["first_seen"] > first[r["source"]] else None
+        if when and when > last.get(r["source"], ""):
+            last[r["source"]] = when
+    return last
+
+
+def activity(rows: list[dict], now: datetime | None = None) -> dict[int, str]:
+    """{company id: "busy" / "between" / "quiet"} for the daily reads.
+    busy: a new job in the last busy_days (30), never read yet, or skipped by the AI last time.
+    quiet: no new job in the last quiet_days (60). between: the rest (read every evening, not at 13:00)."""
+    cfg, now = CONFIG["companies"], now or datetime.now(timezone.utc)
+    busy_since = (now - timedelta(days=cfg["busy_days"])).isoformat(timespec="seconds")
+    quiet_since = (now - timedelta(days=cfg["quiet_days"])).isoformat(timespec="seconds")
+    last, waiting = last_new_jobs(), ai_waiting()
+    found = {}
+    for c in rows:
+        newest = last.get(f"{c['name']} (Companies)", "")
+        if not c["jobs_read_at"] or c["id"] in waiting or newest >= busy_since[:len(newest)] and newest:
+            found[c["id"]] = "busy"
+        else:
+            found[c["id"]] = "between" if newest and newest >= quiet_since[:len(newest)] else "quiet"
+    return found
+
+
+def quiet_turn(company_id: int, day: date) -> bool:
+    """A quiet company is read at 19:00 every quiet_every_days: each evening about a third of them, in turn."""
+    every = CONFIG["companies"]["quiet_every_days"]
+    return company_id % every == day.toordinal() % every
+
+
+def plan_read(kind: str, now: datetime | None = None) -> tuple[list[dict], Counter]:
+    """(the companies to read, {busy / between / quiet / quiet_later: how many}).
+    kind "midday" (13:00): the busy ones. kind "evening" (19:00): busy and between ones, and the quiet ones
+    whose turn it is. Longest ago read first: if the AI runs out, the ones it skipped last time get it first."""
+    now = now or datetime.now(timezone.utc)
+    rows = watched_to_read()
+    kinds, day, todo, counts = activity(rows, now), now.astimezone(GERMANY).date(), [], Counter()
+    for c in rows:
+        k = kinds[c["id"]]
+        counts[k] += 1
+        if kind == "midday" and k != "busy" or k == "quiet" and not quiet_turn(c["id"], day):
+            counts["later"] += 1
+            continue
+        todo.append(c)
+    return sorted(todo, key=lambda c: c["jobs_read_at"] or ""), counts
+
+
+READS = {"evening": ("watched_read_last", "19:00 read"), "midday": ("midday_read_last", "13:00 read")}
+reading_kind: dict[str, str | None] = {"now": None}  # "midday" / "evening" while one of the reads is going
+
+
+def read_watched(kind: str = "evening") -> dict:
+    """The daily reads of the watched (and Initiativ) companies, so a good new job reaches you the same day:
+    kind "evening" (19:00) and "midday" (13:00, Monday to Friday, busy companies only), see plan_read.
+    Waits while a Companies run is going (they read the same pages)."""
     from . import companies  # it imports this module
+    setting, label = READS[kind]
     for _ in range(180):  # at most 3 hours
         if not companies.progress()["running"]:
             break
         time.sleep(60)
     else:
-        log.warning("Watched careers pages: a Companies run is still going after 3 hours, read tomorrow")
+        log.warning("%s: a Companies run is still going after 3 hours, skipped", label)
         return {}
     started = time.monotonic()
-    # Read longest ago first: if the AI runs out, the ones it skipped last time get it first
-    todo = sorted(watched_to_read(), key=lambda c: c["jobs_read_at"] or "")
+    todo, counts = plan_read(kind)
     progress = {"step": "", "done": 0, "total": 0, "jobs_read": 0, "new_jobs": 0, "warnings": []}
     ai_pages = ai_pages_left()
     reading_watched.set()  # auto-resume doesn't start a run meanwhile
+    reading_kind["now"] = kind
     try:
         new_good = read_jobs(todo, progress, ai_pages=ai_pages)
     finally:
         reading_watched.clear()
+        reading_kind["now"] = None
     seconds = time.monotonic() - started
-    log.info("Watched careers pages: read %d of %d in %.0f s, %d new jobs (%d match your filter), "
-             "the AI read %d of max %d pages%s",
-             progress["jobs_read"], len(todo), seconds, progress["new_jobs"], new_good, progress["ai_used"], ai_pages,
+    log.info("Watched careers pages (%s): read %d of %d in %.0f s (%d busy, %d between, %d quiet, %d not today), "
+             "%d new jobs (%d match your filter), the AI read %d of max %d pages%s",
+             label, progress["jobs_read"], len(todo), seconds, counts["busy"], counts["between"], counts["quiet"],
+             counts["later"], progress["new_jobs"], new_good, progress["ai_used"], ai_pages,
              "".join(f"; {w}" for w in progress["warnings"]))
-    result = {"at": db.now(), "read": progress["jobs_read"], "companies": len(todo), "seconds": round(seconds),
-              "new_jobs": progress["new_jobs"], "new_good": new_good, "ai_used": progress["ai_used"],
-              "ai_pages": ai_pages, "ai_skipped": progress["ai_skipped"], "warnings": progress["warnings"]}
-    db.set_setting("watched_read_last", json.dumps(result))  # for the Coverage page
+    result = {"at": db.now(), "kind": kind, "read": progress["jobs_read"], "companies": len(todo),
+              "seconds": round(seconds), "new_jobs": progress["new_jobs"], "new_good": new_good,
+              "ai_used": progress["ai_used"], "ai_pages": ai_pages, "ai_skipped": progress["ai_skipped"],
+              "not_today": counts["later"], "warnings": progress["warnings"]}
+    db.set_setting(setting, json.dumps(result))  # for the Coverage page
     if new_good:
         _score_and_send()
     return {**progress, **result}
 
 
-def last_watched_read() -> dict | None:
-    """The last 19:00 read (read_watched), for the Coverage page. ai_waiting: companies still waiting for the AI now."""
-    last = json.loads(db.get_setting("watched_read_last") or "null")
+def read_midday() -> dict:
+    return read_watched("midday")
+
+
+def last_watched_read(kind: str = "evening") -> dict | None:
+    """The last 19:00 / 13:00 read, for the Coverage page. ai_waiting: companies still waiting for the AI now."""
+    last = json.loads(db.get_setting(READS[kind][0]) or "null")
     return last and {**last, "ai_waiting": len(ai_waiting())}
 
 
