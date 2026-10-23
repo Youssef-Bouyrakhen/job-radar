@@ -205,6 +205,7 @@ MIGRATIONS["companies"] = {
     "jobs_part_hash": "TEXT",        # the page's job part when the AI last read it: unchanged = no AI request
     "career_step": "INTEGER",        # how its careers page was found: 1-6 (careers.STEPS), empty = not found
     "career_how": "TEXT",            # e.g. "Careers page (web search), no applicant system found", or why none was found
+    "linkedin_url": "TEXT",          # its LinkedIn company page (linkedin.py)
 }
 
 AFTER_ADDING = {

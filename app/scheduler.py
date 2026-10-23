@@ -39,6 +39,11 @@ def start() -> None:
         from . import auto_resume
         scheduler.add_job(auto_resume.tick, "interval", seconds=TICK.total_seconds(), id="auto_resume",
                           max_instances=1, coalesce=True, next_run_time=now() + timedelta(minutes=2))
+    linkedin = CONFIG["linkedin"]
+    if linkedin.get("enabled") and linkedin.get("hour") is not None:  # companies hiring on LinkedIn, once a day
+        from . import linkedin as linkedin_search
+        scheduler.add_job(linkedin_search.scheduled, "cron", hour=linkedin["hour"], minute=0, id="linkedin",
+                          max_instances=1, coalesce=True, misfire_grace_time=3600, timezone=GERMANY)
     weekly = CONFIG["companies"].get("weekly_summary") or {}
     if weekly.get("day"):  # Sunday evening: one Telegram message with the week's numbers
         from . import weekly as summary

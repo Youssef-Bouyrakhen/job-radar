@@ -214,13 +214,19 @@ def add_companies(records: list[dict], source: str) -> dict:
         clean_records.append({**r, "name": name, "source": source})
     before = {c["name_key"]: c for c in db.company_rows()}
     rows = merge(clean_records, {source})
+    for r in rows:  # a known company keeps its city (a LinkedIn job in Frankfurt doesn't move a Darmstadt company)
+        if r["id"] and (old := before.get(r["name_key"])) and old["city"]:
+            r["city"] = old["city"]
     new = db.save_companies(rows)
     keys = [r["name_key"] for r in rows if source in json.loads(r["sources"])]
     found = db.companies_by_key(keys)
     for c in found:  # say why it's here, on companies that are new to the list
-        note = next((r.get("note") for r in clean_records if r.get("note") and _same(company_key(r["name"]), c["name_key"])), None)
+        mine = [r for r in clean_records if _same(company_key(r["name"]), c["name_key"])]
+        note = next((r["note"] for r in mine if r.get("note")), None)
         if note and c["name_key"] not in before:
             db.update_company(c["id"], {"origin_note": note})
+        if not c["linkedin_url"] and (url := next((r["linkedin_url"] for r in mine if r.get("linkedin_url")), None)):
+            db.update_company(c["id"], {"linkedin_url": url})
     ids = {c["id"] for c in found if c["status"] != "skipped"}
     return {"ids": ids, "new": new, "known": len(found) - new, "skipped": was_skipped, "dropped": dropped}
 

@@ -28,14 +28,17 @@ WORKERS = 4  # companies tested at the same time (each website still gets its po
 
 # A job counts as "good" if it passes your keyword filter AND is in the area (or remote).
 # An empty location counts too: many feeds don't say.
-NEARBY = re.compile(
+PLACES = (
     r"darmstadt|frankfurt|offenbach|eschborn|r[üu]e?sselsheim|mainz|wiesbaden|hanau|langen|egelsbach|dreieich|"
     r"neu-isenburg|bad homburg|oberursel|weiterstadt|griesheim|bad vilbel|kelsterbach|raunheim|"
     # not "walldorf" alone: SAP's Walldorf is in Baden ("Mörfelden-Walldorf" has "mörfelden")
-    r"m[öo]e?rfelden|m[üu]e?hltal|ro(?:ß|ss)dorf|ober-ramstadt|seeheim|erzhausen|pfungstadt|"
-    r"rhein-main|hessen|hesse|remote|home ?office|mobil|"
+    r"m[öo]e?rfelden|m[üu]e?hltal|ro(?:ß|ss)dorf|ober-ramstadt|seeheim|erzhausen|pfungstadt|rhein-main")
+NEARBY = re.compile(
+    PLACES + r"|hessen|hesse|remote|home ?office|mobil|"
     # nationwide jobs ("Bundesweit") can be done from here too
     r"bundesweit|deutschlandweit|nationwide|germany[- ]wide|[üu]berregional", re.I)
+# A place in the area itself, not "remote" or "Hessen": an office near Darmstadt (linkedin.py)
+NEAR_PLACE = re.compile(PLACES, re.I)
 
 LEGAL_FORMS = re.compile(
     r"\b(gmbh|mbh|ag|se|kgaa|kg|co|ug|ohg|eg|ev|e\.v|inc|ltd|llc|plc|group|gruppe|holding|"

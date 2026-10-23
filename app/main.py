@@ -13,8 +13,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, must_apply, discover, gmail, region,
-               scheduler, telegram, weekly)
+from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, must_apply, discover, gmail, linkedin,
+               region, scheduler, telegram, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all, recheck_hours,
                       ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
 from .config import CONFIG, ROOT
@@ -253,14 +253,14 @@ def list_companies():
         r["sources"] = json.loads(r["sources"] or "{}")
         r["size"] = company_jobs.size_of(r)
     company_jobs.next_reads(rows)  # "next: today 19:00"
-    return {"progress": companies.progress(), "companies": rows}
+    return {"progress": companies.progress(), "companies": rows, "linkedin": linkedin.status()}
 
 
 @app.get("/api/coverage")
 def coverage():
     """Region coverage: per town how many companies, careers pages, and how many have a final status."""
     return {**region.coverage(), "progress": companies.progress(), "auto": auto_resume.status(),
-            "watched_read": company_jobs.last_watched_read()}
+            "watched_read": company_jobs.last_watched_read(), "linkedin": linkedin.status()}
 
 
 @app.post("/api/companies/run")

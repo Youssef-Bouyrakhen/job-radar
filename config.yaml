@@ -350,6 +350,19 @@ companies:
     security: [IT-Sicherheit, Security, Pentest, SOC]
     software: [Softwareentwicklung, IT-Dienstleister, Anwendungsentwicklung]
 
+# LinkedIn's public job search (no login, no cookies): companies near Darmstadt that hire in IT.
+# Only company name, LinkedIn page and place are kept; the companies go into Companies (checked first).
+linkedin:
+  enabled: true
+  hour: 11                       # once a day (German time); not at 03:00 or 19:00
+  location: "Darmstadt, Hessen, Deutschland"
+  distance_miles: 25             # LinkedIn only offers 10 / 25 / 50 miles; 25 miles = about 40 km (then our nearby check)
+  keywords_per_day: 2            # in turn: the whole list once a week
+  keywords: [Werkstudent IT, Informatik, Software, Entwickler Developer, Data, Cloud,
+             IT-Support Administrator, Security, SAP, Praktikum IT]
+  max_pages: 5                   # 10 jobs per page; stops at once if LinkedIn says "too many requests"
+  pause_seconds: [5, 10]         # random pause between two pages
+
 # Region coverage (Coverage page): every business in these towns that could hire an IT Werkstudent,
 # from OpenStreetMap, the Arbeitsagentur (all employers, all job types) and OffeneRegister.de.
 # Shops, restaurants, craftsmen and staffing agencies are skipped by rules; the rest goes through the

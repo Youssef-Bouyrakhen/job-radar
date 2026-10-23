@@ -520,8 +520,10 @@ def skip_reason(c: dict) -> str | None:
         for label, rule in AIRPORT_SKIP:
             if m := rule.search(name):
                 return f"{label} at the airport (\"{m[0]}\" in its name)"
-    # "Flughafen" in a name keeps a town's company ("Flughafen Restaurant" is still a restaurant at the airport)
-    if (m := NOT_TARGET.search(name)) and (airport or not REGIONAL.search(name)):
+    # "Flughafen" in a name keeps a town's company ("Flughafen Restaurant" is still a restaurant at the airport).
+    # Hiring in IT on LinkedIn keeps it too ("REWE digital" is no supermarket for us)
+    hires_it = any(k.startswith("linkedin:") for k in sources)
+    if (m := NOT_TARGET.search(name)) and (airport or not REGIONAL.search(name)) and not hires_it:
         return f"a shop, restaurant, care or craft business (\"{m[0]}\" in its name)"
     titles = json.loads(c["ad_titles"] or "[]")
     only_ads = all(k.endswith(":aa") or k == "your_jobs" for k in sources) and not any(sources.get(s) for s in IT_SOURCES)

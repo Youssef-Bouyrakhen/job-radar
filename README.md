@@ -350,6 +350,18 @@ name and go through the same steps. This also happens by itself once a week duri
 
 Companies you **skipped** are never added back by an import, a look-alike search or "Find new sources".
 
+**LinkedIn (companies hiring in IT)**: once a day at 11:00, LinkedIn's public job search (no login, no
+cookies, never your account) is searched around Darmstadt (25 miles, jobs of the last 30 days) for 2
+keywords in turn (Werkstudent IT, Informatik, Software, Entwickler / Developer, Data, Cloud, IT-Support /
+Administrator, Security, SAP, Praktikum IT): the whole list once a week. Very gentle: at most 5 pages per
+keyword, 5–10 s random pause between pages. Only the company name, its LinkedIn page and the job's place
+are kept; jobs outside the area and staffing agencies / recruiters are left out. Known companies are
+merged (same name or website); new ones show **found via LinkedIn, hiring** under their name and are
+checked before other new companies (website, careers page, final status). The Coverage and Companies
+pages show "LinkedIn: X new companies this week, last search …". If LinkedIn answers "too many
+requests" or blocks, the search stops at once and shows **LinkedIn blocked, retry tomorrow**.
+Settings: `linkedin:` in config.yaml.
+
 **Weekly summary**: every **Sunday at 19:00** one short Telegram message: new companies, careers
 pages found, good jobs, new Initiativ candidates and the top 3 companies by fit score (last 7 days,
 no AI). Settings has a **Send weekly summary** button to see it now. Change the time under

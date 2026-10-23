@@ -927,7 +927,7 @@ const CO_SOURCE = { arbeitsagentur: 'Arbeitsagentur', your_jobs: 'Your jobs', os
                     osm_telecommunication: 'OSM telecom office', osm_company: 'OSM company', lookalike: 'Look-alike' };
 // "list:konaktiva 2026" = a list you imported; "region:Darmstadt:osm:engineer" = found by the region coverage
 const REGION_SOURCE = { aa: 'AA', osm: 'OSM', register: 'Register', fraport: 'Fraport airlines', gateway: 'Gateway Gardens' };
-const coSourceName = k => k.startsWith('list:') ? k.slice(5)
+const coSourceName = k => k.startsWith('list:') ? k.slice(5) : k.startsWith('linkedin:') ? 'LinkedIn: ' + k.slice(9)
   : k.startsWith('region:') ? `${REGION_SOURCE[k.split(':')[2]] || k.split(':')[2]} ${k.split(':')[1]}` : CO_SOURCE[k] || k;
 const CO_CATEGORY = { insurance: 'Insurance', finance: 'Banks/Finance', cloud: 'Cloud/Data centers/Networks',
                       security: 'Cybersecurity', software: 'IT services/Software', other: 'Other' };
@@ -936,7 +936,7 @@ const CO_CATEGORY_FROM = { name: 'from its name or website', jobs: 'from its job
 // Category searches on the Arbeitsagentur: "ba_insurance" = found by the insurance keywords
 Object.entries(CO_CATEGORY).forEach(([k, label]) => { CO_SOURCE['ba_' + k] = 'AA search: ' + label; });
 const CO_PAGE = 200;
-let companies = [], coProgress = {}, coTimer = null, coShown = CO_PAGE, coLoaded = false;
+let companies = [], coProgress = {}, coLinkedin = null, coTimer = null, coShown = CO_PAGE, coLoaded = false;
 state.coStatus = sessionGet('jr-co-status', CO_STATUS, 'all');
 state.coQuery = '';
 state.coTown = '';  // set from the Coverage page: only this town's companies
@@ -947,7 +947,7 @@ async function loadCompanies() {
   if (state.demo) { coLoaded = true; return renderCompanies(); }
   try {
     const r = await api('companies');
-    companies = r.companies; coProgress = r.progress; coLoaded = true;
+    companies = r.companies; coProgress = r.progress; coLinkedin = r.linkedin; coLoaded = true;
   } catch (e) { coProgress = { error: 'Could not load companies: ' + e.message }; }
   renderCompanies(); renderNav();
   clearTimeout(coTimer);
@@ -971,6 +971,7 @@ function coSources(c) {
     : k === 'your_jobs' ? 'Times it appears in your jobs, alerts and links'
     : k === 'lookalike' ? 'Suggested by the AI: similar to companies whose jobs you saved or applied to'
     : k.startsWith('list:') ? 'From a list you imported'
+    : k.startsWith('linkedin:') ? 'Jobs near Darmstadt on the public LinkedIn job search for this keyword (last 30 days)'
     : k.startsWith('ba_') ? 'IT job ads found by the keyword searches for this category on the Arbeitsagentur'
     : k.startsWith('region:') ? { aa: `Job ads of any kind in ${k.split(':')[1]} on the Arbeitsagentur`,
         osm: `On OpenStreetMap in ${k.split(':')[1]} (${k.split(':')[3] || ''})`,
@@ -978,7 +979,7 @@ function coSources(c) {
         fraport: 'On the Airlines A-Z list of frankfurt-airport.com',
         gateway: 'One of the companies of Gateway Gardens (its leaflet, October 2024)' }[k.split(':')[2]] || k
     : 'Office on OpenStreetMap';
-  const mine = k => k.startsWith('list:') || k === 'lookalike';
+  const mine = k => k.startsWith('list:') || k.startsWith('linkedin:') || k === 'lookalike';
   return Object.entries(c.sources || {}).sort((a, b) => mine(b[0]) - mine(a[0]) || b[1] - a[1]).map(([k, n]) =>
     `<span class="status-tag" title="${why(k)}">${esc(coSourceName(k))}${n > 1 && !mine(k) ? ` ${n}×` : ''}</span>`).join('');
 }
@@ -1041,7 +1042,7 @@ function coRow(c) {
     .map(([k, label]) => `<option value="${k}"${c.category === k ? ' selected' : ''}>${label}</option>`).join('');
   const catWhy = c.category ? `Category ${CO_CATEGORY_FROM[c.category_from] || ''}. Change it if it's wrong.` : 'Not sorted yet: the AI sorts a few hundred companies a day';
   return `<div class="co-row" data-company="${c.id}">
-    <div class="co-who"><div class="co-name">${fitTag}${esc(c.name)}${size}${auto}</div><div class="co-sub">${c.origin_note ? `<span class="co-origin">${esc(c.origin_note)}</span> · ` : ''}${site}${c.fit_reasons ? ` · ${esc(c.fit_reasons)}` : ''}</div>
+    <div class="co-who"><div class="co-name">${fitTag}${esc(c.name)}${size}${auto}</div><div class="co-sub">${c.origin_note ? `<span class="co-origin">${esc(c.origin_note)}</span> · ` : ''}${c.linkedin_url ? `<a href="${esc(c.linkedin_url)}" target="_blank" rel="noopener">LinkedIn</a> · ` : ''}${site}${c.fit_reasons ? ` · ${esc(c.fit_reasons)}` : ''}</div>
       <div class="co-sub co-sub-extra">${esc(place)}</div>${reason}${email}</div>
     <div class="co-city">${esc(place || '–')}</div>
     <div class="co-tags-cell"><div class="co-tags">${coSources(c)}</div></div>
@@ -1051,6 +1052,14 @@ function coRow(c) {
   </div>`;
 }
 
+// "LinkedIn: 12 new companies this week, last search ..." (linkedin.py); a block is never hidden
+function linkedinLine(l) {
+  if (!l?.text) return [];
+  if (l.blocked) return ['<span class="cov-skipped">LinkedIn blocked, retry tomorrow</span>'];
+  const parts = [`<span>${esc(l.text)}, ${l.at ? `last search ${fmtShort(l.at)} ${fmtTime(l.at)}${l.keywords.length ? ` (${esc(l.keywords.join(', '))})` : ''}` : `no search yet (daily at ${l.hour}:00)`}</span>`];
+  if (l.error) parts.push(`<span class="demo-note">LinkedIn search failed (${esc(l.error)}), retry tomorrow</span>`);
+  return parts;
+}
 function renderCompanies() {
   const p = coProgress, btn = $('#companiesRun');
   ['#companiesRun', '#lookalikesRun', '#importBtn'].forEach(id => $(id).disabled = !!p.running);
@@ -1066,6 +1075,7 @@ function renderCompanies() {
     `<span>${checked.filter(c => c.career_url).length} careers pages</span>`,
     `<span>${checked.filter(c => c.feed_url).length} job feeds</span>`,
     `<span>${companies.filter(c => c.good_jobs).length} with good jobs</span>`);
+  parts.push(...linkedinLine(coLinkedin));
   if (!p.running && p.finished_at && !p.error) parts.push(`<span>${p.kind === 'import' ? 'import' : p.kind === 'lookalikes' ? 'look-alikes' : 'last run'} ${fmtTime(p.finished_at)}: ${p.careers} new careers pages, ${p.jobs_read} job lists read, ${p.new_jobs} new jobs, ${p.auto_added} auto-added</span>`);
   (p.notes || []).forEach(n => parts.push(`<span>${esc(n)}</span>`));
   (p.warnings || []).forEach(w => parts.push(`<span class="demo-note">${esc(w)}</span>`));
@@ -1205,6 +1215,7 @@ function renderCoverage() {
   // The last 19:00 read of the watched companies; the ones the AI didn't get to are never hidden
   const w = r?.watched_read;
   if (w) parts.push(`<span>19:00 read ${fmtShort(w.at)} ${fmtTime(w.at)}: ${w.read} of ${w.companies} companies, ${w.new_jobs} new jobs, ${w.new_good} match your filter, the AI read ${w.ai_used} pages</span>`);
+  parts.push(...linkedinLine(r?.linkedin));
   if (w?.ai_skipped) parts.push(`<span class="cov-skipped">${w.ai_skipped} companies skipped, no AI left, will read in the next run${w.ai_waiting ? ` (${w.ai_waiting} still waiting)` : ' (all read since)'}</span>`);
   if (p.running) parts.push(`<span class="status-line is-checking"><span class="status-dot"></span>${esc(p.step)}${p.total ? ` · ${p.done} of ${p.total}` : ''}</span>`);
   if (r?.error) parts.push(`<span class="demo-note">${esc(r.error)}</span>`);

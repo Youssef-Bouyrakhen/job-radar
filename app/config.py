@@ -81,6 +81,18 @@ DEFAULTS = {
             "software": ["Softwareentwicklung", "IT-Dienstleister", "Anwendungsentwicklung"],
         },
     },
+    # LinkedIn's public job search (no login): companies near Darmstadt that hire in IT (linkedin.py)
+    "linkedin": {
+        "enabled": True,
+        "hour": 11,  # once a day, German time (not 03:00 or 19:00)
+        "location": "Darmstadt, Hessen, Deutschland",
+        "distance_miles": 25,  # LinkedIn only has 10 / 25 / 50 miles; 25 miles = about 40 km
+        "keywords_per_day": 2,  # 10 keywords, 2 a day: each one once a week
+        "keywords": ["Werkstudent IT", "Informatik", "Software", "Entwickler Developer", "Data", "Cloud",
+                     "IT-Support Administrator", "Security", "SAP", "Praktikum IT"],
+        "max_pages": 5,  # 10 jobs per page
+        "pause_seconds": [5, 10],  # random pause between two pages
+    },
     "region": {
         # ags: the town's official municipality key (OpenStreetMap boundary); postcodes: all of its districts
         # in this order: the nightly checks finish a town before the next one starts

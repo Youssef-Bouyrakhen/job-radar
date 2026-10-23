@@ -53,7 +53,10 @@ BRANCH = re.compile(r"\s*(?:[-–,|/]\s*)?\b(?:zweigniederlassung|niederlassung|
 STAFFING = re.compile(r"personal(?:dienst|service|vermittlung|leasing|beratung|management)|zeitarbeit|"
                       r"arbeitnehmer[üu]berlassung|staffing|recruit|headhunt|\b(?:hays|randstad|adecco|manpower|"
                       r"ferchau|gulp|brunel|orizon|amadeus fire|dis ag|tempton|piening|jobactive|bindan|"
-                      r"expertum|solcom|etengo|freelancermap|westhouse|computer futures|darwin recruitment)\b", re.I)
+                      r"expertum|solcom|etengo|freelancermap|westhouse|computer futures|darwin recruitment|"
+                      r"robert half|michael page|page personnel|kelly services|experis|sthree|harvey nash|"
+                      r"frank recruitment|nigel frank|progressive recruitment|hirexpert|jobot|reqruit|wematch|"
+                      r"personalwerk|persona service|allgeier experts|academic work|unique personal)\b", re.I)
 
 
 DOMAIN_NAME = re.compile(r"(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9-]*)\.(?:de|com|net|org|eu|io|info|biz|ag|group)/?", re.I)
@@ -329,10 +332,10 @@ Never build a domain from the name. Every website is loaded and checked, wrong o
 
 
 def _priority(c: dict) -> tuple:
-    """Companies from your lists and look-alikes first, then IT employers (Arbeitsagentur IT ads,
-    your jobs, IT offices), staffing agencies last."""
+    """Companies from your lists, look-alikes and companies hiring on LinkedIn first, then IT employers
+    (Arbeitsagentur IT ads, your jobs, IT offices), staffing agencies last."""
     sources = json.loads(c["sources"] or "{}")
-    yours = any(s.startswith("list:") or s == "lookalike" for s in sources)
+    yours = any(s.startswith(("list:", "linkedin:")) or s == "lookalike" for s in sources)
     return (c["size_hint"] == "staffing agency", not yours, not any(sources.get(s) for s in IT_SOURCES),
             -sum(sources.values()), c["distance_km"] if c["distance_km"] is not None else 999)
 
