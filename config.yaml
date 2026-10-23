@@ -388,6 +388,47 @@ region:
       place: "flughafen|airport" # an address without postcode: "Frankfurt - Flughafen"
       city: Frankfurt am Main
       airport: true              # stronger skip rules, Fraport's lists, duplicates only by the same website
+    Offenbach am Main:
+      ags: "06413000"
+      postcodes: [63065, 63067, 63069, 63071, 63073, 63075]
+      names: [Offenbach]         # other spellings in addresses and the company register
+      not_place: "offenbach[- ](?:an der queich|hundheim)"   # towns in Rhineland-Palatinate
+    Mörfelden-Walldorf:
+      ags: "06433008"
+      postcodes: [64546]
+      names: [Mörfelden]         # not "Walldorf": SAP's Walldorf is in Baden
+    Kelsterbach:
+      ags: "06433007"
+      postcodes: [65451]
+    Rüsselsheim am Main:         # with Bauschheim, Haßloch, Königstädten
+      ags: "06433012"
+      postcodes: [65428]
+      names: [Rüsselsheim]
+    Mühltal:                     # Nieder-Ramstadt, Traisa, Trautheim, Nieder-Beerbach, Frankenhausen
+      ags: "06432014"
+      postcodes: [64367]
+      hall: Gemeinde Mühltal
+    Roßdorf:                     # with Gundernhausen
+      ags: "06432020"
+      postcodes: [64380]
+      hall: Gemeinde Roßdorf
+      aa_where: "64380"          # the Arbeitsagentur finds nothing for "Roßdorf" (the ß), the postcode works
+    Ober-Ramstadt:
+      ags: "06432016"
+      postcodes: [64372]
+    Seeheim-Jugenheim:
+      ags: "06432022"
+      postcodes: [64342]
+      hall: Gemeinde Seeheim-Jugenheim
+      names: [Seeheim]           # not "Jugenheim": there is one in Rheinhessen too
+    Erzhausen:
+      ags: "06432006"
+      postcodes: [64390]
+      hall: Gemeinde Erzhausen
+    Mainz:                       # last: the biggest (55099 = the university's own postcode)
+      ags: "07315000"
+      postcodes: [55099, 55116, 55118, 55120, 55122, 55124, 55126, 55127, 55128, 55129, 55130, 55131]
+      not_place: "mainz[- ](?:kastel|kostheim|amöneburg)"   # these are Wiesbaden
   max_checks_per_run: 300        # town companies whose website + careers page are checked per night, all towns together
   max_contacts_per_run: 60       # small IT companies without a careers page: Impressum emails read per night
   never_skip: [Euler Hermes, Alstom]   # never Skipped by the rules, always checked normally (name start)

@@ -31,6 +31,8 @@ WORKERS = 4  # companies tested at the same time (each website still gets its po
 NEARBY = re.compile(
     r"darmstadt|frankfurt|offenbach|eschborn|r[üu]e?sselsheim|mainz|wiesbaden|hanau|langen|egelsbach|dreieich|"
     r"neu-isenburg|bad homburg|oberursel|weiterstadt|griesheim|bad vilbel|kelsterbach|raunheim|"
+    # not "walldorf" alone: SAP's Walldorf is in Baden ("Mörfelden-Walldorf" has "mörfelden")
+    r"m[öo]e?rfelden|m[üu]e?hltal|ro(?:ß|ss)dorf|ober-ramstadt|seeheim|erzhausen|pfungstadt|"
     r"rhein-main|hessen|hesse|remote|home ?office|mobil|"
     # nationwide jobs ("Bundesweit") can be done from here too
     r"bundesweit|deutschlandweit|nationwide|germany[- ]wide|[üu]berregional", re.I)

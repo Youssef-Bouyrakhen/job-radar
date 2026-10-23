@@ -99,6 +99,24 @@ DEFAULTS = {
             "Frankfurt Airport": {"osm_areas": [3891373, 5813621], "postcodes": [60549, 60546, 60547],
                                   "aa_where": "60549", "place": r"flughafen|airport", "city": "Frankfurt am Main",
                                   "airport": True},
+            # names: other spellings of the town in addresses and the company register ("Offenbach", "Rüsselsheim");
+            # not_place: places that start with the town's name but are another town (Mainz-Kastel is Wiesbaden)
+            "Offenbach am Main": {"ags": "06413000", "postcodes": [63065, 63067, 63069, 63071, 63073, 63075],
+                                  "names": ["Offenbach"], "not_place": r"offenbach[- ](?:an der queich|hundheim)"},
+            "Mörfelden-Walldorf": {"ags": "06433008", "postcodes": [64546], "names": ["Mörfelden"]},  # not "Walldorf": SAP's is in Baden
+            "Kelsterbach": {"ags": "06433007", "postcodes": [65451]},
+            "Rüsselsheim am Main": {"ags": "06433012", "postcodes": [65428], "names": ["Rüsselsheim"]},
+            "Mühltal": {"ags": "06432014", "postcodes": [64367], "hall": "Gemeinde Mühltal"},
+            "Roßdorf": {"ags": "06432020", "postcodes": [64380], "hall": "Gemeinde Roßdorf",
+                        "aa_where": "64380"},  # the Arbeitsagentur finds nothing for "Roßdorf" (the ß)
+            "Ober-Ramstadt": {"ags": "06432016", "postcodes": [64372]},
+            "Seeheim-Jugenheim": {"ags": "06432022", "postcodes": [64342], "hall": "Gemeinde Seeheim-Jugenheim",
+                                  "names": ["Seeheim"]},  # not "Jugenheim": there is one in Rheinhessen too
+            "Erzhausen": {"ags": "06432006", "postcodes": [64390], "hall": "Gemeinde Erzhausen"},
+            # 55099: the university's own postcode
+            "Mainz": {"ags": "07315000", "postcodes": [55099, 55116, 55118, 55120, 55122, 55124, 55126, 55127, 55128,
+                                                       55129, 55130, 55131],
+                      "not_place": r"mainz[- ](?:kastel|kostheim|amöneburg)"},
         },
         "max_checks_per_run": 300,
         "max_contacts_per_run": 60,

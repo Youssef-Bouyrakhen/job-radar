@@ -389,7 +389,9 @@ never changed.
 The **Coverage** page shows how much of a town is covered: not only IT employers, but every business
 that could hire an IT Werkstudent. The towns: **Darmstadt** (all districts), **Weiterstadt**, **Griesheim**,
 **Pfungstadt**, **Langen**, **Egelsbach**, **Dreieich** and **Neu-Isenburg**, then **Frankfurt Airport**
-(see below). On top: **Region covered: X%**
+(see below), then **Offenbach am Main**, **Mörfelden-Walldorf**, **Kelsterbach**, **Rüsselsheim am Main**,
+**Mühltal**, **Roßdorf**, **Ober-Ramstadt**, **Seeheim-Jugenheim**, **Erzhausen** and last **Mainz** (the
+biggest). The nightly checks go through them in this order. On top: **Region covered: X%**
 (companies with a final status) and a **Whole region** row. Per town: companies, careers pages, checked %,
 how many nights are left, and one button per status; a click opens the Companies page with only that
 town's companies in that status.
@@ -427,11 +429,13 @@ Duplicates merge with the companies already known (same name or same website). T
 Everything goes through the polite crawler (robots.txt, max 1 request/s per site, honest User-Agent).
 The AI is only used in the usual places (websites the rules can't find, job lists without a feed,
 categories, sizes) and always after scoring jobs (see **AI limits**). More towns can be added under
-`region: towns:` in config.yaml (the official municipality key `ags` and the postcodes).
+`region: towns:` in config.yaml (the official municipality key `ags` and the postcodes; optional `names`:
+other spellings like "Offenbach", and `not_place`: places that only start like the town, e.g. Mainz-Kastel,
+which is Wiesbaden).
 When the free web search (step 5 of the careers page search) is used up for the day, the companies that
 still need it stay unchecked and the next night goes on with them.
 
-**Frankfurt Airport** is its own row (after the 8 towns, also in **Whole region**). It is an area, not a town:
+**Frankfurt Airport** is its own row (after the first 8 towns, also in **Whole region**). It is an area, not a town:
 - **OpenStreetMap**: the Frankfurt district "Flughafen" (Terminals, Cargo City Nord / Süd, Gateway Gardens,
   The Squaire) and the airport grounds, not all of Frankfurt. Also the operators of hangars and other
   buildings ("Flugzeughalle 5" belongs to Lufthansa Technik AG).

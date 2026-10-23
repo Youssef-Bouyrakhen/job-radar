@@ -1,6 +1,8 @@
 """Region coverage: every business in a town that could hire an IT Werkstudent (Darmstadt, Weiterstadt,
-Griesheim, Pfungstadt, Langen, Egelsbach, Dreieich, Neu-Isenburg: region.towns in config.yaml), and at
-Frankfurt Airport (see "The airport" below).
+Griesheim, Pfungstadt, Langen, Egelsbach, Dreieich, Neu-Isenburg, then after the airport Offenbach am Main,
+Mörfelden-Walldorf, Kelsterbach, Rüsselsheim am Main, Mühltal, Roßdorf, Ober-Ramstadt, Seeheim-Jugenheim,
+Erzhausen and Mainz: region.towns in config.yaml), and at Frankfurt Airport (see "The airport" below).
+A town can have other spellings (names: "Offenbach") and places that only start like it (not_place: "Mainz-Kastel").
 
 1. Collect (no AI, every night):
    a) OpenStreetMap: named offices of any kind, works, research institutes, universities, town halls and
@@ -74,14 +76,21 @@ def exact_merge(key: str) -> bool:
     return is_airport(town_of_source(key))
 
 
+def spellings(town: str) -> list[str]:
+    """The town and its other spellings (region.towns: names): "Offenbach am Main", "Offenbach"."""
+    return [town, *towns()[town].get("names", [])]
+
+
 def in_town(plz: str | None, place: str | None, town: str) -> bool:
     t = towns()[town]
     if plz and str(plz).strip().isdigit():
         return int(plz) in t["postcodes"]
     if t.get("place"):  # the airport: "Frankfurt - Flughafen"
         return bool(place and re.search(t["place"], place, re.I))
+    if place and t.get("not_place") and re.match(t["not_place"], place.strip(), re.I):
+        return False  # "Mainz-Kastel" is Wiesbaden
     # "Darmstadt-Eberstadt" yes, "Roßdorf bei Darmstadt" no
-    return bool(place and re.match(rf"{re.escape(town)}\b", place.strip(), re.I))
+    return bool(place and any(re.match(rf"{re.escape(n)}\b", place.strip(), re.I) for n in spellings(town)))
 
 
 # Units of one big employer that the sources list one by one ("Institut für Geodäsie" has the TU's website,
@@ -92,6 +101,12 @@ PARENTS = {
         (re.compile(r"^(?:h_da\b|hochschule darmstadt\b)", re.I), "Hochschule Darmstadt"),
         (re.compile(r"wissenschaftsstadt darmstadt|\bstadt darmstadt\b|^magistrat der stadt darmstadt", re.I),
          "Wissenschaftsstadt Darmstadt"),
+    ],
+    "Mainz": [
+        (re.compile(r"universit[äa]tsmedizin mainz|universit[äa]tsklinik(?:um)? mainz", re.I), "Universitätsmedizin Mainz"),
+        (re.compile(r"johannes[- ]gutenberg[- ]universit[äa]t|\bjgu\b|^universit[äa]t mainz\b", re.I),
+         "Johannes Gutenberg-Universität Mainz"),
+        (re.compile(r"^hochschule mainz\b", re.I), "Hochschule Mainz"),
     ],
 }
 
@@ -104,8 +119,9 @@ def _hall(town: str) -> str:
 def _parent(name: str, town: str) -> str:
     # Every town: "Magistrat der Stadt Weiterstadt Personalservice", "Stadt Pfungstadt: Kultur ...",
     # "Gemeindeverwaltung Egelsbach" are its administration
+    spelled = "|".join(re.escape(n) for n in spellings(town))
     if re.match(rf"(?:der )?(?:magistrat der |stadtverwaltung |gemeindeverwaltung |gemeindevorstand der )?"
-                rf"(?:(?:kreis)?stadt|gemeinde) {re.escape(town)}\b|(?:stadt|gemeinde)verwaltung\b", name, re.I):
+                rf"(?:(?:kreis|landeshaupt)?stadt|gemeinde) (?:{spelled})\b|(?:stadt|gemeinde)verwaltung\b", name, re.I):
         name = _hall(town)
     return next((parent for rule, parent in PARENTS.get(town, []) if rule.search(name)), name)
 
@@ -237,7 +253,7 @@ def _register_town(office: str, plz: str | None, names: list[str]) -> str | None
         if is_airport(town):
             if plz and int(plz) in towns()[town]["postcodes"]:
                 return town
-        elif office == town and (not plz or in_town(plz, None, town)):  # Griesheim near Darmstadt, not another one
+        elif office in spellings(town) and (not plz or in_town(plz, None, town)):  # Griesheim near Darmstadt, not another one
             return town
     return None
 
@@ -248,7 +264,9 @@ def _download_register(names: list[str], progress: dict) -> None:
     if not robots_allows(REGISTER_URL, BOT_NAME):
         raise httpx.TransportError("OffeneRegister's robots.txt asks automated visitors not to download it")
     found, lines, buffer = {t: [] for t in names}, 0, b""
-    wanted = [w.encode() for t in names for w in (map(str, towns()[t]["postcodes"]) if is_airport(t) else [t])]
+    # The file may write umlauts as JSON escapes (a backslash, then u00fc for ü): both forms
+    wanted = {form for t in names for w in (map(str, towns()[t]["postcodes"]) if is_airport(t) else spellings(t))
+              for form in (w.encode(), json.dumps(w)[1:-1].encode())}
     decompressor = bz2.BZ2Decompressor()
     with httpx.stream("GET", REGISTER_URL, headers=BOT_HEADERS, timeout=120, follow_redirects=True) as r:
         r.raise_for_status()
@@ -558,8 +576,8 @@ def to_check(exclude: set[int]) -> list[dict]:
 def _mentions_town(page: Page, town: str) -> bool:
     text = careers._text_head(page.html, len(page.html))
     # The airport's companies name their city: "Frankfurt am Main", "Frankfurt Airport"
-    place = towns()[town].get("city", town).split()[0] if is_airport(town) else town
-    return bool(re.search(rf"\b{re.escape(place)}\b", text, re.I)) or \
+    places = [towns()[town].get("city", town).split()[0]] if is_airport(town) else spellings(town)
+    return any(re.search(rf"\b{re.escape(p)}\b", text, re.I) for p in places) or \
         any(str(p) in text for p in towns()[town]["postcodes"])
 
 
