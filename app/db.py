@@ -123,6 +123,18 @@ CREATE TABLE IF NOT EXISTS app_emails (
     read_at     TEXT NOT NULL
 );
 
+-- Why a Watched / Initiativ company shows 0 jobs for you (diagnosis.py). One row per such company.
+CREATE TABLE IF NOT EXISTS diagnosis (
+    company_id INTEGER PRIMARY KEY,
+    reason     TEXT NOT NULL,        -- no_jobs / not_near / not_student / landing / hidden / broken / unread
+    detail     TEXT,                 -- one line, e.g. "24 jobs, 0 near you"
+    suspicious TEXT,                 -- lie detector: other sources show jobs in your area (empty = no)
+    changed    TEXT,                 -- it had jobs before, now 0 (empty = no)
+    seen       TEXT,                 -- JSON: what the tool saw on the careers page
+    at         TEXT NOT NULL,
+    wrong_at   TEXT                  -- you clicked "This is wrong": on the re-check list
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,      -- switches you flip in the dashboard, e.g. "telegram_paused"
     value TEXT NOT NULL
@@ -208,12 +220,14 @@ MIGRATIONS["companies"] = {
     "career_step": "INTEGER",        # how its careers page was found: 1-6 (careers.STEPS), empty = not found
     "career_how": "TEXT",            # e.g. "Careers page (web search), no applicant system found", or why none was found
     "linkedin_url": "TEXT",          # its LinkedIn company page (linkedin.py)
+    "jobs_seen_at": "TEXT",          # the last read that found jobs on its list (for "page probably changed")
 }
 
 AFTER_ADDING = {
     ("jobs", "notified"): "UPDATE jobs SET notified = 1",
     # Before Phase B, Initiativ and Skipped could only be set by you
     ("companies", "status_by"): "UPDATE companies SET status_by = 'you' WHERE status IN ('initiativ', 'skipped')",
+    ("companies", "jobs_seen_at"): "UPDATE companies SET jobs_seen_at = jobs_read_at WHERE jobs_total > 0",
 }
 
 

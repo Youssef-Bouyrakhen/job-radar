@@ -21,7 +21,10 @@ PORTALS = (
 
 def _host(text: str) -> str:
     text = (text or "").strip().lower()
-    host = urlparse(text if "://" in text else "https://" + text).hostname or ""
+    try:
+        host = urlparse(text if "://" in text else "https://" + text).hostname or ""
+    except ValueError:  # a source name, not an address: "[x] AG (Companies)" looks like a broken IPv6 address
+        return ""
     return host.removeprefix("www.")
 
 

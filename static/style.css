@@ -412,6 +412,24 @@ button.switch { border: 0; padding: 0; cursor: pointer; }
 .co-import-row .add-input { flex: 1 1 220px; }
 .co-import .add-error { margin: 0; }
 .co-origin { font-style: italic; }
+/* Diagnosis: why a company shows 0 jobs */
+.diag-row { flex-wrap: wrap; align-items: center; overflow: visible; }
+.co-sub.co-diag { white-space: normal; }
+.diag-title { flex: none; font-size: 13px; color: var(--muted); padding-right: 4px; }
+.diag-title strong { color: var(--text); font-weight: 600; }
+.src-row--compact .src-box--flag .src-box-name { color: var(--danger); }
+.co-diag-reason { color: var(--text); font-weight: 500; }
+.co-diag--landing .co-diag-reason, .co-diag--hidden .co-diag-reason, .co-diag--broken .co-diag-reason { color: var(--maybe); }
+.co-diag-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.co-diag-actions { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+.co-row > .co-seen { grid-column: 1 / -1; margin: 0 12px 12px 20px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); font-size: 12.5px; }
+.co-seen-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; }
+.co-seen-grid dt { color: var(--muted); }
+.co-seen-grid dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.co-seen a { color: inherit; text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
+.co-seen-label { margin: 10px 0 4px; color: var(--muted); }
+.co-seen-text { max-height: 260px; margin: 0; padding: 8px 10px; overflow: auto; border-radius: 8px; background: var(--hover); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.co-seen-note { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0 0; color: var(--muted); }
 @container main (max-width: 900px) {
   .co-head, .co-row { grid-template-columns: minmax(0, 1fr) 200px 140px; }
   .co-head .th:nth-child(2), .co-head .th:nth-child(3), .co-row .co-city, .co-row .co-tags-cell { display: none; }

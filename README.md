@@ -349,6 +349,17 @@ go lower), and its website / careers page is looked for only once. **Watched** a
 are read at **13:00** (busy ones, Monday to Friday) and **19:00** (busy ones every day, quiet ones every third
 day), see the day plan above; the AI only reads a page again when its job part changed. The Companies page shows for each company when it was last read and when it is read next.
 
+**0 jobs, why?** (Companies page): every Watched / Initiativ company without a Werkstudent / part-time job
+near you gets one reason: *really no jobs*, *jobs but none near you* ("24 jobs, 0 near you"), *jobs but none
+for students*, *landing page* (jobs probably one click deeper, e.g. behind "Offene Stellen"), *jobs in
+JavaScript or an iframe*, *page moved or broken*, or *not read yet*. The row above the list counts them; a
+click shows only those. Two warnings: **suspicious 0** (the Arbeitsagentur, LinkedIn or your job alerts show
+jobs of this company in your area, but its careers page gave none) and **page probably changed** (it had jobs
+before, now 0). **See what the tool saw** shows the page it opened, how many job links it found and the first
+lines of text; **This is wrong** puts the company on a re-check list (the "Marked wrong" box). Every company
+read updates the diagnosis; "Diagnose again" opens all their careers pages again (a few minutes). The
+diagnosis only explains the 0, it doesn't change how jobs are read.
+
 **Import list** (Companies page): paste company names (one per line), or the link of a page that
 lists companies, e.g. a career fair's exhibitor list, tech hub members, h_da dual-study partners
 (web pages and PDFs work). Give the list a name like `konaktiva 2026`: it shows as the source of

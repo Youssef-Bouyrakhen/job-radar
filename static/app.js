@@ -3,7 +3,7 @@
    If GET jobs fails (file opened directly), the page runs on demo data.
    ========================================================= */
 // Must match VERSION in app/__init__.py. If they differ, an old Job Radar is still running.
-const DASHBOARD_VERSION = '10.9';
+const DASHBOARD_VERSION = '11.6';
 
 const ENDPOINTS = {
   jobs:        () => ['GET',    '/api/jobs?view=everything'],
@@ -30,6 +30,10 @@ const ENDPOINTS = {
   lookalikes:  () => ['POST',   '/api/companies/lookalikes'],
   weeklySummary:() => ['POST',  '/api/companies/weekly-summary'],
   setCompany:  id => ['PATCH',  `/api/companies/${id}`],    // { status } or { category }
+  coDiagnosis: id => ['GET',    `/api/companies/${id}/diagnosis`],  // why 0 jobs + what the tool saw
+  coDiagnose:  id => ['POST',   `/api/companies/${id}/diagnose`],   // look at its page again now
+  coWrong:     id => ['POST',   `/api/companies/${id}/wrong`],      // { wrong: true|false }
+  runDiagnosis:() => ['POST',   '/api/diagnosis/run'],
   coverage:    () => ['GET',    '/api/coverage'],           // -> { towns, covered_percent, per_night, progress }
   applications:() => ['GET',    '/api/applications'],       // -> { jobs: {id: {timeline, category}}, stats, review, ... }
   appCheck:    () => ['POST',   '/api/applications/check'],
@@ -936,7 +940,14 @@ const CO_CATEGORY_FROM = { name: 'from its name or website', jobs: 'from its job
 // Category searches on the Arbeitsagentur: "ba_insurance" = found by the insurance keywords
 Object.entries(CO_CATEGORY).forEach(([k, label]) => { CO_SOURCE['ba_' + k] = 'AA search: ' + label; });
 const CO_PAGE = 200;
-let companies = [], coProgress = {}, coLinkedin = null, coTimer = null, coShown = CO_PAGE, coLoaded = false;
+let companies = [], coProgress = {}, coLinkedin = null, coTimer = null, coShown = CO_PAGE, coLoaded = false, coDiagRun = {};
+// Why a Watched / Initiativ company shows 0 jobs for you (diagnosis.py)
+const DIAG = { no_jobs: 'Really no jobs', not_near: 'Jobs, none near you', not_student: 'Jobs, none for students',
+               landing: 'Landing page', hidden: 'JavaScript / iframe', broken: 'Moved or broken', unread: 'Not read yet' };
+const DIAG_FLAG = { suspicious: 'Suspicious 0', changed: 'Page probably changed', wrong: 'Marked wrong' };
+const diagHas = (c, k) => !!c.diag && (k === 'wrong' ? !!c.diag.wrong_at : k in DIAG_FLAG ? !!c.diag[k] : c.diag.reason === k);
+state.coDiag = '';  // '' = no diagnosis filter
+const coSeenOpen = new Set();
 state.coStatus = sessionGet('jr-co-status', CO_STATUS, 'all');
 state.coQuery = '';
 state.coTown = '';  // set from the Coverage page: only this town's companies
@@ -947,20 +958,22 @@ async function loadCompanies() {
   if (state.demo) { coLoaded = true; return renderCompanies(); }
   try {
     const r = await api('companies');
-    companies = r.companies; coProgress = r.progress; coLinkedin = r.linkedin; coLoaded = true;
+    companies = r.companies; coProgress = r.progress; coLinkedin = r.linkedin; coDiagRun = r.diagnosis || {}; coLoaded = true;
   } catch (e) { coProgress = { error: 'Could not load companies: ' + e.message }; }
   renderCompanies(); renderNav();
   clearTimeout(coTimer);
-  if (coProgress.running) coTimer = setTimeout(loadCompanies, 2500); // live progress
+  if (coProgress.running || coDiagRun.running) coTimer = setTimeout(loadCompanies, coDiagRun.running ? 5000 : 2500); // live progress
 }
 
 // Best fit first; then job feed, careers page, not checked yet, nothing found; then how often it was found
 const coRank = c => ({ green: 0, amber: 1 }[c.career_state] ?? (c.last_checked ? 3 : 2));
 const coTotal = c => Object.values(c.sources || {}).reduce((a, b) => a + b, 0);
-function coMatches(c, status = state.coStatus, category = state.coCategory) {
+// The status and category boxes count without the "0 jobs, why?" filter (diag = '')
+function coMatches(c, status = state.coStatus, category = state.coCategory, diag = state.coDiag) {
   if (status !== 'all' && c.status !== status) return false;
   if (category !== 'all' && (c.category || 'unsorted') !== category) return false;
   if (state.coTown && c.town !== state.coTown) return false;
+  if (diag && !diagHas(c, diag)) return false;
   const q = state.coQuery.trim().toLowerCase();
   return !q || [c.name, c.city, c.town, c.website, c.contact_email, CO_CATEGORY[c.category], ...Object.keys(c.sources || {}).map(coSourceName)].some(x => (x || '').toLowerCase().includes(q));
 }
@@ -983,7 +996,21 @@ function coSources(c) {
   return Object.entries(c.sources || {}).sort((a, b) => mine(b[0]) - mine(a[0]) || b[1] - a[1]).map(([k, n]) =>
     `<span class="status-tag" title="${why(k)}">${esc(coSourceName(k))}${n > 1 && !mine(k) ? ` ${n}×` : ''}</span>`).join('');
 }
+// Why it shows 0 jobs, with "See what the tool saw" and "This is wrong"
+function coDiag(c) {
+  const d = c.diag, near = c.jobs_near ?? 0;
+  const text = near ? `<a href="#" data-co-jobs="${c.id}">${esc(d.detail)}</a>` : esc(d.detail);
+  const flags = [d.suspicious ? `<span class="status-tag status-tag--overdue" title="${esc(d.suspicious)}">suspicious 0</span>` : '',
+    d.changed ? `<span class="status-tag status-tag--overdue" title="${esc(d.changed)}">page probably changed</span>` : '',
+    d.wrong_at ? `<span class="status-tag" title="You marked this diagnosis as wrong on ${fmtShort(d.wrong_at)}: it is on the re-check list">on re-check list</span>` : ''].join('');
+  const tip = [`${DIAG[d.reason]}: ${d.detail}`, d.suspicious, d.changed, `Diagnosed ${dayTime(d.at)}`].filter(Boolean).join('\n');
+  return `<div class="co-sub co-diag co-diag--${d.reason}" title="${esc(tip)}"><span class="co-diag-reason">${esc(DIAG[d.reason])}</span> · ${text}</div>
+    ${flags ? `<div class="co-diag-flags">${flags}</div>` : ''}
+    <div class="co-diag-actions"><button type="button" class="link-btn" data-co-seen="${c.id}">${coSeenOpen.has(c.id) ? 'Hide what the tool saw' : 'See what the tool saw'}</button>
+      <button type="button" class="link-btn" data-co-wrong="${c.id}">${d.wrong_at ? 'Take off re-check list' : 'This is wrong'}</button></div>`;
+}
 function coJobs(c) {
+  if (c.diag) return coDiag(c);
   if (!c.jobs_read_at) return '';
   if (c.jobs_method == null) return `<div class="co-sub" title="${esc(c.jobs_note || '')}">Jobs: ${esc(c.jobs_note || 'could not be read')}</div>`;
   const near = c.jobs_near ?? 0, parts = [`${near} job${near === 1 ? '' : 's'} here`];
@@ -1049,6 +1076,7 @@ function coRow(c) {
     <div class="co-career">${coCareer(c)}</div>
     <div class="co-status"><select class="co-select" aria-label="Status of ${esc(c.name)}">${options}</select>
       <select class="co-select co-cat${c.category ? '' : ' is-unsorted'}" aria-label="Category of ${esc(c.name)}" title="${esc(catWhy)}">${catOptions}</select>${statusNote}</div>
+    ${coSeenOpen.has(c.id) ? `<div class="co-seen">${coSeenHtml(c)}</div>` : ''}
   </div>`;
 }
 
@@ -1086,18 +1114,19 @@ function renderCompanies() {
   townBar.innerHTML = state.coTown ? `<span>Only companies in <strong>${esc(state.coTown)}</strong></span><button type="button" class="btn btn--sm" id="coTownClear">Show all</button>` : '';
 
   $('#companyBoxes').innerHTML = Object.entries(CO_STATUS).map(([k, label]) => {
-    const on = state.coStatus === k, n = coLoaded ? companies.filter(c => coMatches(c, k)).length : '–';
+    const on = state.coStatus === k, n = coLoaded ? companies.filter(c => coMatches(c, k, state.coCategory, '')).length : '–';
     return `<button type="button" class="src-box${on ? ' is-active' : ''}" data-co-status="${k}" aria-pressed="${on}">
       <span class="src-box-head">${ICON[CO_STATUS_ICON[k]]}<span class="src-box-name">${label}</span></span><span class="src-box-count">${n}</span></button>`;
   }).join('');
   // Category counts follow the chosen status
   $('#categoryBoxes').innerHTML = Object.entries(CO_CATEGORY_FILTER).map(([k, label]) => {
-    const on = state.coCategory === k, n = coLoaded ? companies.filter(c => coMatches(c, state.coStatus, k)).length : '–';
+    const on = state.coCategory === k, n = coLoaded ? companies.filter(c => coMatches(c, state.coStatus, k, '')).length : '–';
     if (k === 'unsorted' && !n && !on) return '';
     return `<button type="button" class="src-box${on ? ' is-active' : ''}" data-co-category="${k}" aria-pressed="${on}">
       <span class="src-box-head"><span class="src-box-name">${label}</span></span><span class="src-box-count">${n}</span></button>`;
   }).join('');
 
+  renderDiagBoxes();
   const list = companies.filter(c => coMatches(c))
     .sort((a, b) => (b.fit_score ?? -1) - (a.fit_score ?? -1) || coRank(a) - coRank(b) || coTotal(b) - coTotal(a) || a.name.localeCompare(b.name));
   $('#companyList').innerHTML = !coLoaded ? '<div class="empty"><p class="empty-text">Loading…</p></div>'
@@ -1107,6 +1136,68 @@ function renderCompanies() {
   more.hidden = list.length <= coShown;
   more.textContent = `Show more (${list.length - coShown} left)`;
 }
+
+// "0 jobs: why?": one box per reason (counted within the chosen status, category and town), click to show only those
+function renderDiagBoxes() {
+  const base = companies.filter(c => c.diag && (state.coStatus === 'all' || c.status === state.coStatus)
+    && (state.coCategory === 'all' || (c.category || 'unsorted') === state.coCategory) && (!state.coTown || c.town === state.coTown));
+  const box = (k, label, cls = '') => {
+    const n = base.filter(c => diagHas(c, k)).length, on = state.coDiag === k;
+    if (!n && !on) return '';
+    return `<button type="button" class="src-box${on ? ' is-active' : ''}${cls}" data-co-diag="${k}" aria-pressed="${on}">
+      <span class="src-box-head"><span class="src-box-name">${label}</span></span><span class="src-box-count">${n}</span></button>`;
+  };
+  const r = coDiagRun, label = r.running ? `Diagnosing… ${r.done} of ${r.total} pages` : 'Diagnose again';
+  $('#diagBoxes').innerHTML = !coLoaded || state.demo ? '' : `<span class="diag-title" title="Watched and Initiativ companies without a Werkstudent / part-time job near you, and why">0 jobs, why? <strong>${base.length}</strong></span>`
+    + Object.entries(DIAG).map(([k, l]) => box(k, l)).join('')
+    + Object.entries(DIAG_FLAG).map(([k, l]) => box(k, l, ' src-box--flag')).join('')
+    + `<button type="button" class="btn btn--sm" id="diagRun"${r.running ? ' disabled' : ''} title="Opens the careers page of every 0-job company again and looks why (takes a few minutes)">${label}</button>`
+    + (r.error ? `<span class="demo-note">${esc(r.error)}</span>` : '');
+}
+// What the tool saw on the careers page (loaded when you click)
+const coSeenData = {};
+function coSeenHtml(c) {
+  const d = coSeenData[c.id];
+  if (!d) return '<p class="co-seen-note">Loading…</p>';
+  if (d.error) return `<p class="co-seen-note">${esc(d.error)}</p>`;
+  const s = d.seen, link = u => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`;
+  const again = `<button type="button" class="btn btn--sm" data-co-look="${c.id}">Look again now</button>`;
+  if (!s) {
+    const fine = ['not_near', 'not_student'].includes(d.reason) ? ' Its job list was read fine: the jobs just aren\'t near you or for students.' : '';
+    return `<p class="co-seen-note">${esc(d.detail || 'The tool did not open a page for this one')}.${fine}</p>${again}`;
+  }
+  const rows = [['Opened', link(s.url)]];
+  if (s.final_url && s.final_url !== s.url) rows.push(['Ended up at', link(s.final_url)]);
+  rows.push(['Result', s.ok ? `loaded (HTTP ${s.status})` : esc(s.problem || 'did not load')]);
+  if (s.ok) {
+    rows.push(['Job links found', `${s.job_links ?? 0}${s.job_examples?.length ? ': ' + esc(s.job_examples.join(' · ')) : ''}`]);
+    if (s.deeper) rows.push(['Link to a job list', `“${esc(s.deeper.text)}” → ${link(s.deeper.url)}${s.deeper.system ? ` (${esc(s.deeper.system)})` : ''}`]);
+    if (s.frames?.length) rows.push(['Embedded boxes', s.frames.map(link).join('<br>')]);
+    if (s.widgets?.length) rows.push(['Job widget', esc(s.widgets.join(', '))]);
+    if (s.script_redirect) rows.push(['Forwards to', link(s.script_redirect)]);
+    if (s.no_jobs_text) rows.push(['Page says', `“${esc(s.no_jobs_text)}”`]);
+    rows.push(['Words of text', s.words ?? 0]);
+  }
+  const lines = s.lines?.length ? `<div class="co-seen-label">First lines of text it read</div><pre class="co-seen-text">${esc(s.lines.join('\n'))}</pre>` : '';
+  return `<dl class="co-seen-grid">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>${lines}
+    <p class="co-seen-note">Seen ${dayTime(d.at)}. ${again}</p>`;
+}
+async function toggleSeen(c) {
+  if (coSeenOpen.has(c.id)) { coSeenOpen.delete(c.id); return renderCompanies(); }
+  coSeenOpen.add(c.id); renderCompanies();
+  try { coSeenData[c.id] = await api('coDiagnosis', c.id); } catch (e) { coSeenData[c.id] = { error: 'Could not load: ' + e.message }; }
+  renderCompanies();
+}
+$('#diagBoxes').addEventListener('click', async e => {
+  if (e.target.closest('#diagRun')) {
+    try { coDiagRun = (await api('runDiagnosis')).progress; toast('Diagnosing the 0-job companies: takes a few minutes'); }
+    catch (x) { return toast(x.message); }
+    renderCompanies(); clearTimeout(coTimer); coTimer = setTimeout(loadCompanies, 5000);
+    return;
+  }
+  const b = e.target.closest('[data-co-diag]'); if (!b) return;
+  state.coDiag = state.coDiag === b.dataset.coDiag ? '' : b.dataset.coDiag; coShown = CO_PAGE; renderCompanies();
+});
 
 $('#companiesRun').addEventListener('click', async () => {
   if (state.demo) return toast('Demo data: connect the backend to discover companies');
@@ -1155,7 +1246,32 @@ $('#coTownFilter').addEventListener('click', e => {
 });
 $('#companySearch').addEventListener('input', e => { state.coQuery = e.target.value; coShown = CO_PAGE; renderCompanies(); });
 $('#companiesMore').addEventListener('click', () => { coShown += CO_PAGE; renderCompanies(); });
-$('#companyList').addEventListener('click', e => {
+$('#companyList').addEventListener('click', async e => {
+  const byId = id => companies.find(x => String(x.id) === id);
+  const seenBtn = e.target.closest('[data-co-seen]');
+  if (seenBtn) { const c = byId(seenBtn.dataset.coSeen); if (c) toggleSeen(c); return; }
+  const look = e.target.closest('[data-co-look]');
+  if (look) {
+    const c = byId(look.dataset.coLook); if (!c) return;
+    look.disabled = true; look.textContent = 'Looking…';
+    try {
+      const d = await api('coDiagnose', c.id);
+      coSeenData[c.id] = d;
+      c.diag = d.reason ? { reason: d.reason, detail: d.detail, suspicious: d.suspicious, changed: d.changed, at: d.at, wrong_at: d.wrong_at } : null;
+      if (!c.diag) coSeenOpen.delete(c.id);
+      toast(d.reason ? `${c.name}: ${DIAG[d.reason]}` : `${c.name}: ${d.detail}`);
+    } catch (x) { toast('Could not look: ' + x.message); }
+    return renderCompanies();
+  }
+  const wrong = e.target.closest('[data-co-wrong]');
+  if (wrong) {
+    const c = byId(wrong.dataset.coWrong); if (!c?.diag) return;
+    const on = !c.diag.wrong_at, before = c.diag.wrong_at;
+    c.diag.wrong_at = on ? new Date().toISOString() : null; renderCompanies();
+    try { await persist('coWrong', c.id, { wrong: on }); toast(on ? `${c.name} is on the re-check list` : `${c.name} is off the re-check list`); }
+    catch (x) { c.diag.wrong_at = before; renderCompanies(); toast('Could not save: ' + x.message); }
+    return;
+  }
   const a = e.target.closest('[data-co-jobs]'); if (!a) return;
   e.preventDefault();
   const c = companies.find(x => String(x.id) === a.dataset.coJobs);

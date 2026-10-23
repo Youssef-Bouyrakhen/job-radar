@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, must_apply, discover, gmail, linkedin,
+from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, diagnosis, must_apply, discover, gmail, linkedin,
                region, schedule, scheduler, telegram, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all, recheck_hours,
                       ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
@@ -249,12 +249,51 @@ class CompanyUpdate(BaseModel):
 
 @app.get("/api/companies")
 def list_companies():
-    rows = db.list_companies()
+    rows, diag = db.list_companies(), diagnosis.by_company()
     for r in rows:
         r["sources"] = json.loads(r["sources"] or "{}")
         r["size"] = company_jobs.size_of(r)
+        r["diag"] = diag.get(r["id"])  # why it shows 0 jobs (diagnosis.py)
     company_jobs.next_reads(rows)  # "next: today 19:00"
-    return {"progress": companies.progress(), "companies": rows, "linkedin": linkedin.status()}
+    return {"progress": companies.progress(), "companies": rows, "linkedin": linkedin.status(),
+            "diagnosis": diagnosis.progress()}
+
+
+# ---- diagnosis: why a company shows 0 jobs ----------------------------------------------
+
+class Wrong(BaseModel):
+    wrong: bool = True
+
+
+@app.post("/api/diagnosis/run")
+def run_diagnosis(look_again: bool = True):
+    """Diagnose every Watched / Initiativ company with 0 jobs (opens their careers pages again, politely)."""
+    if not diagnosis.start(look_again):
+        raise HTTPException(409, "The diagnosis is already running.")
+    return {"progress": diagnosis.progress()}
+
+
+@app.get("/api/companies/{company_id}/diagnosis")
+def company_diagnosis(company_id: int):
+    """The diagnosis with what the tool saw on the careers page."""
+    return diagnosis.get(company_id) or {"company_id": company_id, "reason": None, "seen": None}
+
+
+@app.post("/api/companies/{company_id}/diagnose")
+def diagnose_company(company_id: int):
+    """Look at the careers page now and diagnose again."""
+    found = diagnosis.one(company_id)
+    if found is None:
+        raise HTTPException(404, "Company not found.")
+    return found
+
+
+@app.post("/api/companies/{company_id}/wrong")
+def mark_wrong(company_id: int, body: Wrong):
+    """"This is wrong": the company goes on the re-check list (wrong=false takes it off)."""
+    if not diagnosis.mark_wrong(company_id, body.wrong):
+        raise HTTPException(404, "This company has no diagnosis.")
+    return {"ok": True}
 
 
 @app.get("/api/coverage")

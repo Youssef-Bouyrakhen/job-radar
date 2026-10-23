@@ -27,7 +27,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from bs4 import BeautifulSoup
 
-from . import ai, db, telegram, websearch
+from . import ai, db, diagnosis, telegram, websearch
 from .clock import GERMANY, today
 from .config import CONFIG
 from .dedup import dedup_key
@@ -145,8 +145,9 @@ def ai_extract(company: str, part: str, links: list[str], page_url: str) -> list
 
 
 def read_without_ai(c: dict) -> dict:
-    """Feed or structured data. If neither works, returns the page part the AI should read."""
-    note = ""
+    """Feed or structured data. If neither works, returns the page part the AI should read.
+    "seen": what the tool saw on the page (for the diagnosis of companies with 0 jobs)."""
+    note, seen = "", None
     if c["feed_url"] and (board := ats.detect(c["feed_url"])) and board.system in ats.FETCHERS:
         try:
             return {"jobs": ats.fetch_jobs(board, "")[:MAX_JOBS], "method": f"{board.system} feed"}
@@ -154,19 +155,20 @@ def read_without_ai(c: dict) -> dict:
             note = f"The {board.system} feed could not be read ({type(e).__name__})"
     for url in dict.fromkeys(filter(None, [c["feed_url"], c["career_url"]])):
         page = fetch_polite(url)
+        seen = diagnosis.look(url, page)
         if not page.ok:
             note = note or page.reason
             continue
         jobs = [] if _is_data(page.html) else generic._from_json_ld(BeautifulSoup(page.html, "html.parser"), page.url)
         if jobs:
-            return {"jobs": jobs[:MAX_JOBS], "method": "Structured data (JobPosting)"}
+            return {"jobs": jobs[:MAX_JOBS], "method": "Structured data (JobPosting)", "seen": seen}
         part, links = relevant_part(page.html, page.url)
         if part:
-            return {"ai_part": part, "ai_links": links, "page_url": page.url}
+            return {"ai_part": part, "ai_links": links, "page_url": page.url, "seen": seen}
         note = note or "The careers page shows no job titles (maybe they load with JavaScript)"
         if found := _read_with_jina(c["name"], page.url):
-            return found
-    return {"jobs": [], "method": None, "note": note or "No careers page to read"}
+            return {**found, "seen": seen}
+    return {"jobs": [], "method": None, "note": note or "No careers page to read", "seen": seen}
 
 
 MD_LINK = re.compile(r"\[([^\]]{3,200})\]\((https?://[^)\s]+)[^)]*\)")
@@ -585,6 +587,8 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False, ai_pages: in
         fields, new = save_jobs(c, r["jobs"])
         if r.get("feed_url"):  # an applicant system Jina Reader found: read directly next time
             fields["feed_url"] = r["feed_url"]
+        if fields["jobs_total"]:
+            fields["jobs_seen_at"] = db.now()
         db.save_company_check(c["id"], {**fields, "jobs_method": r.get("method"), "jobs_note": r.get("note"),
                                         "jobs_part_hash": part_hash}, stamp="jobs_read_at")
         new_good += sum(1 for j in new if j["filter_passed"])
@@ -592,6 +596,8 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False, ai_pages: in
         progress["jobs_read"] += 1
         progress["new_jobs"] += len(new)
         progress["done"] += 1
+    # Why the ones read now show 0 jobs (if they do), with what the read saw on their page
+    diagnosis.after_read(done_ids, {i: results[i].get("seen") for i in done_ids if i in results})
     # Merged with what is saved now (another run may have changed it meanwhile)
     db.set_setting("ai_waiting", json.dumps(sorted((ai_waiting() - done_ids) | waiting)))
     if progress["ai_skipped"]:
