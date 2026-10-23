@@ -128,6 +128,40 @@ def scheduled() -> None:
     search()
 
 
+BY_HAND_BEFORE = timedelta(minutes=15)  # no search by hand this long before the 03:00 / 13:00 / 19:00 runs
+
+
+def why_not_now(now: datetime | None = None) -> str:
+    """"" if a search by hand may start now, else why not (blocked today, a fixed run going or about to start)."""
+    from . import schedule  # it imports this module
+    now = (now or datetime.now(GERMANY)).astimezone(GERMANY)
+    if not CONFIG["linkedin"].get("enabled"):
+        return "the LinkedIn search is off (config.yaml)"
+    if running():
+        return "a LinkedIn search is already going"
+    if status()["blocked"]:
+        return "LinkedIn blocked today's search: try again tomorrow"
+    going = schedule.running() & {"night", "midday", "evening", "recheck", "read"}
+    if going:
+        return f"a fixed run is going ({', '.join(sorted(going))})"
+    for run in schedule.runs():
+        at = schedule.next_at(run, now)
+        if run["key"] != "linkedin" and at - now <= BY_HAND_BEFORE:
+            return f"the {run['hour']:02d}:00 {run['key']} run starts at {at:%H:%M}"
+    return ""
+
+
+def start_by_hand() -> str:
+    """Starts today's keywords in the background (POST /api/linkedin/run). "" if started, else why not."""
+    why = why_not_now()
+    if why:
+        log.info("LinkedIn search by hand not started: %s", why)
+        return why
+    log.info("LinkedIn search started by hand")
+    threading.Thread(target=search, daemon=True).start()
+    return ""
+
+
 def search(sleep=time.sleep) -> dict:
     """Today's keywords. Returns what happened (also saved for the dashboard)."""
     from .company_import import add_companies  # it imports companies, which this module needs first

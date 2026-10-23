@@ -304,6 +304,15 @@ def coverage():
             "linkedin": linkedin.status(), "plan": schedule.status()}
 
 
+@app.post("/api/linkedin/run")
+def run_linkedin():
+    """Today's LinkedIn keywords now, in the background. Not while blocked today or a fixed run is (about to be) going."""
+    why = linkedin.start_by_hand()
+    if why:
+        raise HTTPException(409, f"Not started: {why}.")
+    return {"started": True, "linkedin": linkedin.status()}
+
+
 @app.post("/api/companies/run")
 def run_companies(until_done: bool = False, kind: str = "run"):
     # until_done: no morning stop (for a run started by hand at night); a run already going is just reported on

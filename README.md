@@ -385,6 +385,8 @@ merged (same name or website); new ones show **found via LinkedIn, hiring** unde
 checked before other new companies (website, careers page, final status). The Coverage and Companies
 pages show "LinkedIn: X new companies this week, last search …". If LinkedIn answers "too many
 requests" or blocks, the search stops at once and shows **LinkedIn blocked, retry tomorrow**.
+Start it by hand with `curl -X POST http://127.0.0.1:8000/api/linkedin/run` (the next keywords in turn). It
+refuses (409) while LinkedIn blocked today, during the 03:00 / 13:00 / 19:00 runs and 15 minutes before them.
 Settings: `linkedin:` in config.yaml.
 
 **Weekly summary**: every **Sunday at 19:00** one short Telegram message: new companies, careers
