@@ -47,10 +47,13 @@ def _save(state: dict) -> None:
 
 
 def work() -> dict:
-    """What is left: companies never checked, and careers pages whose job list was never read."""
-    rows = db.company_rows()
+    """What is left: companies never checked, careers pages whose job list was never read, and job lists
+    that changed but no AI was left to read them (e.g. skipped by the 19:00 read: read the same evening
+    or when an AI is back, not a week later)."""
+    rows, waiting = db.company_rows(), company_jobs.ai_waiting()
     return {"unchecked": sum(1 for c in rows if not c["last_checked"] and c["status"] not in ("skipped", "initiativ")),
-            "unread": sum(1 for c in rows if c["career_url"] and c["status"] != "skipped" and not c["jobs_read_at"])}
+            "unread": sum(1 for c in rows if c["career_url"] and c["status"] != "skipped" and not c["jobs_read_at"]),
+            "waiting_ai": sum(1 for c in rows if c["id"] in waiting and c["status"] != "skipped" and c["jobs_read_at"])}
 
 
 def ai_blocked() -> bool:
@@ -96,7 +99,7 @@ def _decide(now: datetime, state: dict, left: dict) -> tuple[str, datetime | Non
         return ("running", None, "") if p["kind"] == "auto" else ("busy", None, "another Companies run is going")
     if company_jobs.reading_watched.is_set():
         return "busy", None, "the 19:00 watched read is going"
-    total = left["unchecked"] + left["unread"]
+    total = sum(left.values())
     if not total:
         return "done", None, ""
     fixed = _fixed_times(now)
@@ -137,7 +140,7 @@ def tick() -> str:
     if not enabled():
         return "off"
     now, state, left = datetime.now(GERMANY), _load(), work()
-    total = left["unchecked"] + left["unread"]
+    total = sum(left.values())
     if state.get("work_before") is not None and not companies.progress()["running"]:
         # The run started last time has ended: did it get anywhere? One that a restart stopped is just
         # started again (it didn't finish, so it can't have failed)
@@ -159,7 +162,8 @@ def tick() -> str:
     stop_at = (fixed[0][0] - STOP_BEFORE).timestamp() if fixed else None
     if companies.start("auto", stop_at=stop_at):
         _save({**state, "work_before": total, "started_at": now.isoformat(timespec="seconds"), "boot": BOOT})
-        log.info("Auto-resume: run started (%d companies to check, %d job lists to read)", left["unchecked"], left["unread"])
+        log.info("Auto-resume: run started (%d companies to check, %d job lists to read, %d waiting for the AI)",
+                 left["unchecked"], left["unread"], left["waiting_ai"])
         return "started"
     return "busy"
 
@@ -175,7 +179,8 @@ def status() -> dict:
         return {"state": "off", "text": "Auto-resume: off (companies.auto_resume in config.yaml)"}
     now, left = datetime.now(GERMANY), work()
     decision, until, why = _decide(now, _load(), left)
-    todo = f"{left['unchecked']} companies to check, {left['unread']} job lists to read"
+    todo = f"{left['unchecked']} companies to check, {left['unread']} job lists to read" \
+        + (f", {left['waiting_ai']} waiting for the AI" if left["waiting_ai"] else "")
     text = {
         "running": f"Auto-resume: running ({todo})",
         "busy": f"Auto-resume: waits, {why}",

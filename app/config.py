@@ -56,6 +56,7 @@ DEFAULTS = {
         "recheck_after_days": 7,
         "watched_read_hour": 19,
         "max_ai_pages_per_run": 30,
+        "max_ai_pages_watched": 400,  # 19:00 read and auto-resume: what the AIs have left, at most this
         "max_auto_added_per_run": 10,
         "max_initiativ_reasons_per_run": 60,
         "ai_seconds_between_requests": 12,

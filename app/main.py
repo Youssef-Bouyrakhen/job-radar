@@ -259,7 +259,8 @@ def list_companies():
 @app.get("/api/coverage")
 def coverage():
     """Region coverage: per town how many companies, careers pages, and how many have a final status."""
-    return {**region.coverage(), "progress": companies.progress(), "auto": auto_resume.status()}
+    return {**region.coverage(), "progress": companies.progress(), "auto": auto_resume.status(),
+            "watched_read": company_jobs.last_watched_read()}
 
 
 @app.post("/api/companies/run")

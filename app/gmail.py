@@ -107,6 +107,9 @@ def open_label(name: str) -> imaplib.IMAP4_SSL:
         _logout(imap)
         raise GmailError("Gmail refused the login. Check GMAIL_ADDRESS and GMAIL_APP_PASSWORD in .env "
                          "(it must be an app password, not your normal password)") from e
+    except OSError:  # e.g. a timeout: close the connection, the caller decides (applications: tries once more)
+        _logout(imap)
+        raise
     if status != "OK":
         _logout(imap)
         raise GmailError(f"Gmail label \"{name}\" not found. Create it, and in Gmail settings > Labels "

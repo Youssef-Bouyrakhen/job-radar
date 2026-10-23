@@ -321,6 +321,8 @@ companies:
   recheck_after_days: 7          # read a company's jobs again after this long (never more than once a week)
   watched_read_hour: 19          # Watched companies: their jobs are read every day at this hour (German time); null = off
   max_ai_pages_per_run: 30       # job lists the AI reads per run (when there is no feed)
+  max_ai_pages_watched: 400      # 19:00 read and auto-resume: as many as the AIs have left today (the reserve
+                                 # for scoring jobs stays), at most this many
   ai_seconds_between_requests: 12  # the free AI tiers also limit requests per minute
   max_size_lookups_per_run: 200  # companies the AI sizes per run (40 per request)
   max_auto_added_per_run: 10     # watched links added automatically per run

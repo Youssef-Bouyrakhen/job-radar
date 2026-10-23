@@ -1202,6 +1202,10 @@ function renderCoverage() {
   else if (r && !r.error) parts.push(`<span>${r.per_night} more companies checked per night${r.run_hour != null ? ` (${r.run_hour}:00)` : ''}</span>`);
   // "Auto-resume: running" / "waiting for AI until 09:00" / "all done": runs go on by themselves
   if (r?.auto?.text) parts.push(`<span class="cov-auto cov-auto--${esc(r.auto.state)}">${esc(r.auto.text)}</span>`);
+  // The last 19:00 read of the watched companies; the ones the AI didn't get to are never hidden
+  const w = r?.watched_read;
+  if (w) parts.push(`<span>19:00 read ${fmtShort(w.at)} ${fmtTime(w.at)}: ${w.read} of ${w.companies} companies, ${w.new_jobs} new jobs, ${w.new_good} match your filter, the AI read ${w.ai_used} pages</span>`);
+  if (w?.ai_skipped) parts.push(`<span class="cov-skipped">${w.ai_skipped} companies skipped, no AI left, will read in the next run${w.ai_waiting ? ` (${w.ai_waiting} still waiting)` : ' (all read since)'}</span>`);
   if (p.running) parts.push(`<span class="status-line is-checking"><span class="status-dot"></span>${esc(p.step)}${p.total ? ` · ${p.done} of ${p.total}` : ''}</span>`);
   if (r?.error) parts.push(`<span class="demo-note">${esc(r.error)}</span>`);
   $('#coverageSummary').innerHTML = parts.join('');

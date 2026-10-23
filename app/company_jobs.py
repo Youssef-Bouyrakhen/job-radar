@@ -489,22 +489,45 @@ def reread_after_area_change() -> int:
 
 
 def companies_to_read(limit: int, ids: set[int] | None = None) -> list[dict]:
-    """Companies with a careers page whose jobs weren't read in the last week; never read first.
+    """Companies with a careers page whose jobs weren't read in the last week; never read first, then the
+    ones waiting for the AI (no AI was left for them, see ai_waiting), then the oldest.
     ids: only these (an imported list, look-alikes)."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(7, CONFIG["companies"]["recheck_after_days"]))  # never more often
-    rows = [c for c in db.company_rows() if c["career_url"] and c["status"] != "skipped"
+    waiting = ai_waiting()
+    rows = [c for c in db.company_rows() if (c["career_url"] or c["id"] in waiting) and c["status"] != "skipped"
             and (ids is None or c["id"] in ids)
-            and (not c["jobs_read_at"] or datetime.fromisoformat(c["jobs_read_at"]) < cutoff)]
-    return sorted(rows, key=lambda c: (c["jobs_read_at"] or "", -(c["fit_score"] or 0)))[:limit]
+            and (not c["jobs_read_at"] or c["id"] in waiting or datetime.fromisoformat(c["jobs_read_at"]) < cutoff)]
+    return sorted(rows, key=lambda c: (bool(c["jobs_read_at"]), c["id"] not in waiting, c["jobs_read_at"] or "",
+                                       -(c["fit_score"] or 0)))[:limit]
+
+
+def ai_waiting() -> set[int]:
+    """Companies whose job list changed but no AI was left to read it: the next run reads them first
+    (auto-resume starts one for them, see auto_resume.work)."""
+    return set(json.loads(db.get_setting("ai_waiting") or "[]"))
+
+
+def ai_pages_left() -> int:
+    """AI pages for the 19:00 read and auto-resume: what the free AIs really have left today, minus the
+    reserve for scoring jobs (ai_budget: keep_percent), at most max_ai_pages_watched."""
+    if not ai.enabled():
+        return 0
+    return min(CONFIG["companies"]["max_ai_pages_watched"], ai.spare_requests("jobs"))
+
+
+def skipped_note(n: int) -> str:
+    return f"{n} companies skipped, no AI left, will read in the next run"
 
 
 def _part_hash(part: str) -> str:
     return hashlib.sha1(part.encode()).hexdigest()
 
 
-def read_jobs(todo: list[dict], progress: dict, stop=lambda: False) -> int:
+def read_jobs(todo: list[dict], progress: dict, stop=lambda: False, ai_pages: int | None = None) -> int:
     """Read and save the jobs of these companies: feeds and structured data without the AI; the AI
-    only for a page whose job part changed since it last read it (max_ai_pages_per_run at most).
+    only for a page whose job part changed since it last read it (ai_pages at most, None = max_ai_pages_per_run).
+    A changed page the AI didn't get to is never skipped silently: counted (progress "ai_skipped"), shown
+    as a warning and kept in ai_waiting for the next run.
     stop(): True = don't start more (the morning). Returns how many new jobs passed your filter."""
     cfg = CONFIG["companies"]
     progress.update(step="Reading job lists…", done=0, total=len(todo))
@@ -524,9 +547,9 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False) -> int:
     with ThreadPoolExecutor(cfg["workers"]) as pool:
         list(pool.map(read, todo))
 
-    ai_budget = cfg["max_ai_pages_per_run"] if ai.enabled() else 0
-    new_good = 0
-    progress.update(step="Saving jobs…", done=0)
+    ai_budget = (cfg["max_ai_pages_per_run"] if ai_pages is None else ai_pages) if ai.enabled() else 0
+    new_good, waiting, done_ids = 0, set(), set()  # waiting for the AI now / read now
+    progress.update(step="Saving jobs…", done=0, ai_used=0, ai_skipped=0)
     for c in todo:
         r = results.get(c["id"])
         if r is None:
@@ -536,18 +559,28 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False) -> int:
             part_hash = _part_hash(r["ai_part"])
             if part_hash == c["jobs_part_hash"]:  # the same job list as last time: nothing new, no AI request
                 db.save_company_check(c["id"], {"jobs_note": None}, stamp="jobs_read_at")
+                done_ids.add(c["id"])
                 progress["jobs_read"] += 1
                 progress["done"] += 1
                 continue
-            if ai_budget <= 0:
-                continue  # read again next run, when there are AI requests left
+            if ai_budget <= 0:  # read in the next run, when there are AI requests left
+                waiting.add(c["id"])
+                progress["ai_skipped"] += 1
+                continue
             ai_budget -= 1
+            progress["ai_used"] += 1
             progress["step"] = f"The AI reads the job list of {c['name']}…"
             try:
                 r = {"jobs": ai_extract(c["name"], r["ai_part"], r["ai_links"], r["page_url"]), "method": "AI from page text"}
             except (ai.RateLimited, ai.Overloaded) as e:
                 ai_budget = 0
                 progress["warnings"].append(ai.stop_note(e, "some job lists will be read next run"))
+                waiting.add(c["id"])
+                progress["ai_skipped"] += 1
+                continue
+            except Exception as e:  # every AI that was tried failed on this page: tried again next run
+                log.warning("Companies: the AI could not read the job list of %s (%s)", c["name"], str(e)[:160])
+                waiting.add(c["id"])
                 continue
         fields, new = save_jobs(c, r["jobs"])
         if r.get("feed_url"):  # an applicant system Jina Reader found: read directly next time
@@ -555,9 +588,14 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False) -> int:
         db.save_company_check(c["id"], {**fields, "jobs_method": r.get("method"), "jobs_note": r.get("note"),
                                         "jobs_part_hash": part_hash}, stamp="jobs_read_at")
         new_good += sum(1 for j in new if j["filter_passed"])
+        done_ids.add(c["id"])
         progress["jobs_read"] += 1
         progress["new_jobs"] += len(new)
         progress["done"] += 1
+    # Merged with what is saved now (another run may have changed it meanwhile)
+    db.set_setting("ai_waiting", json.dumps(sorted((ai_waiting() - done_ids) | waiting)))
+    if progress["ai_skipped"]:
+        progress["warnings"].append(skipped_note(progress["ai_skipped"]))
     return new_good
 
 
@@ -569,13 +607,15 @@ def _score_and_send() -> None:
         telegram.notify_in_background()
 
 
-def run(progress: dict, ids: set[int] | None = None) -> None:
+def run(progress: dict, ids: set[int] | None = None, ai_pages: int | None = None) -> None:
+    """ai_pages: AI pages for this run (auto-resume: ai_pages_left()), None = max_ai_pages_per_run."""
     from .companies import too_late  # companies imports this module
     cfg = CONFIG["companies"]
     todo = companies_to_read(cfg["max_job_reads_per_run"], ids)
-    new_good = read_jobs(todo, progress, stop=lambda: too_late(progress))
-    log.info("Companies: read %d job lists, %d new jobs (%d match your filter)",
-             progress["jobs_read"], progress["new_jobs"], new_good)
+    new_good = read_jobs(todo, progress, stop=lambda: too_late(progress), ai_pages=ai_pages)
+    log.info("Companies: read %d job lists, %d new jobs (%d match your filter)%s",
+             progress["jobs_read"], progress["new_jobs"], new_good,
+             f"; {skipped_note(progress['ai_skipped'])}" if progress["ai_skipped"] else "")
 
     mine = lambda rows: [c for c in rows if ids is None or c["id"] in ids]  # an import: AI only for its companies
     if ai.enabled():
@@ -691,20 +731,33 @@ def read_watched() -> dict:
         log.warning("Watched careers pages: a Companies run is still going after 3 hours, read tomorrow")
         return {}
     started = time.monotonic()
-    todo = watched_to_read()
+    # Read longest ago first: if the AI runs out, the ones it skipped last time get it first
+    todo = sorted(watched_to_read(), key=lambda c: c["jobs_read_at"] or "")
     progress = {"step": "", "done": 0, "total": 0, "jobs_read": 0, "new_jobs": 0, "warnings": []}
+    ai_pages = ai_pages_left()
     reading_watched.set()  # auto-resume doesn't start a run meanwhile
     try:
-        new_good = read_jobs(todo, progress)
+        new_good = read_jobs(todo, progress, ai_pages=ai_pages)
     finally:
         reading_watched.clear()
     seconds = time.monotonic() - started
-    log.info("Watched careers pages: read %d of %d in %.0f s, %d new jobs (%d match your filter)%s",
-             progress["jobs_read"], len(todo), seconds, progress["new_jobs"], new_good,
+    log.info("Watched careers pages: read %d of %d in %.0f s, %d new jobs (%d match your filter), "
+             "the AI read %d of max %d pages%s",
+             progress["jobs_read"], len(todo), seconds, progress["new_jobs"], new_good, progress["ai_used"], ai_pages,
              "".join(f"; {w}" for w in progress["warnings"]))
+    result = {"at": db.now(), "read": progress["jobs_read"], "companies": len(todo), "seconds": round(seconds),
+              "new_jobs": progress["new_jobs"], "new_good": new_good, "ai_used": progress["ai_used"],
+              "ai_pages": ai_pages, "ai_skipped": progress["ai_skipped"], "warnings": progress["warnings"]}
+    db.set_setting("watched_read_last", json.dumps(result))  # for the Coverage page
     if new_good:
         _score_and_send()
-    return {**progress, "companies": len(todo), "new_good": new_good, "seconds": round(seconds)}
+    return {**progress, **result}
+
+
+def last_watched_read() -> dict | None:
+    """The last 19:00 read (read_watched), for the Coverage page. ai_waiting: companies still waiting for the AI now."""
+    last = json.loads(db.get_setting("watched_read_last") or "null")
+    return last and {**last, "ai_waiting": len(ai_waiting())}
 
 
 FIRST_READ_RULE = "1"  # bump to release the jobs of first reads again

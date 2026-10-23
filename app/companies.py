@@ -587,7 +587,7 @@ def _run(kind: str = "run", text: str = "", label: str = "", night_limit: bool =
             _step("the region rules", region.triage)
             _step("checking the companies", lambda: _check(None))
             categories.run(_progress, None)
-            company_jobs.run(_progress, None)
+            company_jobs.run(_progress, None, ai_pages=company_jobs.ai_pages_left())  # also the ones the 19:00 read skipped
             _step("the final region statuses", lambda: region.settle(_progress))
             return
         if kind == "read":  # once, by hand: the jobs of every company never read, then the statuses

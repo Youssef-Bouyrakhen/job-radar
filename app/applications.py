@@ -23,6 +23,7 @@ import json
 import logging
 import re
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from email import message_from_bytes, policy
 from email.utils import parseaddr, parsedate_to_datetime
@@ -348,6 +349,7 @@ def applied_jobs() -> list[dict]:
 _lock = threading.Lock()
 _ai_failures: dict[str, int] = {}   # gmail id -> runs in which the AI didn't answer (review after 3)
 _last: dict = {}                    # result of the last check, for the dashboard
+RETRY_SECONDS = 30                  # after a Gmail timeout
 
 
 def last_result() -> dict:
@@ -361,7 +363,12 @@ def check() -> dict:
     if not _lock.acquire(blocking=False):
         return {"ok": False, "note": "Already running"}
     try:
-        result = _check()
+        try:
+            result = _check()
+        except TimeoutError:  # Gmail didn't answer in time (happens now and then): once more
+            log.warning("Application emails: Gmail timed out, trying once more in %d s", RETRY_SECONDS)
+            time.sleep(RETRY_SECONDS)
+            result = _check()
     except gmail.GmailError as e:
         result = {"ok": False, "note": str(e)}
     except Exception as e:

@@ -317,6 +317,14 @@ def _allowed(priority: str) -> bool:
     # Each provider counts the same (Cloudflare's budget is in neurons, the others' in requests)
     left = sum(r["left"] / r["budget"] for r in rows)
     return left > len(rows) * keep / 100
+
+
+def spare_requests(priority: str) -> int:
+    """Requests left today for this kind of work before the reserve for more important work (keep_percent)
+    is reached, e.g. Groq 1000 a day, 700 left, keep 30% -> 400. Cloudflare counts neurons, not requests: left out."""
+    keep = _keep(priority) / 100
+    return sum(max(0, r["left"] - math.ceil(r["budget"] * keep)) for r in usage()
+               if r["budget"] and r["unit"] == "requests")
 _paused: dict[str, float] = {}   # provider -> time.monotonic() when it may be used again
 _active: str | None = None       # the provider that answered last
 _warned: set[str] = set()
