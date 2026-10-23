@@ -26,12 +26,16 @@ sys.exit(check != "ok")' "$FILE"
     sudo -u jobradar -H "$PY" -m pip install -q --disable-pip-version-check -r requirements.txt
     echo "   Restarting Job Radar..."
     systemctl restart jobradar
+    # Job Radar needs about a minute to start (it checks the jobs first): wait up to 2 minutes
     VERSION=""
-    for _ in $(seq 1 30); do
+    START=$SECONDS
+    echo "   Waiting for Job Radar to answer (up to 2 minutes)..."
+    while [ $((SECONDS - START)) -lt 120 ]; do
       VERSION=$("$PY" -c 'import json, urllib.request
 print(json.load(urllib.request.urlopen("http://127.0.0.1:8000/api/info", timeout=5))["version"])' 2>/dev/null) && break
-      sleep 2
+      sleep 3
     done
+    [ -n "$VERSION" ] && echo "   It answered after $((SECONDS - START)) s."
     if [ "$VERSION" = "$WANT" ]; then
       echo "   The server now runs version $VERSION."
     else

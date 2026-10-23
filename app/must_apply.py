@@ -133,11 +133,34 @@ def km_from_center(location: str) -> float | None:
 NOT_A_PLACE = re.compile(r"^(?:de|deu|deutschland|germany|d)$", re.I)
 
 
+BRACKETS = re.compile(r"\s*\(([^()]*)\)")
+GENDER = re.compile(r"^\s*(?:[mwfdxi]\s*[/|,*]\s*)+[mwfdxi]\s*$|gender|divers", re.I)
+
+
+def _place_word(inner: str) -> bool:
+    """Brackets that belong to the place: "Sulzbach (Taunus)", "Frankfurt (Main)", "Sankt Augustin (53757)".
+    Not "(Hybrid)", "(Remote)", "(m/w/d)", "(DE)"."""
+    if re.fullmatch(r"\s*\d{5}\s*", inner):
+        return True
+    return bool(NOT_A_CITY.sub("", inner)) and not PARTLY_REMOTE.search(inner) and not REMOTE.search(inner) \
+        and not GENDER.search(inner)
+
+
 def _places(location: str) -> list[str]:
-    parts = [re.sub(r"\s*\(.*?\)", "", p).strip(" -") for p in re.split(r"[,;/|]| oder | or | und | and ", location)]
+    location = BRACKETS.sub(lambda m: m[0] if _place_word(m[1]) else "", location)
+    parts = [p.strip(" -") for p in re.split(r"[,;/|]| oder | or | und | and ", location)]
     # "Hamburg (Hybrid)", "Remote, Hamburg": only the city is looked up
-    parts = [p for p in dict.fromkeys(parts) if len(p) >= 2 and not NOT_A_PLACE.match(p) and NOT_A_CITY.sub("", p)]
+    parts = [p for p in dict.fromkeys(parts) if len(p) >= 2 and not NOT_A_PLACE.match(p)
+             and NOT_A_CITY.sub("", BRACKETS.sub("", p))]
     return parts[:8] or [location]
+
+
+def km_of_place(part: str) -> float | None:
+    """One place. With brackets the whole name first: "Sulzbach (Taunus)" is looked up as "Sulzbach Taunus"
+    (30 km), as "Sulzbach" alone OpenStreetMap finds another Sulzbach (80 km). Then without the brackets."""
+    if BRACKETS.search(part) and (km := km_from_center(BRACKETS.sub(r" \1", part).strip())) is not None:
+        return km
+    return km_from_center(BRACKETS.sub("", part).strip())
 
 
 def fully_remote(place: str, title: str = "", description: str = "") -> bool:
@@ -162,10 +185,10 @@ def area_of(job: dict) -> tuple[str, float | None]:
     if fully_remote(place, job["title"], job.get("description") or ""):
         return "remote", None
     # "Dortmund, Berlin, Darmstadt, Dresden": the nearest of the places counts
-    found = [km for part in _places(place) if (km := km_from_center(part)) is not None] if place else []
+    found = [km for part in _places(place) if (km := km_of_place(part)) is not None] if place else []
     km = min(found) if found else None
     if km is None and " · " in job["title"]:  # some alert emails put "Company · City (Remote)" into the title
-        km = km_from_center(re.sub(r"\s*\(.*?\)", "", job["title"].rsplit(" · ", 1)[1]))
+        km = km_of_place(BRACKETS.sub(lambda m: m[0] if _place_word(m[1]) else "", job["title"].rsplit(" · ", 1)[1]))
     if km is None:
         return "unknown", None
     return ("near" if km <= area()["max_km"] else "outside"), km
@@ -317,7 +340,8 @@ def prepare() -> None:
     log.info("Must apply: %d recent good job(s) will be scored again (blocker check)", n)
 
 
-AREA_RULE = "3"  # bump when the area / hours rules change: current jobs and the Must apply box are checked again
+AREA_RULE = "4"  # bump when the area / hours rules change: current jobs and the Must apply box are checked again
+# 4: places with brackets ("Sulzbach (Taunus)", "Münster (Hessen)") are looked up with them
 
 
 def recheck_jobs() -> Counter | None:

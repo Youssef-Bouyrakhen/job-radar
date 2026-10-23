@@ -2,6 +2,8 @@
 import json
 import os
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -219,15 +221,29 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+BUSY_SECONDS = 60  # two writes at the same moment: the second one waits this long for the first
+
+
+@contextmanager
+def connect() -> Iterator[sqlite3.Connection]:
+    """`with connect() as conn:` saves the changes at the end (none on an error) and always closes the
+    connection, so no lock stays behind after the block."""
+    conn = sqlite3.connect(DB_PATH, timeout=BUSY_SECONDS)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
     DB_PATH.parent.mkdir(exist_ok=True)
     with connect() as conn:
+        # WAL: reading never stops a write and a write never stops reading (the Companies run, the checks,
+        # the scoring and the dashboard all use the database at once); only two writes wait for each other.
+        # Saved in the database file, with two helper files next to it (jobradar.db-wal, jobradar.db-shm).
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
         for table, columns in MIGRATIONS.items():
             existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}

@@ -75,7 +75,7 @@ def km_away(location: str) -> float | None:
     whole = re.sub(r"\s*\((.*?)\)", r" \1", location)
     if "/" not in whole and (km := must_apply.km_from_center(whole)) is not None:
         return km
-    found = [km for part in must_apply._places(location) if (km := must_apply.km_from_center(part)) is not None]
+    found = [km for part in must_apply._places(location) if (km := must_apply.km_of_place(part)) is not None]
     return min(found) if found else None
 
 

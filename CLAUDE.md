@@ -14,7 +14,9 @@ The owner is a beginner: explain in plain language and give exact commands.
 - `app/config.py` - loads `config.yaml`, then `config.local.yaml` on top (personal, not in git)
 - `app/clock.py` - German time (Europe/Berlin, summer/winter time) for everything shown or planned;
   the server runs on UTC, the database stores UTC
-- `app/db.py` - SQLite, one file: `data/jobradar.db` (`JOBRADAR_DB` env var overrides the path)
+- `app/db.py` - SQLite, one file: `data/jobradar.db` (`JOBRADAR_DB` env var overrides the path).
+  WAL mode since v11.4: while Job Radar runs, `jobradar.db-wal` / `-shm` sit next to it, so copy a running
+  database only with SQLite's backup (`sqlite3.connect(src).backup(sqlite3.connect(dst))`), not a file copy
 - `app/scheduler.py` - background checks (APScheduler)
 - `app/checker.py` - checks links, saves new jobs; `app/sources.py` - is a link trackable
 - `app/fetcher.py` - polite downloads; `app/render.py` - hidden Chrome for JS pages
