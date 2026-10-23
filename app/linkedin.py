@@ -3,12 +3,14 @@ which companies near Darmstadt hire in IT. Not a job source: only the company na
 the job's place are kept, and the company goes into Companies, so its own careers page gets watched.
 
 Very gentle: once a day (linkedin.hour), 2 keywords a day in turn (each one once a week), at most 5 pages
-of 10 jobs per keyword, 5-10 s random pause between pages. No login, no cookies, never your account.
+of 10 jobs per keyword, 5-10 s random pause between pages. A job counts if its place is at most 40 km from Darmstadt
+(area.max_km, measured like the 40 km rule for jobs). No login, no cookies, never your account.
 If LinkedIn says "too many requests" or blocks (429, 999, a login wall): stop at once, try again tomorrow.
 """
 import json
 import logging
 import random
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -16,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from bs4 import BeautifulSoup
 
-from . import db, region
+from . import db, must_apply, region
 from .clock import GERMANY
 from .companies import STAFFING
 from .config import CONFIG
@@ -64,6 +66,26 @@ def _page(client: httpx.Client, keyword: str, page: int) -> list[dict]:
                      "linkedin_url": link["href"].split("?")[0] if link and link.get("href", "").startswith("https://") else None,
                      "location": clean(place.get_text(" "), 100) if place else ""})
     return jobs
+
+
+def km_away(location: str) -> float | None:
+    """Real distance of a job's place from your area's center (area.center, the same OpenStreetMap lookup
+    as the 40 km rule for jobs); "Frankfurt/Rhein-Main": the nearest part. None: no place found.
+    The whole place first: "Sulzbach (Taunus), Hessen" is not the Sulzbach that "Sulzbach" alone finds."""
+    whole = re.sub(r"\s*\((.*?)\)", r" \1", location)
+    if "/" not in whole and (km := must_apply.km_from_center(whole)) is not None:
+        return km
+    found = [km for part in must_apply._places(location) if (km := must_apply.km_from_center(part)) is not None]
+    return min(found) if found else None
+
+
+def near(location: str) -> bool:
+    """In your area: at most area.max_km (40 km) from Darmstadt. A place the map doesn't know
+    ("Rhein-Main-Gebiet") or a failed lookup: the list of places in the area decides."""
+    if not location.strip():
+        return False
+    km = km_away(location)
+    return km <= CONFIG["area"]["max_km"] if km is not None else bool(NEAR_PLACE.search(location))
 
 
 def _search(keyword: str, client: httpx.Client, sleep) -> tuple[list[dict], int]:
@@ -134,7 +156,7 @@ def search(sleep=time.sleep) -> dict:
                 for j in jobs:
                     if not j["name"]:
                         continue
-                    if not NEAR_PLACE.search(j["location"]):  # 25 miles is more than our area, or no place given
+                    if not near(j["location"]):  # 25 miles reach further than 40 km from Darmstadt, or no place given
                         result["outside"] += 1
                     elif STAFFING.search(j["name"]):
                         result["recruiters"] += 1

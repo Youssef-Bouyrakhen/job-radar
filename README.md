@@ -355,7 +355,8 @@ cookies, never your account) is searched around Darmstadt (25 miles, jobs of the
 keywords in turn (Werkstudent IT, Informatik, Software, Entwickler / Developer, Data, Cloud, IT-Support /
 Administrator, Security, SAP, Praktikum IT): the whole list once a week. Very gentle: at most 5 pages per
 keyword, 5–10 s random pause between pages. Only the company name, its LinkedIn page and the job's place
-are kept; jobs outside the area and staffing agencies / recruiters are left out. Known companies are
+are kept; jobs whose place is more than 40 km from Darmstadt (`area.max_km`, the real distance, e.g. Kronberg
+im Taunus counts, Walldorf in Baden doesn't) and staffing agencies / recruiters are left out. Known companies are
 merged (same name or website); new ones show **found via LinkedIn, hiring** under their name and are
 checked before other new companies (website, careers page, final status). The Coverage and Companies
 pages show "LinkedIn: X new companies this week, last search …". If LinkedIn answers "too many

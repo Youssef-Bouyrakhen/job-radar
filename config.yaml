@@ -356,7 +356,7 @@ linkedin:
   enabled: true
   hour: 11                       # once a day (German time); not at 03:00 or 19:00
   location: "Darmstadt, Hessen, Deutschland"
-  distance_miles: 25             # LinkedIn only offers 10 / 25 / 50 miles; 25 miles = about 40 km (then our nearby check)
+  distance_miles: 25             # LinkedIn only offers 10 / 25 / 50 miles; then each job's place must be at most area.max_km (40 km) from Darmstadt
   keywords_per_day: 2            # in turn: the whole list once a week
   keywords: [Werkstudent IT, Informatik, Software, Entwickler Developer, Data, Cloud,
              IT-Support Administrator, Security, SAP, Praktikum IT]
