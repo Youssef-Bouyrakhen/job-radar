@@ -23,6 +23,7 @@
         <button type="button" class="nav-item" data-tab="links" title="Watched links"><svg data-icon="link"></svg><span class="nav-label">Watched links</span><span class="nav-count" id="linksCount">–</span></button>
         <button type="button" class="nav-item" data-tab="companies" title="Companies"><svg data-icon="building"></svg><span class="nav-label">Companies</span><span class="nav-count" id="companiesCount">–</span></button>
         <button type="button" class="nav-item" data-tab="coverage" title="Region coverage"><svg data-icon="globe"></svg><span class="nav-label">Coverage</span><span class="nav-count" id="coverageCount">–</span></button>
+        <button type="button" class="nav-item" data-tab="timeline" title="Timeline: the day plan, live"><svg data-icon="clock"></svg><span class="nav-label">Timeline</span></button>
         <button type="button" class="nav-item" data-tab="settings" title="Settings"><svg data-icon="sliders"></svg><span class="nav-label">Settings</span></button>
       </nav>
       <div class="side-foot">
@@ -160,6 +161,42 @@
           </div>
           <div id="coverageList" aria-live="polite"></div>
           <p class="shortcuts cov-legend"><span><strong>Watched</strong> careers page, read every day at 19:00</span><span><strong>Initiativ</strong> IT jobs but no student job (careers page read every day at 19:00 too), or a small IT company without a careers page (email from its Impressum)</span><span><strong>No careers page</strong> none found</span><span><strong>Skipped</strong> shop, restaurant, craft, care or staffing business, or closed</span><span><strong>Waiting</strong> still in line for the nightly run</span></p>
+        </section>
+
+        <section id="tab-timeline" hidden>
+          <div class="page-head"><h1 class="page-title">Timeline</h1><div class="summary" id="timelineSummary"><span>What Job Radar does, German time</span></div></div>
+          <div class="tl-top">
+            <div class="tl-card tl-clock" aria-live="off">
+              <div class="tl-kicker">Now in Germany</div>
+              <div class="tl-clock-time" id="tlClock">--:--:--</div>
+              <div class="tl-clock-date"><span id="tlDate">–</span> <span class="tl-zone" id="tlZone"></span></div>
+            </div>
+            <div class="tl-card tl-next">
+              <div class="tl-kicker">Next up</div>
+              <div id="tlNext"><p class="co-sub">Loading…</p></div>
+            </div>
+          </div>
+          <div class="tl-card tl-panel">
+            <h2 class="tl-h2">Running now</h2>
+            <div id="tlRunning" aria-live="polite"><p class="co-sub">Loading…</p></div>
+          </div>
+          <div class="tl-card tl-panel">
+            <div class="tl-panel-head">
+              <div><h2 class="tl-h2">The 24-hour board</h2><p class="tl-lead">One row per kind of work. Faded: can still be running on a busy day. The dark line is now.</p></div>
+              <div class="tl-days" id="tlDays" role="group" aria-label="Day"></div>
+            </div>
+            <div class="tl-board" id="tlBoard"></div>
+          </div>
+          <div class="tl-card tl-panel">
+            <h2 class="tl-h2" id="tlListTitle">Hour by hour</h2>
+            <p class="tl-lead">The row that is running now is highlighted. "Last" is the last time it ran and what it found.</p>
+            <div class="tl-list" id="tlList"></div>
+          </div>
+          <div class="tl-card tl-panel">
+            <h2 class="tl-h2">Safe times to deploy</h2>
+            <p class="tl-lead">A deploy restarts Job Radar and would stop a run that is going.</p>
+            <ul class="tl-safe" id="tlSafe"></ul>
+          </div>
         </section>
 
         <section id="tab-settings" hidden>

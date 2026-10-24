@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, diagnosis, landing, must_apply, discover, gmail, linkedin,
-               region, schedule, scheduler, telegram, weekly)
+               region, schedule, scheduler, telegram, timeline, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all, recheck_hours,
                       ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
 from .config import CONFIG, ROOT
@@ -311,6 +311,12 @@ def coverage():
     return {**region.coverage(), "progress": companies.progress(), "auto": auto_resume.status(),
             "watched_read": company_jobs.last_watched_read(), "midday_read": company_jobs.last_watched_read("midday"),
             "linkedin": linkedin.status(), "plan": schedule.status()}
+
+
+@app.get("/api/timeline")
+def timeline_status():
+    """The Timeline page: the day plan of the next days, what is running now, the last result of each run."""
+    return timeline.status()
 
 
 @app.post("/api/linkedin/run")

@@ -29,6 +29,8 @@ The owner is a beginner: explain in plain language and give exact commands.
 - `app/companies.py`, `careers.py`, `company_jobs.py`, `company_import.py`, `categories.py`,
   `discover.py` - Company Discovery Engine (find companies, careers pages, rank them)
 - `app/region.py` - region coverage (all Darmstadt businesses, Coverage page, Impressum emails)
+- `app/timeline.py` - Timeline page (`/api/timeline`): the day plan from `schedule.py`, live progress,
+  last result of each run, safe-to-deploy windows
 - `static/` - dashboard (`index.html`, `app.js`, `style.css`); `static/old-v6/` is old,
   `job-radar-v2.html` is the design mockup. Neither is used by the app.
 

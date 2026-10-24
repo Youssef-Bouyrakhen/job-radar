@@ -3,7 +3,7 @@
    If GET jobs fails (file opened directly), the page runs on demo data.
    ========================================================= */
 // Must match VERSION in app/__init__.py. If they differ, an old Job Radar is still running.
-const DASHBOARD_VERSION = '11.8';
+const DASHBOARD_VERSION = '11.9';
 
 const ENDPOINTS = {
   jobs:        () => ['GET',    '/api/jobs?view=everything'],
@@ -35,6 +35,7 @@ const ENDPOINTS = {
   coWrong:     id => ['POST',   `/api/companies/${id}/wrong`],      // { wrong: true|false }
   runDiagnosis:() => ['POST',   '/api/diagnosis/run'],
   coverage:    () => ['GET',    '/api/coverage'],           // -> { towns, covered_percent, per_night, progress }
+  timeline:    () => ['GET',    '/api/timeline'],           // -> { days, running, last, hourly, auto, deploy }
   applications:() => ['GET',    '/api/applications'],       // -> { jobs: {id: {timeline, category}}, stats, review, ... }
   appCheck:    () => ['POST',   '/api/applications/check'],
   assignEmail: id => ['POST',   `/api/applications/emails/${id}/assign`],   // { job_id|null, kind }
@@ -128,6 +129,7 @@ const ICON = {
   arrowUp: P('<path d="M12 19V5M6.5 10.5L12 5l5.5 5.5" stroke-width="2"/>'),
   mail: P('<rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="M4 7l8 6 8-6"/>'),
   building: P('<path d="M5 20.5V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v15.5M15 9.5h3a1 1 0 0 1 1 1v10M3.5 20.5h17M8.5 8h3M8.5 11.5h3M8.5 15h3"/>'),
+  clock: P('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
   globe: P('<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.3 2.4 3.5 5.2 3.5 8.5s-1.2 6.1-3.5 8.5c-2.3-2.4-3.5-5.2-3.5-8.5s1.2-6.1 3.5-8.5z"/>'),
   trash: P('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
   radar: P('<circle cx="12" cy="12" r="8.5" opacity=".45"/><circle cx="12" cy="12" r="4.5" opacity=".75"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><path d="M12 12l5.5-5.5"/>')
@@ -324,7 +326,7 @@ function renderNav() {
   }).join('');
   $('#navViews').innerHTML = html;
   // On phones the sidebar is hidden: the app pages go into the same scrolling row
-  const pages = [['links', 'Watched links'], ['companies', 'Companies'], ['coverage', 'Coverage'], ['settings', 'Settings']]
+  const pages = [['links', 'Watched links'], ['companies', 'Companies'], ['coverage', 'Coverage'], ['timeline', 'Timeline'], ['settings', 'Settings']]
     .map(([tab, label]) => `<button type="button" class="nav-item" data-tab="${tab}"><span class="nav-label">${label}</span></button>`).join('');
   $('#mobileViews').innerHTML = html + pages;
   $('#linksCount').textContent = state.loading ? '–' : links.length;
@@ -1364,12 +1366,205 @@ $('#coverageList').addEventListener('click', e => {
   setTab('companies');
 });
 
+/* Timeline: the day plan of the next days (GET /api/timeline, from schedule.py), what is running now,
+   the last result of each run, the next run with a countdown. Always German time, whatever the PC's time zone. */
+let tl = null, tlTimer = null, tlDay = 0;
+const TL_LANES = [  // one row per kind of work; color = a CSS token
+  { key: 'hourly',   label: 'Every hour',      color: '--tl-hourly' },
+  { key: 'auto',     label: 'Auto-resume',     color: '--tl-auto',  sub: 'every 5 min, if work is left' },
+  { key: 'night',    color: '--tl-night' },
+  { key: 'linkedin', color: '--tl-linkedin' },
+  { key: 'midday',   color: '--tl-busy',    off: 'No 13:00 read on this day' },
+  { key: 'evening',  color: '--tl-evening' },
+  { key: 'ai',       label: 'AI limits reset', color: '--tl-ai',    sub: 'new free AI day' },
+  { key: 'deploy',   label: "Don't deploy",    color: '--tl-stop',  sub: 'a restart would stop a run' }
+];
+const FIXED_RUNS = ['night', 'linkedin', 'midday', 'evening'];
+const hmText = m => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.floor(m % 60)).padStart(2, '0')}`;
+const pct = m => (Math.max(0, Math.min(1440, m)) / 1440 * 100).toFixed(3) + '%';
+const capital = s => s.replace(/^./, c => c.toUpperCase());
+const berlinParts = ms => Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'shortOffset' }).formatToParts(new Date(ms)).map(p => [p.type, p.value]));
+// Minutes since German midnight, now or of a time
+const tlMinute = ms => { const p = berlinParts(ms); return +p.hour * 60 + +p.minute + +p.second / 60; };
+const tlToday = () => { const p = berlinParts(nowMs()); return `${p.year}-${p.month}-${p.day}`; };
+const tlWhen = iso => {
+  const d = dayNum(iso) - dayNum(nowMs());
+  return `${d === 0 ? 'today' : d === -1 ? 'yesterday' : d === 1 ? 'tomorrow' : new Date(iso).toLocaleDateString('en-GB', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short' })} ${fmtTime(iso)}`;
+};
+const tlDuration = s => s == null ? '' : s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
+function tlCountdown(ms) {
+  const s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  return h ? `${h} h ${String(m).padStart(2, '0')} min` : m ? `${m} min ${String(sec).padStart(2, '0')} s` : `${sec} s`;
+}
+const dayName = (date, long) => new Date(date + 'T12:00:00Z').toLocaleDateString('en-GB', long ? { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' } : { weekday: 'short', timeZone: 'UTC' });
+
+async function loadTimeline() {
+  clearTimeout(tlTimer);
+  if (state.demo) { tl = { error: 'Demo data: connect the backend to see the timeline' }; return renderTimeline(); }
+  try { tl = await api('timeline'); if (tl.server_time) clockSkew = new Date(tl.server_time) - Date.now(); }
+  catch (e) { tl = { error: 'Could not load the timeline: ' + e.message }; }
+  renderTimeline();
+  // Every 5 s while something runs (the progress moves), else every 30 s
+  if (state.tab === 'timeline') tlTimer = setTimeout(loadTimeline, tl.running?.length ? 5000 : 30000);
+}
+
+function tlLaneHead(L, days) {
+  const ev = days.flatMap(d => d.events).find(e => e.key === L.key);
+  if (L.key === 'hourly') return { label: L.label, sub: `${tl.hourly.links} watched links, Arbeitsagentur, Gmail` };
+  if (L.key === 'night') return ev && { label: `${hmText(ev.minute)} night run`, sub: 'the queue; all areas on Sundays' };
+  if (L.key === 'linkedin') return ev && { label: `${hmText(ev.minute)} LinkedIn`, sub: 'new hiring companies' };
+  if (L.key === 'midday') return ev && { label: capital(ev.label), sub: 'busy companies, Mon–Fri' };
+  if (L.key === 'evening') return ev && { label: capital(ev.label), sub: 'busy daily, quiet every few days' };
+  return { label: L.label, sub: L.sub };
+}
+
+function tlLane(L, day, isToday) {
+  const blk = (a, b, soft, title) => b > a ? `<div class="tl-blk${soft ? ' is-soft' : ''}" style="left:${pct(a)};width:${pct(b - a)};background:var(${L.color})" title="${esc(title || '')}"></div>` : '';
+  const evs = day.events.filter(e => e.key === L.key);
+  let html = '';
+  if (L.key === 'hourly') {
+    const off = tl.hourly.next_check ? Math.floor(tlMinute(new Date(tl.hourly.next_check).getTime())) % tl.hourly.interval : 0;
+    for (let m = off; m < 1440; m += tl.hourly.interval) html += `<div class="tl-tick" style="left:${pct(m)};background:var(${L.color})" title="${hmText(m)}"></div>`;
+  } else if (L.key === 'auto') {
+    // Auto-resume goes on all day, except a while before each fixed run until it is done
+    let from = 0;
+    day.events.map(e => e.auto_pause).sort((a, b) => a[0] - b[0]).forEach(([a, b]) => {
+      html += blk(from, a, false, `${hmText(from)}–${hmText(a)}`); from = Math.max(from, b);
+    });
+    html += blk(from, 1440, false, `${hmText(from)}–24:00`);
+  } else if (L.key === 'ai') {
+    html += day.ai_resets.map(r => `<div class="tl-mark" style="left:${pct(r.minute)};background:var(${L.color})" title="${esc(r.name)} at ${hmText(r.minute)}"></div>`
+      + `<span class="tl-mark-text" style="left:${pct(r.minute)}">${hmText(r.minute)}</span>`).join('');
+  } else if (L.key === 'deploy') {
+    html += day.events.map(e => `<div class="tl-blk tl-stop" style="left:${pct(e.no_deploy[0])};width:${pct(e.no_deploy[1] - e.no_deploy[0])}" title="${hmText(e.no_deploy[0])}–${hmText(e.no_deploy[1])}: ${esc(e.label)}"></div>`).join('');
+  } else {
+    evs.forEach(e => {
+      html += blk(e.minute, e.minute + e.minutes, false, `${hmText(e.minute)}, usually about ${e.minutes} min`);
+      if (e.until) html += blk(e.minute + e.minutes, e.until, true, `can last until ${hmText(e.until)}`);
+    });
+    if (!evs.length) html += `<div class="tl-off">${esc(L.off || 'Not on this day')}</div>`;
+  }
+  const running = isToday && tl.running.some(r => r.key === L.key);
+  if (isToday) html += `<div class="tl-now" style="left:${pct(tlMinute(nowMs()))}"></div>`;
+  return `<div class="tl-lane${running ? ' is-running' : ''}">${html}</div>`;
+}
+
+function tlRows(day, isToday) {
+  const last = tl.last || {}, rows = [];
+  const lastLine = k => last[k] ? `<div class="tl-last">Last: ${tlWhen(last[k].finished_at)}${last[k].seconds ? ` (${tlDuration(last[k].seconds)})` : ''} · ${esc(last[k].text)}</div>` : '';
+  rows.push({ from: 0, to: 1440, all: true, time: `Every ${tl.hourly.interval} min`, color: '--tl-hourly',
+    text: `Your ${tl.hourly.links} watched links, the Arbeitsagentur and Gmail job alerts. Telegram alerts go out right away, day and night.`,
+    extra: lastLine('hourly') + (isToday && new Date(tl.hourly.next_check) > nowMs() ? `<div class="tl-last">Next check ${fmtTime(tl.hourly.next_check)}</div>` : '') });
+  rows.push({ from: 0, to: 1440, all: true, time: 'Every 5 min', color: '--tl-auto',
+    text: `Auto-resume checks new companies when work is left. It pauses ${tl.auto_before} min before the fixed runs and while they run.`,
+    extra: (isToday && tl.auto?.text ? `<div class="tl-last">Now: ${esc(tl.auto.text.replace(/^Auto-resume: /, ''))}</div>` : '') + lastLine('auto') });
+  if (tl.rolling_ai?.length) rows.push({ from: 0, to: 1440, all: true, time: 'Bit by bit', color: '--tl-ai',
+    text: `${esc(tl.rolling_ai.join(', '))}: no fixed reset, each AI request comes back after 24 hours.` });
+  day.ai_resets.forEach(r => rows.push({ from: r.minute, to: r.minute, time: hmText(r.minute), color: '--tl-ai',
+    text: `${esc(r.name)} ${r.name.includes('+') ? 'get their' : 'gets its'} new free AI day.` }));
+  day.events.forEach(e => {
+    const key = e.key === 'night' && /all areas/.test(e.note) && last.night_full ? 'night_full' : e.key;
+    const going = isToday && tl.running.some(r => r.key === e.key);
+    rows.push({ from: e.minute, to: going ? Math.max(e.until || 0, 1440) : e.minute + e.minutes, time: hmText(e.minute), color: TL_LANES.find(l => l.key === e.key).color,
+      dur: `usually ~${e.minutes} min${e.until ? `, at most until ${hmText(e.until)}` : ''}`,
+      text: `<strong>${esc(capital(e.label))}</strong>: ${esc(e.note)}.`, extra: lastLine(key) });
+  });
+  day.extra.forEach(e => rows.push({ from: e.minute, to: e.minute, time: hmText(e.minute), color: '--tl-evening',
+    text: `<strong>${esc(e.label)}</strong>: ${esc(e.note)}.` }));
+  const now = tlMinute(nowMs());
+  return rows.sort((a, b) => (b.all - a.all) || a.from - b.from).map(r => {
+    const on = isToday && !r.all && (r.from === r.to ? Math.abs(now - r.from) < 15 : now >= r.from && now < r.to);
+    return `<div class="tl-row${on ? ' is-active' : ''}">
+      <div class="tl-time">${r.time}${r.dur ? `<small>${esc(r.dur)}</small>` : r.all ? '<small>all day</small>' : ''}</div>
+      <div class="tl-what"><span class="tl-dot" style="background:var(${r.color})"></span><div>${r.text}${r.extra || ''}</div></div>
+    </div>`;
+  }).join('');
+}
+
+function tlSafe(day) {
+  const spans = day.events.map(e => e.no_deploy).sort((a, b) => a[0] - b[0]), safe = [];
+  let from = 0;
+  spans.forEach(([a, b]) => { if (a > from) safe.push([from, a]); from = Math.max(from, b); });
+  if (from < 1440) safe.push([from, 1440]);
+  return safe.map(([a, b]) => `<li><span class="tl-safe-t">${hmText(a)}–${b >= 1440 ? '24:00' : hmText(b)}</span></li>`).join('')
+    + `<li class="tl-safe-not">Not: ${spans.map(([a, b]) => `${hmText(a)}–${hmText(b)}`).join(', ') || 'no fixed runs on this day'}</li>`;
+}
+
+function renderTimeline() {
+  const parts = ['<span>What Job Radar does, German time</span>'];
+  if (tl?.deploy) parts.push(tl.deploy.safe ? '<span class="tl-ok">Safe to deploy now</span>'
+    : `<span class="tl-bad">Don't deploy now: ${esc(tl.deploy.why)}${tl.deploy.until ? ` (until ${fmtTime(tl.deploy.until)})` : ''}</span>`);
+  if (tl?.error) parts.push(`<span class="demo-note">${esc(tl.error)}</span>`);
+  $('#timelineSummary').innerHTML = parts.join('');
+  if (!tl || tl.error) {
+    ['#tlRunning', '#tlNext', '#tlBoard', '#tlList', '#tlSafe', '#tlDays'].forEach(s => $(s).innerHTML = '');
+    return tlTick();
+  }
+  const days = tl.days.slice(0, 7);
+  if (tlDay >= days.length) tlDay = 0;
+  const day = days[tlDay], isToday = tlDay === 0;
+  $('#tlDays').innerHTML = days.map((d, i) => `<button type="button" class="tl-day" data-tl-day="${i}" aria-pressed="${i === tlDay}">${i === 0 ? 'Today' : dayName(d.date)}</button>`).join('');
+  // Running now, with progress
+  $('#tlRunning').innerHTML = (tl.running.length ? tl.running.map(r => {
+    const L = TL_LANES.find(l => l.key === r.key);
+    return `<div class="tl-run">
+      <div class="tl-run-head"><span class="tl-dot" style="background:var(${L?.color || '--accent'})"></span><strong>${esc(r.label)}</strong><span class="tl-run-n">${r.total ? `${r.done} of ${r.total}` : 'running'}</span></div>
+      ${r.total ? `<div class="cov-meter"><span style="width:${Math.min(100, r.done / r.total * 100).toFixed(1)}%"></span></div>` : ''}
+      <div class="co-sub">${esc(r.step || '')}${r.started_at ? `${r.step ? ' · ' : ''}started ${fmtTime(r.started_at)}` : ''}</div>
+    </div>`;
+  }).join('') : '<p class="tl-quiet">No run is going right now.</p>')
+    + (tl.auto?.text && !tl.running.some(r => r.key === 'auto') ? `<p class="co-sub">${esc(tl.auto.text)}</p>` : '');
+  // The board: a row only for the fixed runs that are on (config)
+  const lanes = TL_LANES.map(L => ({ L, head: tlLaneHead(L, days) })).filter(x => x.head);
+  const axis = [0, 3, 6, 9, 12, 15, 18, 21, 24].map(h => `<span class="${h % 6 ? 'tl-ax-minor' : ''}" style="left:${pct(h * 60)}">${String(h).padStart(2, '0')}:00</span>`).join('');
+  $('#tlBoard').innerHTML = `<div class="tl-grid">
+    <div class="tl-lab tl-lab--axis"></div><div class="tl-axis">${axis}${isToday ? '<span class="tl-now-tag" id="tlNowTag"></span>' : ''}</div>
+    ${lanes.map(({ L, head }) => `<div class="tl-lab">${esc(head.label)}<small>${esc(head.sub || '')}</small></div>${tlLane(L, day, isToday)}`).join('')}
+  </div>`;
+  $('#tlListTitle').textContent = isToday ? 'Hour by hour: today' : `Hour by hour: ${dayName(day.date, true)}`;
+  $('#tlList').innerHTML = tlRows(day, isToday);
+  $('#tlSafe').innerHTML = tlSafe(day);
+  tlTick();
+}
+
+// Every second: the clock, the countdowns, the now line. A new German day: load the plan again.
+function tlTick() {
+  if (state.tab !== 'timeline') return;
+  const p = berlinParts(nowMs()), off = (p.timeZoneName || '').replace('GMT', '');
+  $('#tlClock').textContent = `${p.hour}:${p.minute}:${p.second}`;
+  $('#tlDate').textContent = new Date(nowMs()).toLocaleDateString('en-GB', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  $('#tlZone').textContent = off === '+2' ? 'CEST · summer time' : off === '+1' ? 'CET · winter time' : p.timeZoneName || '';
+  if (!tl || tl.error) return;
+  if (tl.days[0].date !== tlToday()) { tl.days = []; tl.error = 'Loading the new day…'; loadTimeline(); return; }
+  const m = tlMinute(nowMs());
+  $$('.tl-now').forEach(el => el.style.left = pct(m));
+  const tag = $('#tlNowTag'); if (tag) { tag.style.left = pct(m); tag.textContent = `${p.hour}:${p.minute}`; }
+  // Next up: the fixed runs, AI resets, the weekly summary and the next hourly check, soonest first
+  const now = nowMs(), next = tl.days.flatMap(d => [
+    ...d.events.map(e => ({ at: e.at, label: capital(e.label), note: e.note, fixed: true, color: TL_LANES.find(l => l.key === e.key).color })),
+    ...d.ai_resets.map(r => ({ at: r.at, label: `AI reset: ${r.name}`, color: '--tl-ai' })),
+    ...d.extra.map(e => ({ at: e.at, label: e.label, color: '--tl-evening' }))
+  ]);
+  if (tl.hourly.next_check) next.push({ at: tl.hourly.next_check, label: 'Check of the watched links', color: '--tl-hourly' });
+  const coming = next.filter(e => new Date(e.at) > now).sort((a, b) => new Date(a.at) - new Date(b.at));
+  const first = coming.find(e => e.fixed), rest = coming.filter(e => e !== first).slice(0, 4);
+  $('#tlNext').innerHTML = (first ? `<div class="tl-next-big"><span class="tl-dot" style="background:var(${first.color})"></span><div>
+      <div class="tl-next-title">${esc(first.label)} <span class="co-sub">${tlWhen(first.at)}</span></div>
+      <div class="tl-next-count">in ${tlCountdown(new Date(first.at) - now)}</div>
+      <div class="co-sub">${esc(capital(first.note || ''))}</div></div></div>` : '<p class="co-sub">No fixed run planned.</p>')
+    + `<ul class="tl-next-list">${rest.map(e => `<li><span class="tl-dot" style="background:var(${e.color})"></span><span class="tl-next-l">${esc(e.label)}</span><span class="tl-next-t">${tlWhen(e.at)} · in ${tlCountdown(new Date(e.at) - now)}</span></li>`).join('')}</ul>`;
+}
+setInterval(tlTick, 1000);
+$('#tlDays').addEventListener('click', e => { const b = e.target.closest('[data-tl-day]'); if (b) { tlDay = +b.dataset.tlDay; renderTimeline(); } });
+
 function setTab(tab) {
   state.tab = tab;
-  ['jobs', 'links', 'companies', 'coverage', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== tab);
+  ['jobs', 'links', 'companies', 'coverage', 'timeline', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== tab);
   if (tab === 'links' && !state.loading) loadSuggestions();
   if (tab === 'companies' && !state.loading) loadCompanies();
   if (tab === 'coverage' && !state.loading) loadCoverage();
+  if (tab === 'timeline' && !state.loading) { tlDay = 0; loadTimeline(); } else clearTimeout(tlTimer);
   if (tab === 'settings' && !state.loading && !state.demo) {  // the active AI provider can change
     api('settings').then(s => { settings = settingsFromApi(s); renderSettings(); }).catch(() => {});
   }

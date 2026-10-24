@@ -169,12 +169,14 @@ def search(sleep=time.sleep) -> dict:
         return {"error": "a LinkedIn search is already going"}
     try:
         start, words = keywords_today()
+        now_searching.update(done=0, total=len(words), word="")
         result = {"at": db.now(), "keywords": [], "pages": 0, "jobs": 0, "outside": 0, "recruiters": 0,
                   "new": 0, "known": 0, "blocked": False, "error": ""}
         with httpx.Client(headers=HTML_HEADERS, timeout=30, follow_redirects=False) as client:
             for n, word in enumerate(words):
                 if n:
                     sleep(random.uniform(*CONFIG["linkedin"]["pause_seconds"]))
+                now_searching.update(done=n, word=word)
                 try:
                     jobs, pages = _search(word, client, sleep)
                 except Blocked as e:
@@ -207,11 +209,15 @@ def search(sleep=time.sleep) -> dict:
                          word, len(jobs), pages, len(records), added["new"], added["known"])
         if result["new"]:
             region.assign_towns()  # the new ones in a town count for its coverage
+        result["finished_at"] = db.now()
         db.set_setting("linkedin_last", json.dumps(result))
         log.info("LinkedIn: %s", status()["text"])
         return result
     finally:
         _lock.release()
+
+
+now_searching = {"done": 0, "total": 0, "word": ""}  # the search going now (Timeline page)
 
 
 def running() -> bool:

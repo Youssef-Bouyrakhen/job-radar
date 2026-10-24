@@ -804,6 +804,7 @@ def plan_read(kind: str, now: datetime | None = None) -> tuple[list[dict], Count
 
 READS = {"evening": ("watched_read_last", "19:00 read"), "midday": ("midday_read_last", "13:00 read")}
 reading_kind: dict[str, str | None] = {"now": None}  # "midday" / "evening" while one of the reads is going
+reading_progress: dict = {}  # the read going now: {"step", "done", "total", ...} (Timeline page)
 
 
 def read_watched(kind: str = "evening") -> dict:
@@ -825,11 +826,14 @@ def read_watched(kind: str = "evening") -> dict:
     ai_pages = ai_pages_left()
     reading_watched.set()  # auto-resume doesn't start a run meanwhile
     reading_kind["now"] = kind
+    reading_progress.clear()
+    reading_progress.update(progress=progress, started_at=db.now())
     try:
         new_good = read_jobs(todo, progress, ai_pages=ai_pages)
     finally:
         reading_watched.clear()
         reading_kind["now"] = None
+        reading_progress.clear()
     seconds = time.monotonic() - started
     log.info("Watched careers pages (%s): read %d of %d in %.0f s (%d busy, %d between, %d quiet, %d not today), "
              "%d new jobs (%d match your filter), the AI read %d of max %d pages%s",

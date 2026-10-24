@@ -547,7 +547,7 @@ def start(kind: str = "run", text: str = "", label: str = "", night_limit: bool 
         if _progress["running"]:
             return False
         _progress.update(running=True, kind=kind, step="Starting…", **COUNTERS, warnings=[], notes=[], error="",
-                         finished_at=None)
+                         started_at=db.now(), finished_at=None)
     threading.Thread(target=_run, args=(kind, text, label, night_limit, stop_at), daemon=True, name="companies").start()
     return True
 
@@ -647,7 +647,26 @@ def _run(kind: str = "run", text: str = "", label: str = "", night_limit: bool =
         _progress["error"] = f"Something went wrong: {e}"
     finally:
         _progress.update(running=False, step="", finished_at=db.now())
+        save_last_run(kind, time.monotonic() - started)
         log.info("Companies: run finished in %.0f s", time.monotonic() - started)
+
+
+def save_last_run(kind: str, seconds: float) -> None:
+    """The result of each kind of run, for the Timeline page (setting "companies_last_runs"). A night run
+    that collected all areas again is kept as "run_full" too: it takes longer than the other nights."""
+    try:
+        runs = json.loads(db.get_setting("companies_last_runs") or "{}")
+        result = {k: _progress.get(k) for k in (*COUNTERS, "started_at", "finished_at", "error")}
+        runs[kind] = {**result, "seconds": round(seconds), "warnings": len(_progress["warnings"])}
+        if kind == "run" and _progress["collected"]:
+            runs["run_full"] = runs[kind]
+        db.set_setting("companies_last_runs", json.dumps(runs))
+    except Exception:
+        log.exception("Companies: could not save the result of the run")
+
+
+def last_runs() -> dict:
+    return json.loads(db.get_setting("companies_last_runs") or "{}")
 
 
 def _step(label: str, run) -> None:
