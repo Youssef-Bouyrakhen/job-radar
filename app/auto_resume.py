@@ -3,6 +3,7 @@
 Every 5 minutes (tick): if no Companies run is going and there is still work - companies never checked,
 or companies with a careers page whose job list was never read - an "auto" run starts. It works through the
 queue (the same steps as the night run, without collecting the sources again: that's the 03:00 run's job).
+Before that, a "landing" run when job lists behind landing pages are due (landing.py; needs no AI).
 After a restart or deploy the scheduler starts again, the next tick (within 5 minutes) finds the work that
 is left and goes on: nothing is lost, a company is only saved when its check is finished.
 
@@ -22,7 +23,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 
-from . import ai, clock, companies, company_jobs, db, linkedin, schedule, websearch
+from . import ai, clock, companies, company_jobs, db, landing, linkedin, schedule, websearch
 from .config import CONFIG
 
 log = logging.getLogger("jobradar")
@@ -153,10 +154,15 @@ def tick() -> str:
     decision, until, why = _decide(now, state, left)
     if decision == "done" and state:
         _save({})  # all done: nothing waits for anything any more
-    if decision != "start":
-        return decision
     fixed = _fixed_times(now)
     stop_at = (fixed[0][0] - STOP_BEFORE).timestamp() if fixed else None
+    # Job lists behind landing pages (landing.py) first: they need no AI, so they don't wait for one
+    if decision not in ("running", "busy", "window") and not (fixed and fixed[0][0] - now <= BEFORE_FIXED) \
+            and (n := landing.work()) and companies.start("landing", stop_at=stop_at):
+        log.info("Auto-resume: landing-page run started (%d companies)", n)
+        return "landing"
+    if decision != "start":
+        return decision
     if companies.start("auto", stop_at=stop_at):
         _save({**state, "work_before": total, "started_at": now.isoformat(timespec="seconds"), "boot": BOOT})
         log.info("Auto-resume: run started (%d companies to check, %d job lists to read, %d waiting for the AI)",

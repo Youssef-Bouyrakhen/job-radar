@@ -221,6 +221,11 @@ MIGRATIONS["companies"] = {
     "career_how": "TEXT",            # e.g. "Careers page (web search), no applicant system found", or why none was found
     "linkedin_url": "TEXT",          # its LinkedIn company page (linkedin.py)
     "jobs_seen_at": "TEXT",          # the last read that found jobs on its list (for "page probably changed")
+    # Landing pages: the job list one click deeper, see landing.py
+    "landing_url": "TEXT",           # the old careers page (a landing page); career_url is now the job list behind it
+    "list_checked_at": "TEXT",       # when that job list was last found / checked (checked again once a month)
+    "list_browser": "INTEGER",       # 1 = the job list only shows its jobs in a browser (JavaScript)
+    "landing_tried_at": "TEXT",      # the last search for a job list behind its landing page
 }
 
 AFTER_ADDING = {

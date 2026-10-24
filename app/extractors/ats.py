@@ -38,6 +38,8 @@ def detect(text: str) -> Board | None:
         return Board("Greenhouse", m[1])
     if m := re.search(r"(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io/(?!embed\b)([\w-]+)", text, re.I):
         return Board("Greenhouse", m[1])
+    if m := re.search(r"boards-api\.greenhouse\.io/v1/boards/([\w-]+)", text, re.I):  # the feed address itself
+        return Board("Greenhouse", m[1])
     if m := re.search(r"jobs\.(eu\.)?lever\.co/([\w.-]+)", text, re.I):
         return Board("Lever", m[2], {"eu": bool(m[1])})
     if m := re.search(r"(?:jobs|careers)\.smartrecruiters\.com/(?!oneclick|sr-jobs)([\w-]+)", text, re.I):

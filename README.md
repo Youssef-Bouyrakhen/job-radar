@@ -360,6 +360,15 @@ lines of text; **This is wrong** puts the company on a re-check list (the "Marke
 read updates the diagnosis; "Diagnose again" opens all their careers pages again (a few minutes). The
 diagnosis only explains the 0, it doesn't change how jobs are read.
 
+**Landing pages** (since v11.8): for a *landing page* company (and one whose page "lists no job ads") Job Radar
+looks for the job list itself: the best links first ("Offene Stellen", "Stellenangebote", "Alle Jobs", "Careers
+in Germany", /jobs, the company's job system, an embedded job box), at most 2 clicks deep, only on the company's
+own site, its job system or a site its page sends you to. A JavaScript button is clicked once in the hidden
+browser. The page with job titles becomes the careers page, so the daily read goes straight there (a list that
+only shows its jobs in a browser is read in the browser). Once a month every saved job list is checked; a broken
+one is searched again from the landing page. These runs start by themselves (auto-resume, never during the
+fixed runs). See the result: `curl -s http://127.0.0.1:8000/api/landing` ("Landing page: 514 → …").
+
 **Import list** (Companies page): paste company names (one per line), or the link of a page that
 lists companies, e.g. a career fair's exhibitor list, tech hub members, h_da dual-study partners
 (web pages and PDFs work). Give the list a name like `konaktiva 2026`: it shows as the source of

@@ -185,13 +185,14 @@ def browser_available() -> bool:
     return find_spec("playwright") is not None
 
 
-def fetch_with_browser(url: str) -> Page:
+def fetch_with_browser(url: str, click: str | None = None) -> Page:
     """Open the page in a hidden Chrome. Runs in a separate process so a browser
-    crash can never take down the app."""
+    crash can never take down the app. click: click the button with this text once
+    and return the page it leads to."""
     _polite_wait(url, CONFIG["fetch"]["delay_per_site_seconds"])
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "app.render", url], cwd=ROOT, capture_output=True,
+            [sys.executable, "-m", "app.render", url] + (["--click", click] if click else []), cwd=ROOT, capture_output=True,
             encoding="utf-8", errors="replace", timeout=CONFIG["fetch"]["browser_timeout_seconds"],
         )
     except subprocess.TimeoutExpired:

@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from . import ai, arbeitsagentur, careers, categories, company_jobs, db, region, websearch
+from . import ai, arbeitsagentur, careers, categories, company_jobs, db, landing, region, websearch
 from .clock import GERMANY
 from .config import CONFIG
 from .discover import NOT_A_COMPANY, _host_key, _is_known, _same, _watched_keys, company_key
@@ -539,7 +539,8 @@ def start(kind: str = "run", text: str = "", label: str = "", night_limit: bool 
     kind "lookalikes": companies similar to the ones whose jobs you saved or applied to;
     kind "recheck": look again for the careers pages of the "No careers page" companies;
     kind "read": read the jobs of every company never read (company_jobs.read_unread);
-    kind "auto": the queue only, no collecting (started by auto_resume.py).
+    kind "auto": the queue only, no collecting (started by auto_resume.py);
+    kind "landing": the job lists behind landing pages (landing.py, started by auto_resume.py).
     night_limit False: no stop before the morning, even if started at night.
     stop_at: stop starting new companies at this time (time.time()) instead."""
     with _lock:
@@ -607,6 +608,9 @@ def _run(kind: str = "run", text: str = "", label: str = "", night_limit: bool =
             categories.run(_progress, None)
             company_jobs.run(_progress, None, ai_pages=company_jobs.ai_pages_left())  # also the ones the 19:00 read skipped
             _step("the final region statuses", lambda: region.settle(_progress))
+            return
+        if kind == "landing":  # auto-resume: job lists one click behind landing pages, the monthly check of saved ones
+            landing.run(_progress, stop=lambda: too_late(_progress))
             return
         if kind == "read":  # once, by hand: the jobs of every company never read, then the statuses
             company_jobs.read_unread(_progress)

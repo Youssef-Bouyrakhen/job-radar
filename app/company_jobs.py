@@ -27,13 +27,13 @@ from datetime import date, datetime, timedelta, timezone
 
 from bs4 import BeautifulSoup
 
-from . import ai, db, diagnosis, telegram, websearch
+from . import ai, careers, db, diagnosis, telegram, websearch
 from .clock import GERMANY, today
 from .config import CONFIG
 from .dedup import dedup_key
 from .discover import NEARBY, _belongs_to, _is_known, _same, _watched_keys, _with_search, board_url, company_key
 from .extractors import Job, ats, clean, generic
-from .fetcher import fetch_polite
+from .fetcher import browser_available, fetch_polite, fetch_with_browser
 from .filters import get_filter, hours_of
 from .sources import check_url
 
@@ -84,11 +84,14 @@ def relevant_part(html: str, page_url: str) -> tuple[str, list[str]]:
         return (html[:MAX_PART] if generic.JOB_WORD.search(html) else ""), []
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "noscript", "svg", "header", "footer", "nav", "form"]):
+        if tag.name == "form" and generic.GENDER.search(tag.get_text(" ")):
+            continue  # a job list inside its filter form (Osborne Clarke), not a search box
         tag.decompose()
     links: list[str] = []
     labels: list[str] = []
     for a in soup.find_all("a", href=True):
-        label, url = clean(a.get_text(" "), 160), generic._resolve(a, page_url)
+        # the link text, or the heading of its job card (ITSG: an empty link laid over the card)
+        label, url = clean(generic._link_title(a), 160), generic._resolve(a, page_url)
         if (url and url not in links and len(label) >= 6 and label.lower() not in generic.NAV_TEXT
                 and (generic.GENDER.search(label) or generic.JOB_WORD.search(label))):
             links.append(url)
@@ -163,12 +166,29 @@ def read_without_ai(c: dict) -> dict:
         if jobs:
             return {"jobs": jobs[:MAX_JOBS], "method": "Structured data (JobPosting)", "seen": seen}
         part, links = relevant_part(page.html, page.url)
+        # A job list landing.py found in the browser: its jobs only show there (the normal download has no job links)
+        if c.get("list_browser") and not links and (found := _read_with_browser(page.url)):
+            return {**found, "seen": seen}
         if part:
             return {"ai_part": part, "ai_links": links, "page_url": page.url, "seen": seen}
         note = note or "The careers page shows no job titles (maybe they load with JavaScript)"
         if found := _read_with_jina(c["name"], page.url):
             return {**found, "seen": seen}
     return {"jobs": [], "method": None, "note": note or "No careers page to read", "seen": seen}
+
+
+def _read_with_browser(url: str) -> dict | None:
+    """A job list that only shows its jobs in a browser (landing.py found it that way): read in the hidden
+    browser, one at a time (it needs a lot of memory)."""
+    if not browser_available():
+        return None
+    with careers._browser:
+        careers.usage["browser"] += 1
+        page = fetch_with_browser(url)
+    if not page.ok:
+        return None
+    part, links = relevant_part(page.html, page.url)
+    return {"ai_part": part, "ai_links": links, "page_url": url} if part else None
 
 
 MD_LINK = re.compile(r"\[([^\]]{3,200})\]\((https?://[^)\s]+)[^)]*\)")

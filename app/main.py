@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, diagnosis, must_apply, discover, gmail, linkedin,
+from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, diagnosis, landing, must_apply, discover, gmail, linkedin,
                region, schedule, scheduler, telegram, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all, recheck_hours,
                       ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
@@ -294,6 +294,15 @@ def mark_wrong(company_id: int, body: Wrong):
     if not diagnosis.mark_wrong(company_id, body.wrong):
         raise HTTPException(404, "This company has no diagnosis.")
     return {"ok": True}
+
+
+@app.get("/api/landing")
+def landing_status():
+    """Landing pages (job list one click deeper): "Landing page: 514 -> ?", saved job lists, the last run.
+    The runs start by themselves (auto-resume), see landing.py."""
+    p = companies.progress()
+    return {**landing.status(), "running": p["running"] and p["kind"] == "landing",
+            "progress": {k: p.get(k) for k in ("step", "done", "total")} if p["kind"] == "landing" else None}
 
 
 @app.get("/api/coverage")
