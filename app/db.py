@@ -101,6 +101,19 @@ CREATE TABLE IF NOT EXISTS ai_usage (
     PRIMARY KEY (day, provider)
 );
 
+-- Every AI request that reached a provider: what it was for and what it cost (the AI bar's "AI used for",
+-- the budget per purpose, Groq's tokens of the last 24 hours). Kept 8 days.
+CREATE TABLE IF NOT EXISTS ai_calls (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    at       TEXT NOT NULL,      -- UTC
+    provider TEXT NOT NULL,
+    purpose  TEXT NOT NULL,      -- score / careers / categories / other
+    tokens   INTEGER NOT NULL DEFAULT 0,   -- as the answer reports them (question + answer)
+    neurons  REAL NOT NULL DEFAULT 0,      -- Cloudflare only
+    outcome  TEXT NOT NULL DEFAULT 'ok'    -- ok / broken (JSON broken or cut off) / failed
+);
+CREATE INDEX IF NOT EXISTS ai_calls_at ON ai_calls (provider, at);
+
 CREATE TABLE IF NOT EXISTS places (
     name TEXT PRIMARY KEY,       -- a job's place as written, e.g. "Frankfurt am Main"
     lat  REAL,                   -- empty: OpenStreetMap doesn't know it
@@ -714,6 +727,22 @@ def count_ai_neurons(provider: str, day: str, neurons: float) -> None:
         conn.execute("INSERT INTO ai_usage (day, provider, neurons) VALUES (?, ?, ?) "
                      "ON CONFLICT(day, provider) DO UPDATE SET neurons = neurons + excluded.neurons",
                      (day, provider, neurons))
+
+
+def add_ai_call(provider: str, purpose: str, tokens: int, neurons: float, outcome: str) -> None:
+    with connect() as conn:
+        conn.execute("INSERT INTO ai_calls (at, provider, purpose, tokens, neurons, outcome) VALUES (?, ?, ?, ?, ?, ?)",
+                     (now(), provider, purpose, int(tokens), float(neurons), outcome))
+        conn.execute("DELETE FROM ai_calls WHERE at < ?",
+                     ((datetime.now(timezone.utc) - timedelta(days=8)).isoformat(timespec="seconds"),))
+
+
+def ai_calls_since(since: str, provider: str | None = None) -> list[dict]:
+    """AI requests since this UTC time (all providers, or one), oldest first."""
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM ai_calls WHERE at >= ?" + (" AND provider = ?" if provider else "")
+                            + " ORDER BY at", (since, provider) if provider else (since,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def link_kinds() -> dict[int, dict]:

@@ -360,7 +360,7 @@ def _search() -> None:
         profile=ai.settings()["profile"].strip(), n=COMPANIES_TO_ASK,
         from_data=FROM_DATA.format(companies="\n".join(f"- {n} ({c}x)" for n, c in from_data)) if from_data else "",
         excluded=", ".join(excluded[:200]) or "(none)")
-    answer = ai.ask_json(prompt, SCHEMA, temperature=0.5, priority="jobs")
+    answer = ai.ask_json(prompt, SCHEMA, temperature=0.5, purpose="other")
 
     data_counts = {_group_key(n): c for n, c in from_data}
     companies, seen = [], set()

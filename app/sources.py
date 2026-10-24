@@ -106,19 +106,19 @@ _ai_seen: dict[str, tuple[str, list[Job]]] = {}
 
 def _from_ai(page: Page, url: str) -> CheckResult | None:
     from . import ai  # ai -> details -> arbeitsagentur imports this module: load them late
-    from .company_jobs import ai_extract, relevant_part
+    from .company_jobs import ai_read, page_parts
     if not ai.enabled():
         return None
-    part, links = relevant_part(page.html, page.url)  # the page text without scripts and menus
-    if not generic.HIRING.search(part) and not generic.GENDER.search(part):
+    parts = page_parts(page.html, page.url)  # the job part of the page, without scripts, menus, cookie text
+    if not generic.HIRING.search(parts["full"]) and not generic.GENDER.search(parts["full"]):
         return None
     name = generic.site_name(BeautifulSoup(page.html, "html.parser"), page.url)
-    fingerprint = hashlib.sha1(part.encode()).hexdigest()
+    fingerprint = hashlib.sha1(parts["short"].encode()).hexdigest()
     if url in _ai_seen and _ai_seen[url][0] == fingerprint:
         jobs = _ai_seen[url][1]
     else:
         try:
-            jobs = ai_extract(name, part, links, page.url)
+            jobs = ai_read(name, parts, page.url)
         except (ai.RateLimited, ai.Overloaded):
             return None  # no AI requests left right now: the next check tries again
         except Exception as e:

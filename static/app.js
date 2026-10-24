@@ -3,7 +3,7 @@
    If GET jobs fails (file opened directly), the page runs on demo data.
    ========================================================= */
 // Must match VERSION in app/__init__.py. If they differ, an old Job Radar is still running.
-const DASHBOARD_VERSION = '11.9';
+const DASHBOARD_VERSION = '12.0';
 
 const ENDPOINTS = {
   jobs:        () => ['GET',    '/api/jobs?view=everything'],
@@ -549,6 +549,7 @@ function renderSettings() {
 // AI usage bar at the top of every page: one box per provider (used / free limit today). Red after the provider
 // answered "limit reached" (or Job Radar's count is used up) until its own real reset: "resets at 09:00"
 const AI_STATUS = { active: 'Active', next: 'Next', paused: 'Paused', empty: 'Used up', limit: 'Limit reached' };
+const AI_USES = { score: 'scoring', careers: 'careers pages', categories: 'categories', other: 'other' };
 const clockOf = iso => fmtTime(iso) || '–';
 function renderAiBar() {
   const bar = $('#aiBar'), ai = state.ai;
@@ -558,25 +559,36 @@ function renderAiBar() {
     const red = p.status === 'limit' || p.status === 'empty';
     const pct = red ? 100 : Math.min(100, Math.round(100 * p.used / Math.max(1, p.budget)));
     const tag = p.status === 'paused' && p.paused_minutes ? `Paused ${p.paused_minutes} min` : AI_STATUS[p.status];
-    // Cloudflare counts "neurons" (its unit of AI work), the others requests
-    const neurons = p.unit === 'neurons', n = x => x.toLocaleString('en-US');
+    // Cloudflare counts "neurons" (its unit of AI work), Groq tokens (and requests), the others requests
+    const neurons = p.unit === 'neurons', tokens = p.unit === 'tokens', n = x => x.toLocaleString('en-US');
     const k = x => x < 1000 ? `${x}` : `${+(x / 1000).toFixed(1)}k`;  // 4.2k: fits the small box
     const said = p.source === 'provider' ? ` (${p.name}'s own numbers)` : ' (counted by Job Radar)';
-    const title = neurons ? `${n(p.used)} of ${n(p.budget)} free neurons used today (Cloudflare's daily limit: 10,000)`
+    const title = neurons ? `${n(p.used)} of ${n(p.budget)} free neurons used today${said} (Cloudflare's daily limit: 10,000)`
+      : tokens ? `${n(p.used)} of ${n(p.budget)} free tokens used in the last 24 hours${said}; ${p.requests_used} of ${p.requests_budget} requests`
       : `${p.used} of ${p.source === 'provider' ? '' : 'about '}${p.budget} free requests used today${said}`;
+    const count = neurons ? `${k(p.used)} / ${k(p.budget)} neurons` : tokens ? `${k(p.used)} / ${k(p.budget)} tokens`
+      : `${p.used} / ${p.source === 'provider' ? '' : '~'}${p.budget}`;
     const when = red ? `resets at ${clockOf(p.back_at)}` : p.status === 'paused' ? `back at ${clockOf(p.back_at)}`
       : p.resets_at ? `new day at ${clockOf(p.resets_at)}` : 'comes back bit by bit';
     return `<div class="ai-box ai-box--${red ? 'empty' : p.status}" title="${esc(p.name)} · ${esc(p.model)}: ${esc(title)}">
       <div class="ai-box-head"><span class="ai-name">${esc(p.name)}</span><span class="ai-tag">${esc(tag)}</span></div>
-      <div class="ai-count">${neurons ? `${k(p.used)} / ${k(p.budget)} neurons` : `${p.used} / ${p.source === 'provider' ? '' : '~'}${p.budget}`}</div>
+      <div class="ai-count">${count}${tokens ? `<span class="ai-sub">${p.requests_used} / ${p.requests_budget} requests</span>` : ''}</div>
       <div class="ai-meter"><span style="width:${pct}%"></span></div>
       <div class="ai-when">${esc(when)}</div>
     </div>`;
   }).join('');
   const waiting = state.aiPending || 0;
+  // What today's AI requests were for (since midnight German time), each with its providers in the tooltip
+  const uses = Object.entries(AI_USES).map(([key, label]) => {
+    const u = (ai.used_for || {})[key] || { requests: 0, providers: {} };
+    const by = Object.entries(u.providers).map(([name, x]) => `${name} ${x}`).join(', ');
+    return `<span title="${esc(`${label}: ${u.requests} request${u.requests === 1 ? '' : 's'} today${by ? ` (${by})` : ''}`)}">${esc(label)} <b>${u.requests}</b></span>`;
+  }).join(' · ');
+  const sh = ai.shares || {};
   bar.classList.toggle('is-empty', !!ai.all_empty);
   bar.innerHTML = `${boxes}<div class="ai-info">
       <span class="ai-waiting${waiting ? ' has-waiting' : ''}">${waiting} job${waiting === 1 ? '' : 's'} waiting for a score</span>
+      <span class="ai-uses" title="${esc(`Each AI's day: scoring keeps ${sh.score_reserved}% for itself, careers pages may use at most ${sh.careers}%, categories and the rest ${sh.other}%`)}">AI used for today: ${uses}</span>
       ${ai.all_empty ? `<span class="ai-reset">All AI limits reached · first back at ${esc(clockOf(ai.next_back_at))}</span>` : ''}
     </div>`;
 }

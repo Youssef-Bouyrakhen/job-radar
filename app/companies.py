@@ -358,11 +358,13 @@ def ask_ai_for_websites(companies: list[dict]) -> dict[int, str]:
         lines = "\n".join(f"{n}. {c['name']}" + (f" ({c['city']})" if c["city"] else "") for n, c in enumerate(batch, 1))
         company_jobs._pace()  # the free AI tiers also count requests per minute
         try:
-            answer = ai.ask_json(WEBSITE_PROMPT.format(companies=lines), WEBSITE_SCHEMA, temperature=0.1, priority="jobs")
+            answer = ai.ask_json(WEBSITE_PROMPT.format(companies=lines), WEBSITE_SCHEMA, temperature=0.1, purpose="other")
         except (ai.RateLimited, ai.Overloaded) as e:
             log.warning("Companies: AI website lookup stopped (%s)", type(e).__name__)
             _progress["warnings"].append(ai.stop_note(e, "some companies were checked without a website guess"))
             break
+        except ai.BrokenAnswer:
+            continue  # these companies are checked without a website guess
         for c in batch:
             c["ai_asked"] = True  # the AI answered for it (maybe "don't know"): no need to wait for the next night
         for a in answer if isinstance(answer, list) else []:
@@ -521,7 +523,7 @@ def recheck_career_pages() -> int:
 
 NIGHT_MARGIN_MINUTES = 15  # stop starting new companies this long before night_end_hour (the running ones finish)
 COUNTERS = {"done": 0, "total": 0, "collected": 0, "new": 0, "websites": 0, "careers": 0, "feeds": 0,
-            "jobs_read": 0, "new_jobs": 0, "auto_added": 0, "initiativ": 0}
+            "jobs_read": 0, "new_jobs": 0, "auto_added": 0, "initiativ": 0, "ai_used": 0, "ai_skipped": 0}
 # kind: "run" (the full discovery run), "import" (a list you gave it) or "lookalikes"
 _progress = {"running": False, "kind": "run", "step": "", **COUNTERS, "warnings": [], "notes": [], "error": "",
              "finished_at": None}

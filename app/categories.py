@@ -191,10 +191,12 @@ def ask_ai(progress: dict, first: set[int] | None = None) -> int:
             for n, c in enumerate(batch, 1))
         _pace()
         try:
-            answer = ai.ask_json(PROMPT.format(companies=lines), SCHEMA, temperature=0.1, priority="low")
+            answer = ai.ask_json(PROMPT.format(companies=lines), SCHEMA, temperature=0.1, purpose="categories")
         except (ai.RateLimited, ai.Overloaded) as e:
             log.info("Categories: AI stopped (%s)", type(e).__name__)
             break
+        except ai.BrokenAnswer:
+            continue  # these companies are asked again next time
         _spend()
         for a in answer if isinstance(answer, list) else []:
             n = a.get("id")

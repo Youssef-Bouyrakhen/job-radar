@@ -33,17 +33,23 @@ DEFAULTS = {
         "fetch_full_description": True,
         "profile": "Computer science student looking for a Werkstudent IT job, max 20 h/week.",
     },
-    "groq": {"model": "openai/gpt-oss-120b", "max_prompt_chars": 18000},
+    "groq": {"model": "openai/gpt-oss-120b", "max_prompt_chars": 18000,
+             "daily_tokens": 200000},  # its free tokens per day (TPD); Groq's own number once it says it
     "openrouter": {"model": "poolside/laguna-s-2.1:free"},
     "cloudflare": {"model": "@cf/qwen/qwen3-30b-a3b-fp8", "prompt_suffix": " /no_think", "max_tokens": 3000,
                    "max_prompt_chars": 60000, "daily_neurons": 9000,
-                   "neurons_per_m_input": 4625, "neurons_per_m_output": 30475},
+                   "neurons_per_m_input": 4625, "neurons_per_m_output": 30475,
+                   # Job Radar's count x this = Cloudflare's (2026-10-24: Cloudflare stopped at 10,000 when Job Radar
+                   # had counted 6,665); learned again each time Cloudflare says today's neurons are used up
+                   "neurons_factor": 1.5},
     "github": {"enabled": False, "model": "openai/gpt-4.1-mini", "max_prompt_chars": 18000},
     "mistral": {"enabled": False, "model": "mistral-small-latest"},
     "cerebras": {"enabled": False, "model": "gpt-oss-120b"},
     "ai_budget": {
         "daily_requests": {"Gemini": 20, "Groq": 1000, "OpenRouter": 50, "GitHub": 150, "Mistral": 300, "Cerebras": 300},
-        "keep_percent": {"mail": 10, "jobs": 30, "low": 60},
+        # % of each provider's day: scoring keeps score_reserved for itself, careers pages at most careers,
+        # categories and everything else together at most other
+        "shares": {"score_reserved": 30, "careers": 60, "other": 10},
     },
     "companies": {
         "radius_km": 25,

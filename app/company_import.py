@@ -88,11 +88,13 @@ def ai_names(text: str, what: str) -> list[str]:
     for chunk in chunks[:limit]:
         _pace()
         try:
-            answer = ai.ask_json(NAMES_PROMPT.format(what=what, text=chunk), NAMES_SCHEMA, temperature=0.1, priority="jobs")
+            answer = ai.ask_json(NAMES_PROMPT.format(what=what, text=chunk), NAMES_SCHEMA, temperature=0.1, purpose="other")
         except (ai.RateLimited, ai.Overloaded):
             if names:
                 break  # keep what was read so far
             raise ImportProblem("The AI's free limit is used up right now. Try again in 10 minutes.")
+        except ai.BrokenAnswer:
+            continue  # this part of the page is left out
         names += [clean(a.get("name"), 120) for a in answer if isinstance(a, dict)] if isinstance(answer, list) else []
     if len(chunks) > limit:
         log.info("Import: page is long, only the first %d parts were read", limit)
@@ -292,9 +294,11 @@ def find_lookalikes(progress: dict) -> set[int]:
                                      excluded=", ".join(excluded[:150]) or "(none)")
     _pace()
     try:
-        answer = ai.ask_json(prompt, LOOKALIKE_SCHEMA, temperature=0.5, priority="jobs")
+        answer = ai.ask_json(prompt, LOOKALIKE_SCHEMA, temperature=0.5, purpose="other")
     except (ai.RateLimited, ai.Overloaded):
         raise ImportProblem("The AI's free limit is used up right now. Try again in 10 minutes.")
+    except ai.BrokenAnswer:
+        raise ImportProblem("The AI's answer was broken. Try again later.")
     db.set_setting("lookalikes_at", db.now())
     liked_keys = [company_key(n) for n, _ in liked]
     records = []

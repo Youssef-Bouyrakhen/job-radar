@@ -40,7 +40,15 @@ from .sources import check_url
 log = logging.getLogger("jobradar")
 
 FRESH_DAYS = 14         # "has fresh jobs" for the fit score
-MAX_PART = 4000         # characters of a page sent to the AI
+MAX_PART = 4000         # characters of a page's job part sent to the AI (titles, their links, place and hours)
+MAX_TITLES = 8000       # a long job list: only its titles, but all of them up to this
+MAX_FULL = 12000        # the whole job part: read once when the short one gave no job
+# Cookie boxes, menus, footers, breadcrumbs, newsletter boxes: a whole class or id like these (not "card-footer")
+NOISE = re.compile(r"(?:site-|page-|main-|global-|top-)?(?:footer|header|navbar|navigation|nav|menu|megamenu|breadcrumbs?)"
+                   r"|.*(?:cookie|consent|gdpr|onetrust|usercentrics|borlabs|cmplz|newsletter|offcanvas).*", re.I)
+# Benefit lines ("30 Tage Urlaub", "JobRad"): never a job's place or hours
+BENEFIT = re.compile(r"urlaub|obst|kaffee|getränke|jobrad|job-?ticket|fitness|altersvorsorge|benefits?|vergünstigung|"
+                     r"sommerfest|weihnachtsfeier|gleitzeit|kantine|parkpl|team-?events?|flexible arbeitszeit", re.I)
 # A real Werkstudent job. Stricter than the keyword filter, where "Teilzeit" also counts:
 # "Voll-/Teilzeit" senior jobs must not earn the Werkstudent bonus.
 WERKSTUDENT = re.compile(r"werk[\s-]*student|working student|studentische[nr]? (?:hilfskraft|mitarbeit|aushilfe)|"
@@ -57,7 +65,7 @@ EXTRACT_SCHEMA = {
                              "location": {"type": "STRING"}, "employment": {"type": "STRING"}},
               "required": ["title", "link", "location", "employment"]},
 }
-EXTRACT_PROMPT = """Below are the numbered links and the job-related text lines of the careers page of {company}.
+EXTRACT_PROMPT = """Below are the job-related text lines and numbered links ([3] = link 3) of the careers page of {company}.
 List the open job postings on this page.
 
 Rules:
@@ -77,18 +85,12 @@ def _is_data(html: str) -> bool:
     return start[:1] in "[{" or start.lower() == "<?xml"
 
 
-def relevant_part(html: str, page_url: str) -> tuple[str, list[str]]:
-    """The job-related links and lines of a page, numbered for the AI. ("", []) if nothing
-    on the page looks like a job, then the AI isn't asked at all."""
-    if _is_data(html):  # send the data as it is
-        return (html[:MAX_PART] if generic.JOB_WORD.search(html) else ""), []
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript", "svg", "header", "footer", "nav", "form"]):
-        if tag.name == "form" and generic.GENDER.search(tag.get_text(" ")):
-            continue  # a job list inside its filter form (Osborne Clarke), not a search box
-        tag.decompose()
+def _job_links(soup: BeautifulSoup, page_url: str) -> tuple[list[str], list[str], set[int]]:
+    """(addresses, labels, numbers of the links inside menus / footer / cookie boxes) of the links that look
+    like a job: the same numbers in every version of the page part."""
     links: list[str] = []
     labels: list[str] = []
+    noisy: set[int] = set()
     for a in soup.find_all("a", href=True):
         # the link text, or the heading of its job card (ITSG: an empty link laid over the card)
         label, url = clean(generic._link_title(a), 160), generic._resolve(a, page_url)
@@ -96,18 +98,113 @@ def relevant_part(html: str, page_url: str) -> tuple[str, list[str]]:
                 and (generic.GENDER.search(label) or generic.JOB_WORD.search(label))):
             links.append(url)
             labels.append(label)
-    lines = [clean(line, 200) for line in soup.get_text("\n").splitlines()]
-    lines = [line for line in lines if 3 <= len(line) <= 200]
+            if any(_is_noise(p) for p in a.parents):
+                noisy.add(len(links))
+    return links, labels, noisy
+
+
+def _is_noise(tag) -> bool:
+    """A cookie box, menu, footer, breadcrumb or newsletter box (by its tag, role, class or id)."""
+    if tag.name in ("aside", "dialog") or (tag.get("role") or "") in ("navigation", "banner", "contentinfo", "dialog"):
+        return True
+    return any(NOISE.fullmatch(name) for name in [*(tag.get("class") or []), tag.get("id") or ""] if name)
+
+
+def _fit(lines: list[str], limit: int) -> str:
+    """The lines (whole ones only) up to limit characters."""
+    out, size = [], 0
+    for line in lines:
+        if size + len(line) + 1 > limit:
+            break
+        out.append(line)
+        size += len(line) + 1
+    return "\n".join(out)
+
+
+def page_parts(html: str, page_url: str) -> dict:
+    """The job part of a careers page for the AI, with numbered job links (the same numbers in every version):
+    short:  the job titles ("[3] Werkstudent IT (m/w/d)" = link 3) with the place / hours lines next to them;
+            menus, footer, cookie text, benefits and longer text left out. About MAX_PART characters; a long list
+            only its titles, all of them up to MAX_TITLES.
+    titles: only the titles (the shorter page when an answer came back broken or cut off).
+    full:   every job-related line of the page with the lines around it (up to MAX_FULL), read once when the
+            short part gave no job although the page has job titles.
+    legacy: the part before v12.0 (only for its fingerprint, so pages already read aren't read again).
+    All "" if nothing on the page looks like a job: the AI isn't asked then."""
+    if _is_data(html):  # a JSON / XML job list: sent as it is
+        if not generic.JOB_WORD.search(html):
+            return {"short": "", "titles": "", "full": "", "legacy": "", "links": []}
+        return {"short": html[:MAX_PART], "titles": html[:MAX_PART // 2], "full": html[:MAX_FULL],
+                "legacy": html[:MAX_PART], "links": []}
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg", "header", "footer", "nav", "form"]):
+        if tag.name == "form" and generic.GENDER.search(tag.get_text(" ")):
+            continue  # a job list inside its filter form (Osborne Clarke), not a search box
+        tag.decompose()
+    links, labels, noisy = _job_links(soup, page_url)
+
+    # full (and legacy): every line with a job word and the lines around it
+    lines = [line for line in (clean(x, 200) for x in soup.get_text("\n").splitlines()) if 3 <= len(line) <= 200]
     keep = set()
     for i, line in enumerate(lines):
         if generic.GENDER.search(line) or generic.JOB_WORD.search(line):
             keep |= {i - 1, i, i + 1, i + 2}  # the line around a title often has place / hours
     text = [lines[i] for i in sorted(keep) if 0 <= i < len(lines)]
     if not links and not text:
-        return "", []
-    part = "LINKS\n" + "\n".join(f"[{n}] {label}" for n, label in enumerate(labels, 1))
-    part += "\n\nTEXT\n" + "\n".join(dict.fromkeys(text))
-    return part[:MAX_PART], links
+        return {"short": "", "titles": "", "full": "", "legacy": "", "links": []}
+    full = "LINKS\n" + "\n".join(f"[{n}] {label}" for n, label in enumerate(labels, 1))
+    full += "\n\nTEXT\n" + "\n".join(dict.fromkeys(text))
+
+    # short: without cookie boxes, menus, footers; titles with their link number, short lines next to them
+    for tag in [t for t in soup.find_all(True) if _is_noise(t)]:
+        if not tag.decomposed and not generic.GENDER.search(tag.get_text(" ")):
+            tag.decompose()
+    number = {label.lower(): n for n, label in enumerate(labels, 1) if n not in noisy}
+    lines = [line for line in (clean(x, 200) for x in soup.get_text("\n").splitlines())
+             if 3 <= len(line) <= 200 and line.lower() not in generic.NAV_TEXT]
+    is_title = [bool(generic.GENDER.search(line) or line.lower() in number
+                     or generic.JOB_WORD.search(line) and len(line) <= 90) for line in lines]
+    nearby = lambda i, most: (0 <= i < len(lines) and not is_title[i] and len(lines[i]) <= most
+                              and not BENEFIT.search(lines[i]))
+    picked, only_titles, shown, seen = {}, [], set(), set()  # picked: line number -> text, in page order
+    for i, line in enumerate(lines):
+        if not is_title[i] or line.lower() in seen:  # a list shown twice (phone and desktop): once
+            continue
+        seen.add(line.lower())
+        n = number.get(line.lower())
+        title = f"[{n}] {line}" if n else line
+        shown.add(n)
+        only_titles.append(title)
+        if nearby(i - 1, 60) and i - 1 not in picked:  # not the place line of the job before
+            picked[i - 1] = lines[i - 1]
+        picked[i] = title
+        for j in (i + 1, i + 2):
+            if not nearby(j, 80):
+                break
+            picked[j] = lines[j]
+    with_context = [picked[k] for k in sorted(picked)]
+    more = [f"[{n}] {label}" for n, label in enumerate(labels, 1) if n not in shown and n not in noisy]
+    if not only_titles and not more:  # nothing that looks like a title: the job lines as before
+        return {"short": full[:MAX_PART], "titles": full[:MAX_PART // 2], "full": full[:MAX_FULL],
+                "legacy": full[:MAX_PART], "links": links}
+    tail = ["", "MORE LINKS", *more] if more else []
+    short = "\n".join(["TEXT", *with_context, *tail])
+    titles = "\n".join(["TEXT", *only_titles, *tail])
+    if len(short) > MAX_PART:  # a long list: all its titles (the place lines don't fit), up to MAX_TITLES
+        short = titles if len(titles) <= MAX_TITLES else _fit(titles.splitlines(), MAX_TITLES)
+    return {"short": short, "titles": titles if len(titles) < len(short) else _fit(short.splitlines(), len(short) // 2),
+            "full": full[:MAX_FULL], "legacy": full[:MAX_PART], "links": links}
+
+
+def relevant_part(html: str, page_url: str) -> tuple[str, list[str]]:
+    """The short job part of a page for the AI and its numbered links (see page_parts)."""
+    parts = page_parts(html, page_url)
+    return parts["short"], parts["links"]
+
+
+def _ai_input(parts: dict, page_url: str) -> dict | None:
+    """What read_jobs needs for a page the AI has to read (None: nothing on it looks like a job)."""
+    return {"ai_parts": parts, "page_url": page_url} if parts["short"] else None
 
 
 def _slug(text: str) -> str:
@@ -130,7 +227,8 @@ def _pace() -> None:
 
 def ai_extract(company: str, part: str, links: list[str], page_url: str) -> list[Job]:
     _pace()
-    answer = ai.ask_json(EXTRACT_PROMPT.format(company=company, part=part), EXTRACT_SCHEMA, temperature=0.1, priority="jobs")
+    answer = ai.ask_json(EXTRACT_PROMPT.format(company=company, part=part), EXTRACT_SCHEMA, temperature=0.1,
+                         purpose="careers")
     jobs, seen = [], set()
     for a in answer if isinstance(answer, list) else []:
         title = clean(a.get("title"))
@@ -145,6 +243,31 @@ def ai_extract(company: str, part: str, links: list[str], page_url: str) -> list
         jobs.append(Job(title=title, url=url, company=company, location=clean(a.get("location")),
                         employment=clean(a.get("employment"))))
     return jobs[:MAX_JOBS]
+
+
+def _more_in_full(parts: dict) -> bool:
+    """The full part has job titles the short one left out (titles with "(m/w/d)", or job links)."""
+    count = lambda text: (len(generic.GENDER.findall(text)), len(re.findall(r"^\[\d+\] ", text, re.M)))
+    full, short = count(parts["full"]), count(parts["short"])
+    return parts["full"] != parts["short"] and (full[0] > short[0] or full[1] > short[1])
+
+
+def ai_read(company: str, parts: dict, page_url: str) -> list[Job]:
+    """The AI reads a page's job part: the short one. A broken or cut-off answer: once more with only the titles
+    (a second broken answer is passed on: the page waits for the next run). No job although the full part has
+    job titles the short one left out: once the full part."""
+    try:
+        jobs = ai_extract(company, parts["short"], parts["links"], page_url)
+    except ai.BrokenAnswer:
+        log.info("Companies: %s: broken answer, asking once more with only the job titles", company)
+        jobs = ai_extract(company, parts["titles"], parts["links"], page_url)
+    if not jobs and _more_in_full(parts):
+        log.info("Companies: %s: no job in the short page part, reading the whole job part once", company)
+        try:
+            jobs = ai_extract(company, parts["full"], parts["links"], page_url)
+        except ai.BrokenAnswer:
+            return []
+    return jobs
 
 
 def read_without_ai(c: dict) -> dict:
@@ -165,12 +288,12 @@ def read_without_ai(c: dict) -> dict:
         jobs = [] if _is_data(page.html) else generic._from_json_ld(BeautifulSoup(page.html, "html.parser"), page.url)
         if jobs:
             return {"jobs": jobs[:MAX_JOBS], "method": "Structured data (JobPosting)", "seen": seen}
-        part, links = relevant_part(page.html, page.url)
+        parts = page_parts(page.html, page.url)
         # A job list landing.py found in the browser: its jobs only show there (the normal download has no job links)
-        if c.get("list_browser") and not links and (found := _read_with_browser(page.url)):
+        if c.get("list_browser") and not parts["links"] and (found := _read_with_browser(page.url)):
             return {**found, "seen": seen}
-        if part:
-            return {"ai_part": part, "ai_links": links, "page_url": page.url, "seen": seen}
+        if found := _ai_input(parts, page.url):
+            return {**found, "seen": seen}
         note = note or "The careers page shows no job titles (maybe they load with JavaScript)"
         if found := _read_with_jina(c["name"], page.url):
             return {**found, "seen": seen}
@@ -187,8 +310,7 @@ def _read_with_browser(url: str) -> dict | None:
         page = fetch_with_browser(url)
     if not page.ok:
         return None
-    part, links = relevant_part(page.html, page.url)
-    return {"ai_part": part, "ai_links": links, "page_url": url} if part else None
+    return _ai_input(page_parts(page.html, page.url), url)
 
 
 MD_LINK = re.compile(r"\[([^\]]{3,200})\]\((https?://[^)\s]+)[^)]*\)")
@@ -209,8 +331,7 @@ def _read_with_jina(company: str, url: str) -> dict | None:
             log.info("Companies: the %s list found by Jina Reader for %s could not be read (%s)", board.system, company, e)
     as_link = lambda m: '<a href="%s">%s</a>' % (m[2], m[1])
     html_text = "\n".join("<p>%s</p>" % MD_LINK.sub(as_link, line) for line in text.splitlines())
-    part, links = relevant_part(html_text, url)
-    return {"ai_part": part, "ai_links": links, "page_url": url} if part else None
+    return _ai_input(page_parts(html_text, url), url)
 
 
 # ---- 2. saving them through the normal job flow ----------------------------------------
@@ -341,9 +462,11 @@ def ai_sizes(rows: list[dict], limit: int) -> int:
                           for n, c in enumerate(batch, 1))
         _pace()
         try:
-            answer = ai.ask_json(SIZE_PROMPT.format(companies=lines), SIZE_SCHEMA, temperature=0.1, priority="low")
+            answer = ai.ask_json(SIZE_PROMPT.format(companies=lines), SIZE_SCHEMA, temperature=0.1, purpose="other")
         except (ai.RateLimited, ai.Overloaded):
             break
+        except ai.BrokenAnswer:
+            continue  # asked again next run
         for a in answer if isinstance(answer, list) else []:
             n = a.get("id")
             if isinstance(n, int) and 1 <= n <= len(batch) and a.get("size") in ("big", "mid", "small", "unknown"):
@@ -481,9 +604,11 @@ def initiativ_reasons(rows: list[dict], limit: int) -> int:
         _pace()
         try:
             answer = ai.ask_json(REASON_PROMPT.format(profile=ai.settings()["profile"].strip(), companies=lines),
-                                 REASON_SCHEMA, temperature=0.3, priority="low")
+                                 REASON_SCHEMA, temperature=0.3, purpose="other")
         except (ai.RateLimited, ai.Overloaded):
             break
+        except ai.BrokenAnswer:
+            continue  # asked again next run
         for a in answer if isinstance(answer, list) else []:
             n = a.get("id")
             if isinstance(n, int) and 1 <= n <= len(batch) and a.get("reason"):
@@ -530,19 +655,20 @@ def ai_waiting() -> set[int]:
 
 
 def ai_pages_left() -> int:
-    """AI pages for the 19:00 read and auto-resume: what the free AIs really have left today, minus the
-    reserve for scoring jobs (ai_budget: keep_percent), at most max_ai_pages_watched."""
+    """AI pages for the 19:00 read and auto-resume: about how many fit into what is left of the careers pages'
+    share of today's AI (ai_budget.shares), at most max_ai_pages_watched."""
     if not ai.enabled():
         return 0
-    return min(CONFIG["companies"]["max_ai_pages_watched"], ai.spare_requests("jobs"))
+    return min(CONFIG["companies"]["max_ai_pages_watched"], ai.requests_left("careers"))
 
 
 def skipped_note(n: int) -> str:
     return f"{n} companies skipped, no AI left, will read in the next run"
 
 
-def _part_hash(part: str) -> str:
-    return hashlib.sha1(part.encode()).hexdigest()
+def _part_hash(part: str, old: bool = False) -> str:
+    """The fingerprint of a page's job part. "2:" since v12.0 (the shorter part); old: the one before."""
+    return ("" if old else "2:") + hashlib.sha1(part.encode()).hexdigest()
 
 
 def read_jobs(todo: list[dict], progress: dict, stop=lambda: False, ai_pages: int | None = None) -> int:
@@ -577,10 +703,11 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False, ai_pages: in
         if r is None:
             continue  # not read before the morning deadline
         part_hash = None
-        if "ai_part" in r:
-            part_hash = _part_hash(r["ai_part"])
-            if part_hash == c["jobs_part_hash"]:  # the same job list as last time: nothing new, no AI request
-                db.save_company_check(c["id"], {"jobs_note": None}, stamp="jobs_read_at")
+        if "ai_parts" in r:
+            part_hash = _part_hash(r["ai_parts"]["short"])
+            # the same job list as last time: nothing new, no AI request (a fingerprint from before v12.0: the old part's)
+            if part_hash == c["jobs_part_hash"] or c["jobs_part_hash"] == _part_hash(r["ai_parts"]["legacy"], old=True):
+                db.save_company_check(c["id"], {"jobs_note": None, "jobs_part_hash": part_hash}, stamp="jobs_read_at")
                 done_ids.add(c["id"])
                 progress["jobs_read"] += 1
                 progress["done"] += 1
@@ -593,14 +720,14 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False, ai_pages: in
             progress["ai_used"] += 1
             progress["step"] = f"The AI reads the job list of {c['name']}…"
             try:
-                r = {"jobs": ai_extract(c["name"], r["ai_part"], r["ai_links"], r["page_url"]), "method": "AI from page text"}
+                r = {"jobs": ai_read(c["name"], r["ai_parts"], r["page_url"]), "method": "AI from page text"}
             except (ai.RateLimited, ai.Overloaded) as e:
                 ai_budget = 0
                 progress["warnings"].append(ai.stop_note(e, "some job lists will be read next run"))
                 waiting.add(c["id"])
                 progress["ai_skipped"] += 1
                 continue
-            except Exception as e:  # every AI that was tried failed on this page: tried again next run
+            except Exception as e:  # every AI that was tried failed on this page (or broke twice): tried again next run
                 log.warning("Companies: the AI could not read the job list of %s (%s)", c["name"], str(e)[:160])
                 waiting.add(c["id"])
                 continue

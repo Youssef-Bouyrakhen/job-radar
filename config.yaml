@@ -224,6 +224,9 @@ gemini:
 groq:
   model: openai/gpt-oss-120b
   max_prompt_chars: 18000
+  # Groq's free limit that really stops it: tokens per day (question + answer, its thinking included), counted
+  # over the last 24 hours. Groq says the real number when it is reached; that beats this.
+  daily_tokens: 200000
 cloudflare:
   # Cloudflare Workers AI, free plan: 10,000 "neurons" a day (needs CLOUDFLARE_ACCOUNT_ID and
   # CLOUDFLARE_API_TOKEN in .env). Job Radar counts the neurons and stops at daily_neurons, so
@@ -237,6 +240,10 @@ cloudflare:
   daily_neurons: 9000            # stop here: 1,000 below the free 10,000 for requests running at the same time
   neurons_per_m_input: 4625      # only used if an answer doesn't say its neurons
   neurons_per_m_output: 30475
+  # Job Radar's count x this = Cloudflare's own count (2026-10-24: Cloudflare stopped at 10,000 when Job Radar had
+  # counted 6,665). Learned again each time Cloudflare says today's neurons are used up. Cloudflare's real count is
+  # used instead when CLOUDFLARE_API_TOKEN also has the permission "Account Analytics: Read".
+  neurons_factor: 1.5
 openrouter:
   # Must be a free model (the name ends with ":free"), otherwise OpenRouter is skipped.
   # Tested on 2026-10-16: laguna-s-2.1 scored correctly in ~4 s; free Gemma was overloaded.
@@ -256,17 +263,17 @@ cerebras:
   model: gpt-oss-120b
 
 # AI requests per provider and day (counted by Job Radar, shown in the AI bar at the top).
-# Estimates of the free limits (Cloudflare: cloudflare.daily_neurons). Groq and OpenRouter say their real numbers
-# themselves, Gemini says its limit when it is reached; those beat the estimates. When a provider says its daily
-# limit is gone, it stays off until its real reset: Gemini at midnight US Pacific time (09:00 in Germany), the
-# others at 00:00 UTC (02:00 in Germany), Groq bit by bit (each request comes back after 24 hours).
+# Estimates of the free limits (Cloudflare: cloudflare.daily_neurons, Groq: groq.daily_tokens). Groq and OpenRouter
+# say their real numbers themselves, Gemini says its limit when it is reached; those beat the estimates. When a
+# provider says its daily limit is gone, it stays off until its real reset: Gemini at midnight US Pacific time
+# (09:00 in Germany), the others at 00:00 UTC (02:00 in Germany), Groq bit by bit (each request comes back after 24 hours).
 ai_budget:
   daily_requests: {Gemini: 20, Groq: 1000, OpenRouter: 50, GitHub: 150}
-  # Priorities: 1. scoring jobs + Must apply blocker check (may use everything),
-  # then each kind of work stops when only this % of today's requests is left:
-  # 2. application emails the rules can't sort, 3. reading careers pages without a feed
-  # (and finding websites), 4. categories, company sizes, Initiativ reasons (leftovers only)
-  keep_percent: {mail: 10, jobs: 30, low: 60}
+  # Each provider's day is shared out in % (in the unit its limit counts: requests, Groq tokens, Cloudflare neurons):
+  # scoring jobs (+ Must apply blocker check) always keeps score_reserved for itself and may also use what the others
+  # leave; reading careers pages at most careers; categories, application emails, websites, company sizes,
+  # Initiativ reasons and imports together at most other. A share that is used up waits for the next reset.
+  shares: {score_reserved: 30, careers: 60, other: 10}
 
 # Telegram: one message per good new job (score >= gemini.min_score, or every keyword
 # match if Gemini is off). Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env.

@@ -11,7 +11,7 @@ For each new email:
 2. What kind is it: confirmation, rejection, interview, test or other. Rules first
    ("leider", "Absage" -> rejection; "Vorstellungsgespräch" -> interview); the AI only when
    the rules aren't sure. Interview-looking emails go to the AI first. In the daily AI budget
-   they come right after job scoring (priority "mail" in ai.py).
+   they share the "other" part of the AI budget (ai.py).
 3. Which job you marked Applied does it belong to: by the company's name (sender, subject,
    text) and the sender's email domain. No clear match -> the "Needs review" list, nothing
    is changed.
@@ -211,7 +211,7 @@ def ai_kinds(emails: list[dict]) -> dict[str, dict]:
     payload = [{"id": e["gmail_id"], "from": e["sender"], "subject": e["subject"], "text": e["body"][:2500]}
                for e in emails]
     answer = ai.ask_json(AI_PROMPT.format(emails=json.dumps(payload, ensure_ascii=False)), AI_SCHEMA,
-                         temperature=0.1, priority="mail")
+                         temperature=0.1, purpose="other")
     out = {}
     for a in answer if isinstance(answer, list) else []:
         if isinstance(a, dict) and a.get("kind") in KINDS:

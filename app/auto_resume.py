@@ -8,9 +8,11 @@ After a restart or deploy the scheduler starts again, the next tick (within 5 mi
 is left and goes on: nothing is lost, a company is only saved when its check is finished.
 
 No endless loops: a run that ended without any progress (the work left didn't get smaller) is not repeated
-right away. It waits until an AI is available again (all free providers at their limit: until the first one's
-real reset; the rest of today kept for scoring jobs: until a provider's free day starts again),
-until midnight (the free web searches of today are used up), or 1, 2, 4 ... max 24 hours (anything else).
+right away. It waits until an AI is available again, until midnight (the free web searches of today are used up),
+or 1, 2, 4 ... max 24 hours (anything else). Also a run that got somewhere but left job lists because the AI ran
+out: when all the work left needs the AI, the next run waits until enough of it is back for at least MIN_AI_PAGES
+pages (every free provider at its limit or the careers pages' share of today used up: the first provider whose
+limit and share have room again, at its reset; Groq bit by bit), not every 5 minutes for one or two pages.
 It also starts again when the amount of work changes (the night run found new companies).
 
 Never at the same time as the fixed runs of the day plan (schedule.py): no start in the 30 minutes before
@@ -32,6 +34,7 @@ GERMANY = clock.GERMANY
 BEFORE_FIXED = timedelta(minutes=30)  # no start this long before the fixed runs (schedule.py)
 STOP_BEFORE = timedelta(minutes=15)   # an auto run stops starting new companies this long before them
 RETRY_AFTER = timedelta(hours=1)      # no progress although AI and web search were there: try again later
+MIN_AI_PAGES = 5                      # job lists waiting for the AI: a run starts when about this many fit
 BOOT = uuid.uuid4().hex               # this start of Job Radar: a run of an earlier start was stopped by a restart
 
 
@@ -58,23 +61,24 @@ def work() -> dict:
 
 
 def ai_blocked() -> bool:
-    """The AI is on, but no free provider can take a company request now (used up, paused, or the rest of
-    today is kept for scoring jobs)."""
-    return ai.enabled() and (ai.next_provider() is None or not ai._allowed("jobs"))
+    """The AI is on, but the careers pages can't get enough of it now (fewer than MIN_AI_PAGES pages): every free
+    provider used up or paused, or the careers pages' share of today used up (the rest is kept for scoring jobs)."""
+    return ai.enabled() and company_jobs.ai_pages_left() < MIN_AI_PAGES
 
 
 def ai_saved() -> bool:
-    """An AI could take the request, but the rest of today is kept for scoring jobs (ai_budget.keep_percent)."""
-    return ai.next_provider() is not None and not ai._allowed("jobs")
+    """A provider could take a request, but the careers pages' share of today is used up (kept for scoring jobs)."""
+    return ai.next_provider() is not None and ai.next_provider("careers") is None
 
 
 def ai_back_at(now: datetime) -> datetime:
-    """When an AI is available again. Every provider at its limit or paused: when the first one is back (each at its
-    own real reset). Kept for scoring jobs: when the next provider's free day starts again (more requests left)."""
-    back = ai.next_reset() if ai_saved() else ai.provider_status()["next_back_at"]
-    if isinstance(back, str):
-        back = datetime.fromisoformat(back)
-    return back.astimezone(GERMANY) if back else now + timedelta(minutes=5)
+    """When the careers pages get the AI again: a paused provider back in a few minutes, or the first provider whose
+    limit and careers share have room again (its own real reset; Groq when enough of its last 24 hours is free)."""
+    found = [datetime.fromisoformat(r["back_at"]) for r in ai.provider_status()["providers"]
+             if r["status"] == "paused" and r["back_at"]]
+    found += [t for t in [ai.share_back_at("careers")] if t]
+    back = min(found) if found else now + timedelta(minutes=5)
+    return max(back.astimezone(GERMANY), now + timedelta(minutes=5))
 
 
 def _fixed_times(now: datetime) -> list[tuple[datetime, str]]:
@@ -108,8 +112,8 @@ def _decide(now: datetime, state: dict, left: dict) -> tuple[str, datetime | Non
     why = state.get("waiting_for") if state.get("left") == total else None
     if why == "ai" and ai_blocked():
         if ai_saved():
-            return "ai_saved", ai_back_at(now), "the AI left today is kept for scoring jobs"
-        return "ai", ai_back_at(now), "the companies left need the AI, every free AI is at its limit"
+            return "ai_saved", ai_back_at(now), "today's AI share for careers pages is used up, the rest is kept for scoring jobs"
+        return "ai", ai_back_at(now), "the companies left need the AI, not enough of it is left now"
     if why == "ai_off" and not ai.enabled():
         return "ai_off", None, "the companies left need the AI, which is off"
     if why == "search" and websearch.limit_reached():
@@ -148,6 +152,11 @@ def tick() -> str:
         elif total >= state["work_before"]:
             state = _no_progress(now, state, total)
             log.info("Auto-resume: the last run made no progress (%d left): waiting for %s", total, state["waiting_for"])
+        elif companies.progress().get("ai_skipped") and not left["unchecked"] and ai_blocked():
+            # it got somewhere, but the AI ran out and all the work left needs it: wait for it, not 5 minutes
+            state = {"waiting_for": "ai", "left": total}
+            log.info("Auto-resume: the AI ran out during the last run (%d left): waiting until %s", total,
+                     ai_back_at(now).strftime("%d.%m. %H:%M"))
         else:
             state = {}
         _save(state)
