@@ -637,21 +637,32 @@ def reread_after_area_change() -> int:
 
 def companies_to_read(limit: int, ids: set[int] | None = None) -> list[dict]:
     """Companies with a careers page whose jobs weren't read in the last week; never read first, then the
-    ones waiting for the AI (no AI was left for them, see ai_waiting), then the oldest.
+    ones waiting for the AI (no AI was left for them, see ai_waiting), then the oldest. Pages the AI gave a
+    broken answer for (ai_failures) come last: they only get the AI the others didn't need.
     ids: only these (an imported list, look-alikes)."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(7, CONFIG["companies"]["recheck_after_days"]))  # never more often
-    waiting = ai_waiting()
+    waiting, failures = ai_waiting(), ai_failures()
     rows = [c for c in db.company_rows() if (c["career_url"] or c["id"] in waiting) and c["status"] != "skipped"
             and (ids is None or c["id"] in ids)
             and (not c["jobs_read_at"] or c["id"] in waiting or datetime.fromisoformat(c["jobs_read_at"]) < cutoff)]
-    return sorted(rows, key=lambda c: (bool(c["jobs_read_at"]), c["id"] not in waiting, c["jobs_read_at"] or "",
-                                       -(c["fit_score"] or 0)))[:limit]
+    return sorted(rows, key=lambda c: (failures.get(c["id"], 0), bool(c["jobs_read_at"]), c["id"] not in waiting,
+                                       c["jobs_read_at"] or "", -(c["fit_score"] or 0)))[:limit]
 
 
 def ai_waiting() -> set[int]:
     """Companies whose job list changed but no AI was left to read it: the next run reads them first
     (auto-resume starts one for them, see auto_resume.work)."""
     return set(json.loads(db.get_setting("ai_waiting") or "[]"))
+
+
+AI_GIVE_UP = 2  # broken AI answers in a row (across runs) before a page stops waiting for the AI
+
+
+def ai_failures() -> dict[int, int]:
+    """Companies whose page the AI gave a broken answer for (twice in one read, see ai_read): how many runs in
+    a row. A good read clears it. After AI_GIVE_UP the page leaves ai_waiting and is tried again only at the
+    weekly re-read (once per week, as the count stays until a read works)."""
+    return {int(k): n for k, n in json.loads(db.get_setting("ai_failures") or "{}").items()}
 
 
 def ai_pages_left() -> int:
@@ -697,6 +708,7 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False, ai_pages: in
 
     ai_budget = (cfg["max_ai_pages_per_run"] if ai_pages is None else ai_pages) if ai.enabled() else 0
     new_good, waiting, done_ids = 0, set(), set()  # waiting for the AI now / read now
+    failures, broke, given_up = ai_failures(), set(), set()  # broken AI answer now / and stops waiting for the AI
     progress.update(step="Saving jobs…", done=0, ai_used=0, ai_skipped=0)
     for c in todo:
         r = results.get(c["id"])
@@ -727,7 +739,22 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False, ai_pages: in
                 waiting.add(c["id"])
                 progress["ai_skipped"] += 1
                 continue
-            except Exception as e:  # every AI that was tried failed on this page (or broke twice): tried again next run
+            except ai.BrokenAnswer as e:  # broke twice on this page: again next run, after AI_GIVE_UP runs next week
+                broke.add(c["id"])
+                if failures.get(c["id"], 0) + 1 < AI_GIVE_UP:
+                    log.warning("Companies: the AI gave a broken answer for the job list of %s (%s), "
+                                "trying again next run", c["name"], str(e)[:160])
+                    waiting.add(c["id"])
+                    continue
+                log.warning("Companies: the AI gave a broken answer for the job list of %s %d runs in a row (%s), "
+                            "trying again at the weekly re-read", c["name"], failures.get(c["id"], 0) + 1, str(e)[:160])
+                db.save_company_check(c["id"], {"jobs_note": f"The AI could not read this page {AI_GIVE_UP} runs in "
+                                                f"a row (broken answer), tried again at the weekly re-read"},
+                                      stamp="jobs_read_at")  # no jobs_part_hash: next week the AI reads it again
+                given_up.add(c["id"])
+                progress["done"] += 1
+                continue
+            except Exception as e:  # every AI that was tried failed on this page: tried again next run
                 log.warning("Companies: the AI could not read the job list of %s (%s)", c["name"], str(e)[:160])
                 waiting.add(c["id"])
                 continue
@@ -746,7 +773,10 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False, ai_pages: in
     # Why the ones read now show 0 jobs (if they do), with what the read saw on their page
     diagnosis.after_read(done_ids, {i: results[i].get("seen") for i in done_ids if i in results})
     # Merged with what is saved now (another run may have changed it meanwhile)
-    db.set_setting("ai_waiting", json.dumps(sorted((ai_waiting() - done_ids) | waiting)))
+    db.set_setting("ai_waiting", json.dumps(sorted((ai_waiting() - done_ids - given_up) | waiting)))
+    failures = {i: n for i, n in ai_failures().items() if i not in done_ids}
+    failures.update({i: failures.get(i, 0) + 1 for i in broke})
+    db.set_setting("ai_failures", json.dumps({str(i): n for i, n in sorted(failures.items())}))
     if progress["ai_skipped"]:
         progress["warnings"].append(skipped_note(progress["ai_skipped"]))
     return new_good

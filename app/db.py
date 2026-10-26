@@ -869,13 +869,7 @@ def mark_duplicates() -> int:
     with connect() as conn:
         rows = [dict(r) for r in conn.execute(
             "SELECT id, title, company, location FROM jobs WHERE duplicate_of IS NULL ORDER BY id")]
-        kept, marks = [], []
-        for job in rows:
-            original = dedup.find_duplicate(job, kept)
-            if original:
-                marks.append((original["id"], job["id"]))
-            else:
-                kept.append(job)
+        marks = [(original["id"], job["id"]) for original, job in dedup.find_duplicates(rows)]
         conn.executemany("UPDATE jobs SET duplicate_of = ? WHERE id = ?", marks)
     return len(marks)
 
