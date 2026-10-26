@@ -8,6 +8,22 @@ Everything runs on your own laptop. Your data stays in `data/jobradar.db`.
 
 ---
 
+## Screenshots
+
+| Best new | Watched links |
+|---|---|
+| ![Best new jobs](screenshots/best-new.png) | ![Watched links](screenshots/watched-links.png) |
+
+| Companies | Coverage |
+|---|---|
+| ![Companies](screenshots/companies.png) | ![Region coverage](screenshots/coverage.png) |
+
+| Settings |
+|---|
+| ![Settings](screenshots/settings.png) |
+
+---
+
 ## 1. One-time setup (Windows)
 
 You only do this once.
