@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, diagnosis, landing, must_apply, discover, gmail, linkedin,
+from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, diagnosis, landing, must_apply, discover, gmail, initiativ_mail, linkedin,
                region, schedule, scheduler, telegram, timeline, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all, recheck_hours,
                       ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
         "Job-alert emails: %s", f"on (Gmail label \"{gmail.label()}\", read-only)" if gmail.configured()
         else "off (GMAIL_ADDRESS / GMAIL_APP_PASSWORD missing in .env)")
     logging.getLogger("jobradar").info(
-        "Application emails: %s", f"on (Gmail label \"{applications.settings()['label']}\", read-only)"
+        "Application tracker: %s", "on (Gmail Sent + replies, read-only)"
         if applications.enabled() else "off")
     schedule.log_plan()  # the fixed runs of the day and when each one starts next
     # JOBRADAR_NO_SCHEDULER=1: a test copy that never checks sources or sends alerts by itself
@@ -108,6 +108,11 @@ def _stamp(match: re.Match) -> str:
 @app.get("/")
 def dashboard():
     page = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    # The page's version = VERSION in app/__init__.py as it is on disk NOW. /api/info answers with the version this
+    # process started with: different = an old Job Radar is still running with new files. No second number to bump.
+    on_disk = re.search(r'^VERSION = "([^"]+)"', (ROOT / "app" / "__init__.py").read_text(encoding="utf-8"), re.M)
+    if on_disk:
+        page = page.replace("</head>", f'<meta name="jr-version" content="{on_disk[1]}">\n</head>', 1)
     return HTMLResponse(re.sub(r'"(/static/[\w.-]+)"', _stamp, page))
 
 
@@ -150,7 +155,7 @@ def settings():
         "telegram_off_in_config": not CONFIG["telegram"].get("enabled", True),
         "gmail_label": gmail.label(),
         "applications": "Turned off" if not CONFIG["applications"]["enabled"] else
-                        f"Label \"{applications.settings()['label']}\" (read-only, emails stay unread), checked every "
+                        f"Sent folder + replies (read-only, emails stay unread), checked every "
                         f"{CONFIG['applications']['check_every_minutes']} min" if gmail.configured()
                         else "Not set up: GMAIL_ADDRESS / GMAIL_APP_PASSWORD missing in .env",
         "applications_label": applications.settings()["label"],
@@ -249,14 +254,95 @@ class CompanyUpdate(BaseModel):
 
 @app.get("/api/companies")
 def list_companies():
-    rows, diag = db.list_companies(), diagnosis.by_company()
+    rows, diag, drafts = db.list_companies(), diagnosis.by_company(), initiativ_mail.by_company()
     for r in rows:
         r["sources"] = json.loads(r["sources"] or "{}")
         r["size"] = company_jobs.size_of(r)
         r["diag"] = diag.get(r["id"])  # why it shows 0 jobs (diagnosis.py)
+        r["draft"] = drafts.get(r["id"])  # its Initiativ email draft (initiativ_mail.py)
     company_jobs.next_reads(rows)  # "next: today 19:00"
     return {"progress": companies.progress(), "companies": rows, "linkedin": linkedin.status(),
             "diagnosis": diagnosis.progress()}
+
+
+# ---- Initiativ email drafts (initiativ_mail.py) -----------------------------------------
+# Job Radar only makes Gmail drafts; you send them yourself.
+
+class InitiativSwitches(BaseModel):
+    on: bool | None = None
+    per_day: int | None = None
+    sender_name: str | None = None
+
+
+class InitiativTemplate(BaseModel):
+    text: str
+
+
+class InitiativCount(BaseModel):
+    n: int = 3
+
+
+def _template_key(key: str) -> str:
+    if key not in initiativ_mail.TEMPLATES:
+        raise HTTPException(404, "No such template (1, 3 or other)")
+    return key
+
+
+@app.get("/api/initiativ")
+def initiativ_status():
+    return initiativ_mail.status()
+
+
+@app.post("/api/initiativ/switches")
+def initiativ_switches(body: InitiativSwitches):
+    if body.on and not gmail.configured():
+        raise HTTPException(400, "Gmail is not set up: GMAIL_ADDRESS / GMAIL_APP_PASSWORD missing in .env")
+    if body.on and all(initiativ_mail.ready(k) for k in initiativ_mail.TEMPLATES):
+        raise HTTPException(400, "Add at least one template with its CV first")
+    initiativ_mail.set_switches(body.on, body.per_day, body.sender_name)
+    return initiativ_mail.status()
+
+
+@app.put("/api/initiativ/templates/{key}")
+def initiativ_template(key: str, body: InitiativTemplate):
+    if not body.text.strip():
+        raise HTTPException(400, "The template is empty")
+    initiativ_mail.save_template(_template_key(key), body.text)
+    return initiativ_mail.status()
+
+
+@app.put("/api/initiativ/cv/{key}")
+async def initiativ_cv(key: str, request: Request):
+    """The CV of one template: the PDF itself as the request body (no form, no extra package)."""
+    try:
+        initiativ_mail.save_cv(_template_key(key), await request.body())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/initiativ/preview")
+def initiativ_preview(body: InitiativCount):
+    """The next n drafts with their text. Opens careers pages / Impressums for the addresses; nothing goes to Gmail."""
+    return {"drafts": initiativ_mail.preview(max(1, min(body.n, 10)))}
+
+
+@app.post("/api/initiativ/test")
+def initiativ_test(body: InitiativCount):
+    """n test drafts addressed to YOU (subject "[TEST ...]"), the companies stay on the list."""
+    return initiativ_mail.make_drafts(max(1, min(body.n, 5)), test=True)
+
+
+@app.post("/api/initiativ/run")
+def initiativ_run(body: InitiativCount):
+    """n real drafts now (to the companies), whether the daily drafts are on or not."""
+    return initiativ_mail.make_drafts(max(1, min(body.n, 30)))
+
+
+@app.post("/api/initiativ/check")
+def initiativ_check():
+    """Look in Gmail now which drafts you sent or deleted."""
+    return {**initiativ_mail.check_sent(), "status": initiativ_mail.status()}
 
 
 # ---- diagnosis: why a company shows 0 jobs ----------------------------------------------
@@ -329,12 +415,14 @@ def run_linkedin():
 
 
 @app.post("/api/companies/run")
-def run_companies(until_done: bool = False, kind: str = "run"):
+def run_companies(until_done: bool = False, kind: str = "run", force: bool = False):
     # until_done: no morning stop (for a run started by hand at night); a run already going is just reported on
     # kind=recheck: look again for the careers pages of all "No careers page" companies
     # kind=read: read the jobs of every company never read (AI pages beyond the per-run limit wait for the night)
-    companies.start(kind if kind in ("recheck", "read") else "run", night_limit=not until_done)
-    return {"progress": companies.progress()}
+    # force: collect all areas again now, not only in the night to Sunday (kind=run only)
+    started = companies.start(kind if kind in ("recheck", "read") else "run", night_limit=not until_done,
+                              force_collect=force)
+    return {"started": started, "progress": companies.progress()}
 
 
 class CompanyImport(BaseModel):
@@ -451,12 +539,14 @@ def set_job_status(job_id: int, body: JobStatus):
     if body.status not in db.STATUSES:
         raise HTTPException(400, f"status must be one of {list(db.STATUSES)}")
     db.set_status(job_id, body.status)
-    if body.status == "applied":  # replies that came before you clicked Applied find their job now
+    if body.status == "applied":  # it joins the tracker; replies that came before find it now
+        applications.link_jobs()
         applications.rematch_review()
+        applications.refresh_statuses()
     return db.count_jobs(min_score())
 
 
-# ---- application tracking (emails in the "Bewerbungen" label) ------------------------
+# ---- application tracker (applications.py: your Sent folder and the replies in Gmail) ----------
 
 @app.get("/api/applications")
 def application_overview():
@@ -465,8 +555,7 @@ def application_overview():
 
 @app.post("/api/applications/check")
 def check_applications():
-    """Read new emails in the label now (takes a few seconds, longer if the AI is needed)."""
-    applications.rematch_review()
+    """Read Sent and new replies now (takes a few seconds, the first time a minute or two)."""
     result = applications.check()
     if not result.get("ok"):
         raise HTTPException(400, result.get("note") or "Could not read the emails")
@@ -474,24 +563,43 @@ def check_applications():
 
 
 class EmailAssign(BaseModel):
-    job_id: int | None = None   # None = dismiss (not about one of your applications)
-    kind: str | None = None     # confirmation / rejection / interview / test / other
+    app_id: int | None = None   # None = dismiss (not about one of your applications), -1 = a new application
+    kind: str | None = None     # confirmation / reply / rejection / interview / test / offer / other
 
 
 @app.post("/api/applications/emails/{gmail_id}/assign")
 def assign_email(gmail_id: str, body: EmailAssign):
     if body.kind is not None and body.kind not in applications.KINDS:
         raise HTTPException(400, f"kind must be one of {list(applications.KINDS)}")
-    if not applications.assign(gmail_id, body.job_id, body.kind):
+    if not applications.assign(gmail_id, body.app_id, body.kind):
         raise HTTPException(404, "Email not found.")
     return applications.overview()
 
 
 @app.post("/api/applications/emails/{gmail_id}/unassign")
 def unassign_email(gmail_id: str):
-    """"Not this job": the email goes back to Needs review."""
+    """"Not this application": the email goes back to Needs review."""
     if not applications.unassign(gmail_id):
         raise HTTPException(404, "Email not found.")
+    return applications.overview()
+
+
+class AppChange(BaseModel):
+    status: str | None = None   # your status ("" = back to what the emails say)
+    hidden: bool | None = None  # True = not an application
+
+
+@app.post("/api/applications/{app_id}")
+def change_application(app_id: int, body: AppChange):
+    if body.status and body.status not in applications.STATUSES:
+        raise HTTPException(400, f"status must be one of {list(applications.STATUSES)}")
+    found = True
+    if body.status is not None:
+        found = applications.set_status(app_id, body.status)
+    if body.hidden is not None and found:
+        found = applications.set_hidden(app_id, body.hidden)
+    if not found:
+        raise HTTPException(404, "Application not found.")
     return applications.overview()
 
 

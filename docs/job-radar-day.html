@@ -1,0 +1,308 @@
+<title>Job Radar Day</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: plan switch on top, one 24-hour track with one lane per kind of work, then "what changes" and an hour-by-hour list. Radar-orange accent from the Job Radar logo. */
+:root{
+  --bg:#f4f6f8; --panel:#ffffff; --fg:#14202b; --muted:#5b6b78; --line:#d7dee4; --track:#e8edf1;
+  --accent:#e8661c; --hourly:#0f8a7e; --resume:#5aa9a0; --night:#4a55c9; --linkedin:#2f73c4;
+  --busy:#b4458f; --ai:#c28a12; --stop:#c43d3d; --good:#1f8a4c;
+  --soft:.28;
+  --display:"Archivo",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0d141b; --panel:#141e27; --fg:#e6edf2; --muted:#93a3b0; --line:#25323d; --track:#1b2732;
+  --accent:#ff8a3d; --hourly:#3cc2b3; --resume:#6fb9b0; --night:#8a93ff; --linkedin:#5ea2f0;
+  --busy:#e07bc1; --ai:#e7b440; --stop:#f07070; --good:#53c98a;
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0d141b; --panel:#141e27; --fg:#e6edf2; --muted:#93a3b0; --line:#25323d; --track:#1b2732;
+  --accent:#ff8a3d; --hourly:#3cc2b3; --resume:#6fb9b0; --night:#8a93ff; --linkedin:#5ea2f0;
+  --busy:#e07bc1; --ai:#e7b440; --stop:#f07070; --good:#53c98a;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:28px 48px}
+.wrap{max-width:1040px;margin:0 auto;display:flex;flex-direction:column;gap:24px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 24px}
+h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,5vw,42px);letter-spacing:-.02em;margin:0;line-height:1.05;text-wrap:balance}
+.sub{color:var(--muted);margin:6px 0 0;max-width:62ch}
+.clock{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.clock b{display:block;font-size:30px;font-weight:600;color:var(--accent);letter-spacing:.02em}
+.clock span{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+
+.switches{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center}
+.seg{display:inline-flex;background:var(--track);border-radius:10px;padding:3px;gap:3px}
+.seg button{font:600 14px var(--body);color:var(--muted);background:transparent;border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--panel);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.seglabel{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-right:4px}
+.seg[aria-disabled="true"]{opacity:.45;pointer-events:none}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+h2{font-family:var(--display);font-weight:700;font-size:19px;margin:0 0 4px}
+.panel > p.lead{color:var(--muted);margin:0 0 16px;font-size:14px}
+
+.board{overflow-x:auto}
+.grid{position:relative;min-width:560px;display:grid;grid-template-columns:150px 1fr;row-gap:10px;column-gap:14px;align-items:center}
+.lab{font-size:13px;font-weight:600;line-height:1.25}
+.lab small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.lab .new{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--good);margin-left:6px}
+.lane{position:relative;height:30px;background:var(--track);border-radius:6px;overflow:hidden}
+.blk{position:absolute;top:4px;bottom:4px;border-radius:4px}
+.blk.soft{opacity:var(--soft)}
+.tick{position:absolute;top:7px;bottom:7px;width:3px;border-radius:2px;background:var(--hourly);transform:translateX(-1px)}
+.mark{position:absolute;top:3px;bottom:3px;width:4px;border-radius:2px;background:var(--ai);transform:translateX(-2px)}
+.stop{background:repeating-linear-gradient(135deg,var(--stop) 0 4px,transparent 4px 8px);opacity:.85}
+.off{position:absolute;inset:0;display:flex;align-items:center;padding-left:10px;font-size:12px;color:var(--muted);font-style:italic}
+.axis{position:relative;height:18px}
+.axis span{position:absolute;transform:translateX(-50%);font-family:var(--mono);font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.axis span:first-child{transform:none}
+.axis span:last-child{transform:translateX(-100%)}
+.nowwrap{position:absolute;left:164px;right:0;top:18px;bottom:0;pointer-events:none}
+.nowline{position:absolute;top:0;bottom:0;width:2px;background:var(--fg);opacity:.75}
+.nowtag{position:absolute;top:-2px;transform:translate(-50%,-100%);font-family:var(--mono);font-size:11px;background:var(--fg);color:var(--bg);padding:1px 6px;border-radius:4px;white-space:nowrap}
+
+.changes{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.chg{border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.chg h3{margin:0;font-family:var(--display);font-size:15px;font-weight:700}
+.chg p{margin:0;font-size:14px;color:var(--muted)}
+.chg .gain{font-size:13px;font-weight:600;color:var(--good)}
+
+.list{display:flex;flex-direction:column}
+.row{display:grid;grid-template-columns:118px 1fr;gap:16px;padding:14px 0;border-top:1px solid var(--line);align-items:start}
+.row:first-child{border-top:0}
+.time{font-family:var(--mono);font-weight:600;font-variant-numeric:tabular-nums;font-size:15px}
+.time small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.what{min-width:0;display:flex;gap:10px;align-items:baseline}
+.dot{flex:none;width:10px;height:10px;border-radius:3px;transform:translateY(1px)}
+.row.active{background:color-mix(in srgb,var(--accent) 10%,transparent);border-radius:8px;padding-inline:10px;margin-inline:-10px}
+
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+ul.plain{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+ul.plain li{display:flex;gap:10px;align-items:baseline}
+ul.plain .t{font-family:var(--mono);font-weight:600;min-width:108px;font-variant-numeric:tabular-nums}
+@media (max-width:520px){
+  .row{grid-template-columns:1fr;gap:4px}
+  .clock{text-align:left}
+}
+@media (prefers-reduced-motion:no-preference){.nowline{transition:left .6s ease}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>A day in Job Radar</h1>
+      <p class="sub">What your server does from 00:00 to 23:59, German time. Switch between today's schedule and the new plan to compare.</p>
+    </div>
+    <div class="clock" aria-live="polite"><span>Now in Germany</span><b id="now">--:--</b></div>
+  </header>
+
+  <div class="switches">
+    <div><span class="seglabel">Plan</span>
+      <div class="seg" role="group" aria-label="Plan">
+        <button id="p-now" aria-pressed="false">Today</button>
+        <button id="p-new" aria-pressed="true">New plan</button>
+      </div>
+    </div>
+    <div><span class="seglabel">Day</span>
+      <div class="seg" role="group" aria-label="Day" id="dayseg">
+        <button id="d-wk" aria-pressed="true">Mon–Fri</button>
+        <button id="d-sat" aria-pressed="false">Saturday</button>
+        <button id="d-sun" aria-pressed="false">Sunday</button>
+      </div>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2 id="boardtitle">The 24-hour board</h2>
+    <p class="lead">Each row is one kind of work. Faded parts mean "can last until here on a busy day". The dark line is now.</p>
+    <div class="board">
+      <div class="grid" id="grid"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="changesPanel">
+    <h2>What the new plan changes</h2>
+    <p class="lead">Telegram stays on 24 hours a day, as you asked.</p>
+    <div class="changes">
+      <div class="chg"><h3>Midday read at 13:00</h3><p>Only the busy companies, the ones that posted a job in the last 30 days (about 300). Jobs posted in the morning reach you before 19:00.</p><span class="gain">Good jobs about 6 hours earlier</span></div>
+      <div class="chg"><h3>Quiet companies every 3 days</h3><p>Companies with no new job in 60 days are read every third evening instead of every evening.</p><span class="gain">19:00 read about half the size</span></div>
+      <div class="chg"><h3>Full collection on Sunday only</h3><p>New companies appear slowly. The night run collects all areas on Sunday; other nights it only checks new and skipped companies.</p><span class="gain">Shorter nights, fewer requests</span></div>
+      <div class="chg"><h3>LinkedIn at 08:00</h3><p>New hiring companies get checked by auto-resume in the morning, so they are already in the 13:00 and 19:00 reads.</p><span class="gain">New companies watched the same day</span></div>
+      <div class="chg"><h3>Lighter weekends</h3><p>Companies rarely post on Saturday and Sunday, so there is no 13:00 read on those days.</p><span class="gain">AI saved for the week</span></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Hour by hour</h2>
+    <p class="lead">The row that is running now is highlighted.</p>
+    <div class="list" id="list"></div>
+  </section>
+
+  <div class="cols">
+    <section class="panel">
+      <h2>Safe times to deploy</h2>
+      <ul class="plain" id="safe"></ul>
+    </section>
+    <section class="panel">
+      <h2>Good to know</h2>
+      <ul class="plain">
+        <li><span>Telegram alerts run all day and night.</span></li>
+        <li><span>Groq has no fixed reset. Its limit comes back bit by bit.</span></li>
+        <li><span>The new plan is a proposal. It needs one prompt to Claude Code before the server works like this.</span></li>
+      </ul>
+    </section>
+  </div>
+</div>
+
+<script>
+const H = h => (h/24*100).toFixed(3)+'%';
+const hm = s => { const [h,m]=s.split(':').map(Number); return h+m/60; };
+
+/* Lane definitions. Each block: [from, to, colorToken, soft] */
+const PLANS = {
+  now: {
+    title: "Today's schedule",
+    lanes: d => [
+      {lab:'Every hour', sub:'79 watched links, Arbeitsagentur, Gmail', ticks:true},
+      {lab:'Auto-resume', sub:'every 5 min, if work is left', blocks:[['00:00','02:30','--resume'],['03:30','18:30','--resume'],['19:30','20:30','--resume',1],['20:30','24:00','--resume']]},
+      {lab:'Night run', sub:'03:00, all 19 areas every night', blocks:[['03:00','03:30','--night'],['03:30','07:00','--night',1]]},
+      {lab:'LinkedIn search', sub:'11:00, 2 keywords', blocks:[['11:00','11:15','--linkedin']]},
+      {lab:'Watched read', sub:'19:00, all ~1,600 companies', blocks:[['19:00','19:30','--accent'],['19:30','20:30','--accent',1]]},
+      {lab:'AI limits reset', sub:'Cloudflare, OpenRouter, Gemini', marks:[['02:00','Cloudflare + OpenRouter'],['09:00','Gemini']]},
+      {lab:"Don't deploy", sub:'a restart would stop a run', stop:[['02:45','03:30'],['11:00','11:15'],['18:45','19:30']]},
+    ],
+    rows: d => [
+      ['00:00','24:00','All day','--hourly','Every hour','Your 79 watched links, the Arbeitsagentur, Gmail job alerts and application emails.'],
+      ['00:00','24:00','All day','--resume','Every 5 min','Auto-resume checks new companies when work is left. It pauses before and during the big runs.'],
+      ['02:00','02:00','','--ai','02:00','Cloudflare and OpenRouter get their new free AI day.'],
+      ['03:00','07:00','until ~03:30, max 07:00','--night','03:00','Night run: collects companies in all 19 areas, applies the skip rules, checks up to 300 companies.'],
+      ['09:00','09:00','','--ai','09:00','Gemini gets its new free AI day.'],
+      ['11:00','11:15','a few minutes','--linkedin','11:00','LinkedIn search: 2 keywords. New hiring companies go into Companies.'],
+      ['19:00','20:30','until ~19:30, max ~20:30','--accent','19:00','Watched read: all ~1,600 Watched and Initiativ careers pages.'],
+      ['19:30','24:00','','--resume','After 19:00','Auto-resume reads what the 19:00 read skipped.'],
+    ],
+    safe: () => [['03:30–10:55','Morning'],['11:15–18:45','Afternoon'],['20:30–02:45','Evening and night']],
+  },
+  new: {
+    title: "New plan",
+    lanes: d => {
+      const wk = d==='wk', sun = d==='sun';
+      return [
+        {lab:'Every hour', sub:'79 watched links, Arbeitsagentur, Gmail', ticks:true},
+        {lab:'Auto-resume', sub:'every 5 min, if work is left', blocks: wk
+          ? [['00:00','02:30','--resume'],['03:30','12:30','--resume'],['13:30','18:30','--resume'],['19:45','24:00','--resume']]
+          : [['00:00','02:30','--resume'],[sun?'04:00':'03:30','18:30','--resume'],['19:45','24:00','--resume']]},
+        {lab:'Night run', sub: sun?'03:00, full collection of all areas':'03:00, new and skipped only', isNew:true,
+          blocks: sun ? [['03:00','04:00','--night'],['04:00','06:00','--night',1]] : [['03:00','03:20','--night'],['03:20','04:00','--night',1]]},
+        {lab:'LinkedIn search', sub:'08:00, 2 keywords', isNew:true, blocks:[['08:00','08:15','--linkedin']]},
+        {lab:'Busy companies', sub: wk?'13:00, ~300 that posted lately':'off at the weekend', isNew:true,
+          blocks: wk ? [['13:00','13:20','--busy'],['13:20','13:30','--busy',1]] : [], off: !wk},
+        {lab:'Watched read', sub:'19:00, busy daily, quiet every 3 days', isNew:true, blocks:[['19:00','19:25','--accent'],['19:25','19:45','--accent',1]]},
+        {lab:'AI limits reset', sub:'Cloudflare, OpenRouter, Gemini', marks:[['02:00','Cloudflare + OpenRouter'],['09:00','Gemini']]},
+        {lab:"Don't deploy", sub:'a restart would stop a run', stop: wk
+          ? [['02:45','03:30'],['08:00','08:15'],['12:45','13:30'],['18:45','19:45']]
+          : [['02:45', sun?'04:00':'03:30'],['08:00','08:15'],['18:45','19:45']]},
+      ];
+    },
+    rows: d => {
+      const wk = d==='wk', sun = d==='sun';
+      const r = [
+        ['00:00','24:00','All day','--hourly','Every hour','Your 79 watched links, the Arbeitsagentur, Gmail job alerts and application emails. Telegram alerts go out right away, day and night.'],
+        ['00:00','24:00','All day','--resume','Every 5 min','Auto-resume checks new companies when work is left. It pauses before and during the big runs.'],
+        ['02:00','02:00','','--ai','02:00','Cloudflare and OpenRouter get their new free AI day.'],
+        sun
+          ? ['03:00','06:00','until ~04:00','--night','03:00','Sunday night run: full collection of all areas (OpenStreetMap, Arbeitsagentur, register), skip rules, then checks new companies.']
+          : ['03:00','04:00','until ~03:20','--night','03:00','Night run: only new companies and the ones skipped the day before. No full collection.'],
+        ['08:00','08:15','a few minutes','--linkedin','08:00','LinkedIn search: 2 keywords. New hiring companies are checked by auto-resume during the morning.'],
+        ['09:00','09:00','','--ai','09:00','Gemini gets its new free AI day.'],
+      ];
+      if (wk) r.push(['13:00','13:30','until ~13:20','--busy','13:00','Busy companies: the ~300 that posted a job in the last 30 days. Catches jobs posted this morning.']);
+      r.push(['19:00','19:45','until ~19:25','--accent','19:00','Watched read: busy companies every day, quiet companies (no new job in 60 days) every third day.']);
+      r.push(['19:45','24:00','','--resume','After 19:00','Auto-resume reads what the 19:00 read skipped.']);
+      return r;
+    },
+    safe: d => d==='wk'
+      ? [['03:30–07:55','Early morning'],['08:15–12:45','Morning'],['13:30–18:45','Afternoon'],['19:45–02:45','Evening and night']]
+      : [[d==='sun'?'04:00–07:55':'03:30–07:55','Early morning'],['08:15–18:45','Day (no midday read)'],['19:45–02:45','Evening and night']],
+  }
+};
+
+let plan='new', day='wk';
+const grid=document.getElementById('grid'), list=document.getElementById('list');
+
+function render(){
+  const P=PLANS[plan];
+  document.getElementById('boardtitle').textContent=P.title;
+  document.getElementById('changesPanel').hidden = plan!=='new';
+  document.getElementById('dayseg').setAttribute('aria-disabled', plan==='now' ? 'true' : 'false');
+  const d = plan==='now' ? 'wk' : day;
+
+  grid.innerHTML='<div></div><div class="axis" id="axis"></div>';
+  const axis=grid.querySelector('#axis');
+  [0,3,6,9,12,15,18,21,24].forEach(h=>{const s=document.createElement('span');s.style.left=H(h);s.textContent=String(h).padStart(2,'0')+':00';axis.appendChild(s);});
+
+  P.lanes(d).forEach(L=>{
+    const lab=document.createElement('div'); lab.className='lab';
+    lab.innerHTML=`${L.lab}${L.isNew&&plan==='new'?'<span class="new">changed</span>':''}<small>${L.sub}</small>`;
+    const lane=document.createElement('div'); lane.className='lane';
+    if(L.ticks) for(let h=0;h<24;h++){const t=document.createElement('div');t.className='tick';t.style.left=H(h+0.02);lane.appendChild(t);}
+    (L.blocks||[]).forEach(([a,b,c,soft])=>{const el=document.createElement('div');el.className='blk'+(soft?' soft':'');el.style.left=H(hm(a));el.style.width=H(hm(b)-hm(a));el.style.background=`var(${c})`;lane.appendChild(el);});
+    (L.marks||[]).forEach(([t,n])=>{const m=document.createElement('div');m.className='mark';m.style.left=H(hm(t));m.title=n+' reset at '+t;lane.appendChild(m);});
+    (L.stop||[]).forEach(([a,b])=>{const el=document.createElement('div');el.className='blk stop';el.style.left=H(hm(a));el.style.width=H(hm(b)-hm(a));lane.appendChild(el);});
+    if(L.off){const o=document.createElement('div');o.className='off';o.textContent='No midday read at the weekend';lane.appendChild(o);}
+    grid.append(lab,lane);
+  });
+  const nw=document.createElement('div'); nw.className='nowwrap';
+  nw.innerHTML='<div class="nowline" id="nowline"><span class="nowtag" id="nowtag">now</span></div>';
+  grid.appendChild(nw);
+
+  list.innerHTML='';
+  P.rows(d).forEach(([from,to,dur,color,label,text])=>{
+    const row=document.createElement('div'); row.className='row'; row.dataset.from=from; row.dataset.to=to;
+    row.innerHTML=`<div class="time">${label}${dur?`<small>${dur}</small>`:''}</div><div class="what"><span class="dot" style="background:var(${color})"></span><span>${text}</span></div>`;
+    list.appendChild(row);
+  });
+
+  const safe=document.getElementById('safe'); safe.innerHTML='';
+  P.safe(d).forEach(([t,x])=>{const li=document.createElement('li');li.innerHTML=`<span class="t">${t}</span><span>${x}</span>`;safe.appendChild(li);});
+  tick();
+}
+
+function berlinNow(){
+  const p=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Berlin',hour:'2-digit',minute:'2-digit',hour12:false}).formatToParts(new Date());
+  return {h:(+p.find(x=>x.type==='hour').value)%24, m:+p.find(x=>x.type==='minute').value};
+}
+function tick(){
+  const {h,m}=berlinNow(); const t=h+m/60; const txt=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
+  document.getElementById('now').textContent=txt;
+  const nl=document.getElementById('nowline'); if(nl){nl.style.left=H(t);document.getElementById('nowtag').textContent=txt;}
+  list.querySelectorAll('.row').forEach(r=>{
+    const a=hm(r.dataset.from), b=hm(r.dataset.to);
+    const on = a===b ? Math.abs(t-a)<0.25 : (t>=a && t<b);
+    r.classList.toggle('active', on && !(a===0 && b>=24));
+  });
+}
+
+function setPressed(ids,id){ids.forEach(x=>document.getElementById(x).setAttribute('aria-pressed',x===id?'true':'false'));}
+document.getElementById('p-now').onclick=()=>{plan='now';setPressed(['p-now','p-new'],'p-now');render();};
+document.getElementById('p-new').onclick=()=>{plan='new';setPressed(['p-now','p-new'],'p-new');render();};
+document.getElementById('d-wk').onclick=()=>{day='wk';setPressed(['d-wk','d-sat','d-sun'],'d-wk');render();};
+document.getElementById('d-sat').onclick=()=>{day='sat';setPressed(['d-wk','d-sat','d-sun'],'d-sat');render();};
+document.getElementById('d-sun').onclick=()=>{day='sun';setPressed(['d-wk','d-sat','d-sun'],'d-sun');render();};
+
+// start on today's weekday in Germany
+try{
+  const wd=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Berlin',weekday:'short'}).format(new Date());
+  if(wd==='Sat'){day='sat';setPressed(['d-wk','d-sat','d-sun'],'d-sat');}
+  if(wd==='Sun'){day='sun';setPressed(['d-wk','d-sat','d-sun'],'d-sun');}
+}catch(e){}
+render(); setInterval(tick,30000);
+</script>

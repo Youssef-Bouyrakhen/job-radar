@@ -535,7 +535,7 @@ def progress() -> dict:
 
 
 def start(kind: str = "run", text: str = "", label: str = "", night_limit: bool = True,
-          stop_at: float | None = None) -> bool:
+          stop_at: float | None = None, force_collect: bool = False) -> bool:
     """Start a run in the background. False if one is already running (only one at a time).
     kind "import": the companies in `text` (names or a link), marked with `label`;
     kind "lookalikes": companies similar to the ones whose jobs you saved or applied to;
@@ -544,13 +544,14 @@ def start(kind: str = "run", text: str = "", label: str = "", night_limit: bool 
     kind "auto": the queue only, no collecting (started by auto_resume.py);
     kind "landing": the job lists behind landing pages (landing.py, started by auto_resume.py).
     night_limit False: no stop before the morning, even if started at night.
-    stop_at: stop starting new companies at this time (time.time()) instead."""
+    stop_at: stop starting new companies at this time (time.time()) instead.
+    force_collect: kind "run" collects all areas again now, even when collect_due() says not tonight (by hand)."""
     with _lock:
         if _progress["running"]:
             return False
         _progress.update(running=True, kind=kind, step="Starting…", **COUNTERS, warnings=[], notes=[], error="",
                          started_at=db.now(), finished_at=None)
-    threading.Thread(target=_run, args=(kind, text, label, night_limit, stop_at), daemon=True, name="companies").start()
+    threading.Thread(target=_run, args=(kind, text, label, night_limit, stop_at, force_collect), daemon=True, name="companies").start()
     return True
 
 
@@ -595,7 +596,7 @@ def too_late(progress: dict) -> bool:
 
 
 def _run(kind: str = "run", text: str = "", label: str = "", night_limit: bool = True,
-         stop_at: float | None = None) -> None:
+         stop_at: float | None = None, force_collect: bool = False) -> None:
     from . import company_import  # it imports this module
     started = time.monotonic()
     _progress["stop_at"] = stop_at or (night_deadline() if night_limit else None)
@@ -630,7 +631,7 @@ def _run(kind: str = "run", text: str = "", label: str = "", night_limit: bool =
                     company_import.find_lookalikes(_progress)
                 except company_import.ImportProblem as e:
                     log.info("Look-alikes skipped: %s", e)
-            if collect_due():
+            if force_collect or collect_due():
                 _collect()
             else:  # the other nights: the queue only (new companies, the ones left from the day before)
                 log.info("Companies: no collecting tonight (all areas are collected again in the night to %s)",

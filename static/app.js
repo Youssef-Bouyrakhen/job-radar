@@ -3,7 +3,9 @@
    If GET jobs fails (file opened directly), the page runs on demo data.
    ========================================================= */
 // Must match VERSION in app/__init__.py. If they differ, an old Job Radar is still running.
-const DASHBOARD_VERSION = '12.0';
+// The version of the files on disk, put into the page by the server (main.py dashboard()); compared with the
+// version the running server reports (/api/info). Empty (page opened without the server): no check.
+const DASHBOARD_VERSION = document.querySelector('meta[name="jr-version"]')?.content || '';
 
 const ENDPOINTS = {
   jobs:        () => ['GET',    '/api/jobs?view=everything'],
@@ -34,12 +36,20 @@ const ENDPOINTS = {
   coDiagnose:  id => ['POST',   `/api/companies/${id}/diagnose`],   // look at its page again now
   coWrong:     id => ['POST',   `/api/companies/${id}/wrong`],      // { wrong: true|false }
   runDiagnosis:() => ['POST',   '/api/diagnosis/run'],
+  initiativ:   () => ['GET',    '/api/initiativ'],          // Initiativ email drafts: counters, templates, last run
+  iniSwitches: () => ['POST',   '/api/initiativ/switches'], // { on, per_day, sender_name }
+  iniTemplate: k  => ['PUT',    `/api/initiativ/templates/${k}`],  // { text }
+  iniPreview:  () => ['POST',   '/api/initiativ/preview'],  // { n } -> { drafts }
+  iniTest:     () => ['POST',   '/api/initiativ/test'],     // { n }: drafts to yourself
+  iniRun:      () => ['POST',   '/api/initiativ/run'],      // { n }: real drafts now
+  iniCheck:    () => ['POST',   '/api/initiativ/check'],
   coverage:    () => ['GET',    '/api/coverage'],           // -> { towns, covered_percent, per_night, progress }
   timeline:    () => ['GET',    '/api/timeline'],           // -> { days, running, last, hourly, auto, deploy }
-  applications:() => ['GET',    '/api/applications'],       // -> { jobs: {id: {timeline, category}}, stats, review, ... }
+  applications:() => ['GET',    '/api/applications'],       // -> { applications, stats, review, jobs: {id: {timeline}}, ... }
   appCheck:    () => ['POST',   '/api/applications/check'],
   assignEmail: id => ['POST',   `/api/applications/emails/${id}/assign`],   // { job_id|null, kind }
-  unassignEmail:id => ['POST',  `/api/applications/emails/${id}/unassign`]
+  unassignEmail:id => ['POST',  `/api/applications/emails/${id}/unassign`],
+  changeApp:   id => ['POST',   `/api/applications/${id}`]   // { status } or { hidden }
 };
 async function api(name, arg, body) {
   const [method, url] = ENDPOINTS[name](arg);
@@ -326,7 +336,7 @@ function renderNav() {
   }).join('');
   $('#navViews').innerHTML = html;
   // On phones the sidebar is hidden: the app pages go into the same scrolling row
-  const pages = [['links', 'Watched links'], ['companies', 'Companies'], ['coverage', 'Coverage'], ['timeline', 'Timeline'], ['settings', 'Settings']]
+  const pages = [['apps', 'Applications'], ['links', 'Watched links'], ['companies', 'Companies'], ['coverage', 'Coverage'], ['timeline', 'Timeline'], ['settings', 'Settings']]
     .map(([tab, label]) => `<button type="button" class="nav-item" data-tab="${tab}"><span class="nav-label">${label}</span></button>`).join('');
   $('#mobileViews').innerHTML = html + pages;
   $('#linksCount').textContent = state.loading ? '–' : links.length;
@@ -374,7 +384,7 @@ function renderHead() {
   const timeOn = state.time !== 'any' && state.view !== 'must'; // Must apply ignores the time filter
   if (state.source !== 'all' || timeOn) parts.push(`<span>${[state.source !== 'all' ? SOURCES[state.source].label : null, timeOn ? TIMES[state.time].toLowerCase() : null].filter(Boolean).join(', ')}</span>`);
   if (state.demo) parts.push('<span class="demo-note">Demo data, backend not connected</span>');
-  if (!state.demo && state.version !== DASHBOARD_VERSION) parts.push(`<span class="demo-note">An old Job Radar is still running (server ${esc(state.version)}, page ${DASHBOARD_VERSION}). Close the black Job Radar window, then double-click start.bat again.</span>`);
+  if (!state.demo && DASHBOARD_VERSION && state.version !== DASHBOARD_VERSION) parts.push(`<span class="demo-note">An old Job Radar is still running (server ${esc(state.version)}, page ${DASHBOARD_VERSION}). Close the black Job Radar window, then double-click start.bat again.</span>`);
   el.innerHTML = parts.join('');
 }
 
@@ -519,7 +529,7 @@ function renderLinks() {
 function aiProviderRow(s, row, chip) {
   const p = s.ai_provider;
   if (!p) return row('AI provider', 'Scores every job that passes the filter', chip(s.gemini_model || '–'));
-  const order = p.providers.map(x => x.name + (x.status === 'limit' ? ` (limit reached, resets at ${clockOf(x.back_at)})`
+  const order = p.providers.filter(x => !x.only_for).map(x => x.name + (x.status === 'limit' ? ` (limit reached, resets at ${clockOf(x.back_at)})`
     : x.status === 'empty' ? ` (used up today, resets at ${clockOf(x.back_at)})` : x.paused_minutes ? ` (paused ${x.paused_minutes} min)` : '')).join(' → ');
   return row('AI provider', `Scores every job that passes the filter, up to 10 per request · order: ${esc(order)}`,
     p.active ? chip(`${p.active} · ${p.model}`, 'chip--good') : chip(p.all_empty ? `All at their limit, first back at ${clockOf(p.next_back_at)}` : 'All paused, back in a few minutes', 'chip--maybe'));
@@ -556,6 +566,7 @@ function renderAiBar() {
   bar.hidden = state.demo || !ai;
   if (bar.hidden) return;
   const boxes = ai.providers.map(p => {
+    if (p.budget === null) return aiBoxNoLimit(p);
     const red = p.status === 'limit' || p.status === 'empty';
     const pct = red ? 100 : Math.min(100, Math.round(100 * p.used / Math.max(1, p.budget)));
     const tag = p.status === 'paused' && p.paused_minutes ? `Paused ${p.paused_minutes} min` : AI_STATUS[p.status];
@@ -582,7 +593,9 @@ function renderAiBar() {
   const uses = Object.entries(AI_USES).map(([key, label]) => {
     const u = (ai.used_for || {})[key] || { requests: 0, providers: {} };
     const by = Object.entries(u.providers).map(([name, x]) => `${name} ${x}`).join(', ');
-    return `<span title="${esc(`${label}: ${u.requests} request${u.requests === 1 ? '' : 's'} today${by ? ` (${by})` : ''}`)}">${esc(label)} <b>${u.requests}</b></span>`;
+    // the AI only used for some work (NVIDIA: careers pages) shown right there: "careers pages 12 (NVIDIA 10)"
+    const own = ai.providers.filter(x => x.only_for && u.providers[x.name]).map(x => `${x.name} ${u.providers[x.name]}`).join(', ');
+    return `<span title="${esc(`${label}: ${u.requests} request${u.requests === 1 ? '' : 's'} today${by ? ` (${by})` : ''}`)}">${esc(label)} <b>${u.requests}</b>${own ? ` (${esc(own)})` : ''}</span>`;
   }).join(' · ');
   const sh = ai.shares || {};
   bar.classList.toggle('is-empty', !!ai.all_empty);
@@ -590,6 +603,22 @@ function renderAiBar() {
       <span class="ai-waiting${waiting ? ' has-waiting' : ''}">${waiting} job${waiting === 1 ? '' : 's'} waiting for a score</span>
       <span class="ai-uses" title="${esc(`Each AI's day: scoring keeps ${sh.score_reserved}% for itself, careers pages may use at most ${sh.careers}%, categories and the rest ${sh.other}%`)}">AI used for today: ${uses}</span>
       ${ai.all_empty ? `<span class="ai-reset">All AI limits reached · first back at ${esc(clockOf(ai.next_back_at))}</span>` : ''}
+    </div>`;
+}
+
+// An AI without a known daily limit (NVIDIA, careers pages only): today's requests and its status, no meter
+function aiBoxNoLimit(p) {
+  const tag = p.status === 'paused' && p.rate_limited ? 'Rate limited'
+    : p.status === 'paused' && p.paused_minutes ? `Paused ${p.paused_minutes} min` : AI_STATUS[p.status];
+  const when = p.status === 'paused' || p.status === 'limit' ? `back at ${clockOf(p.back_at)}` : 'careers pages only';
+  const title = `${p.used} request${p.used === 1 ? '' : 's'} today (since midnight German time, counted by Job Radar). `
+    + `Only reads careers pages, before the other AIs; no known daily limit, at most 30 requests a minute. `
+    + `Rate limited or busy: the other AIs take over.`;
+  return `<div class="ai-box ai-box--${p.status === 'limit' ? 'empty' : p.status}" title="${esc(p.name)} · ${esc(p.model)}: ${esc(title)}">
+      <div class="ai-box-head"><span class="ai-name">${esc(p.name)}</span><span class="ai-tag">${esc(tag)}</span></div>
+      <div class="ai-count">${p.used} today<span class="ai-sub">no daily limit</span></div>
+      <div class="ai-meter"><span style="width:0%"></span></div>
+      <div class="ai-when">${esc(when)}</div>
     </div>`;
 }
 
@@ -654,7 +683,7 @@ function applyInfo(i) {
   if (i.server_time) clockSkew = new Date(i.server_time) - Date.now();  // PC clock off? use the server's
   // A mismatch is usually an old page still in the browser: reload once before warning
   let reloaded = null; try { reloaded = sessionStorage.getItem('jr-reloaded'); } catch (e) {}
-  if (i.version && i.version !== DASHBOARD_VERSION && reloaded !== i.version) {
+  if (i.version && DASHBOARD_VERSION && i.version !== DASHBOARD_VERSION && reloaded !== i.version) {
     sessionSet('jr-reloaded', i.version); location.reload();
   }
 }
@@ -1077,6 +1106,7 @@ function coRow(c) {
   const reason = c.status === 'initiativ' && c.initiativ_reason ? `<div class="co-reason">${esc(c.initiativ_reason)}</div>` : '';
   const email = c.contact_email ? `<div class="co-sub">Email: <a href="mailto:${esc(c.contact_email)}">${esc(c.contact_email)}</a>${c.contact_url ? ` · <a href="${esc(c.contact_url)}" target="_blank" rel="noopener">source</a>` : ''}</div>` : '';
   const statusNote = c.status_note ? `<div class="co-note" title="${esc(c.status_note)}">${esc(c.status_note)}</div>` : '';
+  const draft = c.draft ? `<div class="co-sub ini-co ini-co--${c.draft.state}">${INI_STATE[c.draft.state]}${c.draft.to ? ` · ${esc(c.draft.to)}` : ''} · ${fmtShort(c.draft.at)}</div>` : '';
   const options = Object.entries(CO_STATUS).filter(([k]) => k !== 'all')
     .map(([k, label]) => `<option value="${k}"${c.status === k ? ' selected' : ''}>${label}</option>`).join('');
   const catOptions = (c.category ? '' : '<option value="" selected>Not sorted yet</option>') + Object.entries(CO_CATEGORY)
@@ -1084,7 +1114,7 @@ function coRow(c) {
   const catWhy = c.category ? `Category ${CO_CATEGORY_FROM[c.category_from] || ''}. Change it if it's wrong.` : 'Not sorted yet: the AI sorts a few hundred companies a day';
   return `<div class="co-row" data-company="${c.id}">
     <div class="co-who"><div class="co-name">${fitTag}${esc(c.name)}${size}${auto}</div><div class="co-sub">${c.origin_note ? `<span class="co-origin">${esc(c.origin_note)}</span> · ` : ''}${c.linkedin_url ? `<a href="${esc(c.linkedin_url)}" target="_blank" rel="noopener">LinkedIn</a> · ` : ''}${site}${c.fit_reasons ? ` · ${esc(c.fit_reasons)}` : ''}</div>
-      <div class="co-sub co-sub-extra">${esc(place)}</div>${reason}${email}</div>
+      <div class="co-sub co-sub-extra">${esc(place)}</div>${reason}${email}${draft}</div>
     <div class="co-city">${esc(place || '–')}</div>
     <div class="co-tags-cell"><div class="co-tags">${coSources(c)}</div></div>
     <div class="co-career">${coCareer(c)}</div>
@@ -1093,6 +1123,111 @@ function coRow(c) {
     ${coSeenOpen.has(c.id) ? `<div class="co-seen">${coSeenHtml(c)}</div>` : ''}
   </div>`;
 }
+
+/* Initiativ email drafts (initiativ_mail.py): every morning Gmail drafts for Initiativ companies; you send them.
+   Shown above the list when the Initiativ box is chosen. Not redrawn by the companies' live progress (keeps your typing). */
+const INI_STATE = { draft: 'Draft ready in Gmail', sent: 'Initiativ email sent', deleted: 'Draft deleted in Gmail',
+                    no_email: 'No email address found', failed: 'Draft failed' };
+let ini = null, iniPreview = null, iniMsg = '', iniBusy = '';
+const iniOpen = new Set();
+
+function showInitiativ() {
+  const box = $('#initiativPanel'), show = state.coStatus === 'initiativ' && !state.demo;
+  box.hidden = !show;
+  if (show && !ini) loadInitiativ();
+}
+async function loadInitiativ() {
+  try { ini = await api('initiativ'); } catch (e) { ini = { error: 'Could not load the Initiativ emails: ' + e.message }; }
+  renderInitiativ();
+}
+const iniName = k => ini.templates.find(t => t.key === k)?.name || k;
+const iniMade = r => r.error ? r.error : `${plural(r.made.length, 'draft')} made in Gmail${r.made.length ? ': ' + r.made.map(m => m.name).join(', ') : ''}`
+  + (r.no_email ? ` · ${r.no_email} skipped (no address)` : '') + (r.not_ready?.length ? ` · ${r.not_ready.join(' · ')}` : '');
+
+function renderInitiativ() {
+  const box = $('#initiativPanel');
+  if (!ini) return;
+  if (ini.error) { box.innerHTML = `<div class="demo-note">${esc(ini.error)}</div>`; return; }
+  const last = ini.last || {}, busy = !!iniBusy || ini.running, hour = String(ini.hour).padStart(2, '0');
+  const lastText = !last.finished_at ? 'No drafts made yet'
+    : `${last.test ? 'Test' : last.why === 'daily' ? 'Daily run' : 'By hand'} ${fmtShort(last.finished_at)} ${fmtTime(last.finished_at)}: ${esc(iniMade(last))}`;
+  const mix = Object.entries(ini.today_mix).filter(([, n]) => n).map(([k, n]) => `${n}× ${iniName(k)}`).join(', ');
+  const tpl = t => `<details class="ini-tpl" data-ini-key="${t.key}"${iniOpen.has(t.key) ? ' open' : ''}>
+      <summary><strong>${esc(t.name)}</strong><span class="ini-muted">${t.categories.map(k => CO_CATEGORY[k]).join(', ')} · ${t.left} left</span>
+        ${t.paused ? '<span class="status-tag" title="paused_templates in config.yaml: these companies get no drafts">paused</span>'
+          : t.missing ? `<span class="status-tag status-tag--overdue">${esc(t.missing)} missing</span>` : '<span class="status-tag">ready</span>'}</summary>
+      <textarea class="add-input ini-text" rows="11" aria-label="Text of ${esc(t.name)}" placeholder="The email text. {{company}} becomes the company's name.">${esc(t.text)}</textarea>
+      <div class="ini-row"><button type="button" class="btn btn--sm" data-ini="template" data-key="${t.key}">Save text</button>
+        <label class="btn btn--sm ini-file">${t.cv ? 'Replace CV' : 'Upload CV'} (PDF)<input type="file" accept="application/pdf" data-ini-cv="${t.key}" hidden></label>
+        <span class="ini-muted">${t.cv ? `CV: ${Math.round(t.cv / 1024)} KB` : 'No CV yet'}</span></div></details>`;
+  const mail = d => d.skipped ? `<div class="ini-mail ini-muted"><strong>${esc(d.name)}</strong>: skipped, ${esc(d.skipped)}</div>`
+    : `<div class="ini-mail"><div><strong>${esc(d.name)}</strong> · ${esc(iniName(d.template))} · ${esc(CO_CATEGORY[d.category] || 'Not sorted yet')}</div>
+        <div class="ini-muted">To: ${d.to ? `${esc(d.to)} (from its ${esc(d.found_in)})` : '<em>empty, you fill it in</em>'} · Subject: ${esc(d.subject)} · CV: ${esc(d.cv || 'missing!')}</div>
+        <pre class="ini-body">${esc(d.body)}</pre></div>`;
+  const prev = !iniPreview ? '' : `<div class="ini-preview">${iniPreview.length ? iniPreview.map(mail).join('') : '<div class="ini-muted">No company left (or no template ready).</div>'}</div>`;
+  const recent = (ini.recent || []).slice(0, 12).map(d => `<li><span class="ini-co--${d.state}">${d.test ? 'Test · ' : ''}${INI_STATE[d.state]}</span> · ${esc(d.name)}${d.to_email ? ` · ${esc(d.to_email)}` : ''} · ${fmtShort(d.sent_at || d.created_at)}</li>`).join('');
+  box.innerHTML = `<div class="ini-top">
+      <div class="ini-title">Initiativ emails<span class="ini-muted">Gmail drafts: you check and send each one yourself. No AI.</span></div>
+      <div class="ini-counts"><div><strong>${ini.ready_today}</strong><span>Initiativ drafts ready today</span></div>
+        <div><strong>${ini.sent}</strong><span>Initiativ sent so far</span></div>
+        <div><strong>${ini.waiting}</strong><span>waiting in Gmail</span></div>
+        <div title="Drafts you deleted in Gmail, and companies without an email address. They get no new draft."><strong>${ini.deleted + ini.no_email}</strong><span>deleted / no address</span></div></div></div>
+    <div class="ini-row">
+      <button type="button" class="switch${ini.on ? ' is-on' : ''}" data-ini="switch" role="switch" aria-checked="${ini.on}" aria-label="Daily drafts"${busy ? ' disabled' : ''}></button>
+      <span>Daily at ${hour}:00, up to</span>
+      <input class="add-input ini-num" id="iniPerDay" type="number" min="1" max="60" value="${ini.per_day}" aria-label="Drafts per day">
+      <span>a day · sender</span>
+      <input class="add-input ini-name" id="iniSender" type="text" maxlength="80" value="${esc(ini.sender_name)}" placeholder="Your name" aria-label="Your name as the sender">
+      <button type="button" class="btn btn--sm" data-ini="save"${busy ? ' disabled' : ''}>Save</button>
+      <span class="ini-muted">${ini.on ? (mix ? `Next mix: ${mix}` : '') : 'Off: no drafts are made by themselves'}</span></div>
+    ${ini.templates.map(tpl).join('')}
+    <div class="ini-row">
+      <button type="button" class="btn btn--sm" data-ini="preview"${busy ? ' disabled' : ''}>${iniBusy === 'preview' ? 'Looking for addresses…' : 'Preview the next 5'}</button>
+      <button type="button" class="btn btn--sm" data-ini="test"${busy ? ' disabled' : ''} title="3 drafts addressed to YOU, subject [TEST …]. The companies stay on the list">${iniBusy === 'test' ? 'Making…' : '3 test drafts to me'}</button>
+      <button type="button" class="btn btn--sm" data-ini="run"${busy ? ' disabled' : ''} title="Real drafts to the companies, now (still only drafts: you send them)">${iniBusy === 'run' ? 'Making…' : `Make ${ini.per_day} drafts now`}</button>
+      <button type="button" class="btn btn--sm" data-ini="check"${busy ? ' disabled' : ''}>Check sent now</button></div>
+    ${iniMsg ? `<div class="ini-msg">${esc(iniMsg)}</div>` : ''}
+    <div class="ini-muted">${lastText}</div>
+    ${prev}
+    ${recent ? `<ul class="ini-recent">${recent}</ul>` : ''}`;
+}
+$('#initiativPanel').addEventListener('toggle', e => {
+  const d = e.target.closest?.('[data-ini-key]');
+  if (d) d.open ? iniOpen.add(d.dataset.iniKey) : iniOpen.delete(d.dataset.iniKey);
+}, true);
+$('#initiativPanel').addEventListener('change', async e => {
+  const input = e.target.closest('[data-ini-cv]'); if (!input || !input.files[0]) return;
+  try {  // the PDF itself as the body (no form)
+    const res = await fetch(`/api/initiativ/cv/${input.dataset.iniCv}`, { method: 'PUT', headers: { 'Content-Type': 'application/pdf' }, body: input.files[0] });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    toast('CV saved');
+  } catch (x) { toast('Could not save the CV: ' + x.message); }
+  loadInitiativ();
+});
+$('#initiativPanel').addEventListener('click', async e => {
+  const b = e.target.closest('[data-ini]'); if (!b) return;
+  const act = b.dataset.ini;
+  const go = async (name, body, done) => {
+    iniBusy = act; iniMsg = ''; renderInitiativ();
+    try { iniMsg = done(await api(name, b.dataset.key, body)) || ''; }
+    catch (x) { iniMsg = 'Failed: ' + x.message; }
+    iniBusy = ''; await loadInitiativ();
+    if (act === 'run' || act === 'check') loadCompanies();  // the "Draft ready" / "sent" lines in the list
+  };
+  if (act === 'switch') return go('iniSwitches', { on: !ini.on }, r => r.on ? `Daily drafts on: every day at ${String(r.hour).padStart(2, '0')}:00` : 'Daily drafts off');
+  if (act === 'save') return go('iniSwitches', { per_day: +$('#iniPerDay').value || ini.per_day, sender_name: $('#iniSender').value }, () => 'Saved');
+  if (act === 'template') return go('iniTemplate', { text: b.closest('details').querySelector('textarea').value }, () => 'Text saved');
+  if (act === 'preview') return go('iniPreview', { n: 5 }, r => { iniPreview = r.drafts; });
+  if (act === 'test') return go('iniTest', { n: 3 }, iniMade);
+  if (act === 'run') {
+    if (b.dataset.confirm !== '1') {
+      b.dataset.confirm = '1'; b.textContent = `Really make ${ini.per_day} drafts to the companies?`;
+      setTimeout(() => { if (b.isConnected && !iniBusy) renderInitiativ(); }, 4000); return;
+    }
+    return go('iniRun', { n: ini.per_day }, iniMade);
+  }
+  if (act === 'check') return go('iniCheck', null, r => r.error ? r.error : `${r.sent} newly sent, ${r.deleted} deleted`);
+});
 
 // "LinkedIn: 12 new companies this week, last search ..." (linkedin.py); a block is never hidden
 function linkedinLine(l) {
@@ -1141,6 +1276,7 @@ function renderCompanies() {
   }).join('');
 
   renderDiagBoxes();
+  showInitiativ();
   const list = companies.filter(c => coMatches(c))
     .sort((a, b) => (b.fit_score ?? -1) - (a.fit_score ?? -1) || coRank(a) - coRank(b) || coTotal(b) - coTotal(a) || a.name.localeCompare(b.name));
   $('#companyList').innerHTML = !coLoaded ? '<div class="empty"><p class="empty-text">Loading…</p></div>'
@@ -1385,13 +1521,14 @@ const TL_LANES = [  // one row per kind of work; color = a CSS token
   { key: 'hourly',   label: 'Every hour',      color: '--tl-hourly' },
   { key: 'auto',     label: 'Auto-resume',     color: '--tl-auto',  sub: 'every 5 min, if work is left' },
   { key: 'night',    color: '--tl-night' },
+  { key: 'drafts',   color: '--tl-drafts' },
   { key: 'linkedin', color: '--tl-linkedin' },
   { key: 'midday',   color: '--tl-busy',    off: 'No 13:00 read on this day' },
   { key: 'evening',  color: '--tl-evening' },
   { key: 'ai',       label: 'AI limits reset', color: '--tl-ai',    sub: 'new free AI day' },
   { key: 'deploy',   label: "Don't deploy",    color: '--tl-stop',  sub: 'a restart would stop a run' }
 ];
-const FIXED_RUNS = ['night', 'linkedin', 'midday', 'evening'];
+const FIXED_RUNS = ['night', 'drafts', 'linkedin', 'midday', 'evening'];
 const hmText = m => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.floor(m % 60)).padStart(2, '0')}`;
 const pct = m => (Math.max(0, Math.min(1440, m)) / 1440 * 100).toFixed(3) + '%';
 const capital = s => s.replace(/^./, c => c.toUpperCase());
@@ -1425,6 +1562,7 @@ function tlLaneHead(L, days) {
   const ev = days.flatMap(d => d.events).find(e => e.key === L.key);
   if (L.key === 'hourly') return { label: L.label, sub: `${tl.hourly.links} watched links, Arbeitsagentur, Gmail` };
   if (L.key === 'night') return ev && { label: `${hmText(ev.minute)} night run`, sub: 'the queue; all areas on Sundays' };
+  if (L.key === 'drafts') return ev && { label: `${hmText(ev.minute)} Initiativ drafts`, sub: 'Gmail drafts, you send them' };
   if (L.key === 'linkedin') return ev && { label: `${hmText(ev.minute)} LinkedIn`, sub: 'new hiring companies' };
   if (L.key === 'midday') return ev && { label: capital(ev.label), sub: 'busy companies, Mon–Fri' };
   if (L.key === 'evening') return ev && { label: capital(ev.label), sub: 'busy daily, quiet every few days' };
@@ -1441,7 +1579,7 @@ function tlLane(L, day, isToday) {
   } else if (L.key === 'auto') {
     // Auto-resume goes on all day, except a while before each fixed run until it is done
     let from = 0;
-    day.events.map(e => e.auto_pause).sort((a, b) => a[0] - b[0]).forEach(([a, b]) => {
+    day.events.map(e => e.auto_pause).filter(Boolean).sort((a, b) => a[0] - b[0]).forEach(([a, b]) => {
       html += blk(from, a, false, `${hmText(from)}–${hmText(a)}`); from = Math.max(from, b);
     });
     html += blk(from, 1440, false, `${hmText(from)}–24:00`);
@@ -1572,7 +1710,8 @@ $('#tlDays').addEventListener('click', e => { const b = e.target.closest('[data-
 
 function setTab(tab) {
   state.tab = tab;
-  ['jobs', 'links', 'companies', 'coverage', 'timeline', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== tab);
+  ['jobs', 'apps', 'links', 'companies', 'coverage', 'timeline', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== tab);
+  if (tab === 'apps') { renderTracker(); if (!state.loading) loadApps(true); }
   if (tab === 'links' && !state.loading) loadSuggestions();
   if (tab === 'companies' && !state.loading) loadCompanies();
   if (tab === 'coverage' && !state.loading) loadCoverage();
@@ -1585,36 +1724,33 @@ function setTab(tab) {
   renderNav();
 }
 
-/* APPLICATION TRACKING (Applied page)
-   Replies in the Gmail label "Bewerbungen" move an applied job on: Confirmed / Test / Interview / Rejected.
-   Emails the backend can't match for sure wait in "Needs review" until you pick the job. */
+/* APPLICATION TRACKER (Applications page, GET /api/applications)
+   Built by the backend from Gmail: the applications you emailed (Sent), portal confirmations and jobs you
+   marked Applied. Replies move them on; only unclear emails wait in "Needs review". */
 const APP_STATUS = {
-  confirmation: 'Confirmed', test: 'Test', interview: 'Interview', rejection: 'Rejected', other: 'Other'
+  sent: 'Sent', confirmation: 'Confirmed', reply: 'Answered', test: 'Test', interview: 'Interview', offer: 'Offer',
+  rejection: 'Rejected', other: 'Other'
 };
-const appTag = st => st ? `<span class="app-tag app-tag--${esc(st)}">${APP_STATUS[st] || esc(st)}</span>` : '<span class="app-tag" title="No reply yet">Applied</span>';
+const appTag = st => st && st !== 'sent' ? `<span class="app-tag app-tag--${esc(st)}">${APP_STATUS[st] || esc(st)}</span>` : '<span class="app-tag" title="No answer yet">Applied</span>';
 const appliedJobs = () => jobs.filter(j => j.status === 'applied');
+const tr = { type: 'all', status: '', query: '', open: null };
 
 async function loadApps(quiet) {
   if (state.demo) return;
   try { apps = await api('applications'); } catch (e) { if (!quiet) apps = null; return; }
-  if (state.view === 'applied' && state.tab === 'jobs') { renderHead(); renderAppPanel(); if (!state.openId || !quiet) renderList(); }
+  $('#appsCount').textContent = apps.stats?.all?.sent ?? '–';
+  if (state.view === 'applied' && state.tab === 'jobs') { renderHead(); if (!state.openId || !quiet) renderList(); }
+  if (state.tab === 'apps') renderTracker();
 }
 
-function statsText(s) {
-  const parts = [`<b>${s.applied}</b> applied`, `<b>${s.rejection}</b> rejected`, `<b>${s.interview}</b> interview${s.interview === 1 ? '' : 's'}`];
-  if (s.test) parts.push(`<b>${s.test}</b> test${s.test === 1 ? '' : 's'}`);
-  return parts.join(' · ');
-}
 // "X applied · Y rejected · Z interviews", counted from the jobs on your Applied list
 function appSummary() {
   const list = appliedJobs();
-  if (!list.length) return ['<span>No applications yet</span>'];
+  const link = '<span>All your applications, also the emailed ones: <button type="button" class="link-btn" data-tab-go="apps">Applications page</button></span>';
+  if (!list.length) return ['<span>No jobs marked Applied yet</span>', link];
   const n = st => list.filter(j => j.app_status === st).length;
-  const parts = [`<span>${statsText({ applied: list.length, rejection: n('rejection'), interview: n('interview'), test: n('test') })}</span>`];
-  const waiting = list.filter(j => !j.app_status || j.app_status === 'confirmation').length;
-  if (waiting) parts.push(`<span>${waiting} waiting for an answer</span>`);
-  if (apps?.review?.length) parts.push(`<span class="demo-note">${plural(apps.review.length, 'email')} to review</span>`);
-  return parts;
+  const iv = n('interview') + n('offer');
+  return [`<span><b>${list.length}</b> applied · <b>${n('rejection')}</b> rejected · <b>${iv}</b> interview${iv === 1 ? '' : 's'}</span>`, link];
 }
 
 function timeline(j) {
@@ -1623,26 +1759,87 @@ function timeline(j) {
     .concat((info?.timeline || []).map(t => `<li><span class="tl-date">${t.at ? fmtShort(t.at) : '–'}</span>${appTag(t.kind)}
       <span class="tl-subj">${esc(t.subject || '(no subject)')}</span><span class="tl-from">${esc(t.sender || '')}${t.by === 'ai' ? ' · sorted by AI' : t.by === 'you' ? ' · by you' : ''}</span>
       <button type="button" class="link-btn" data-unassign="${esc(t.gmail_id)}" title="This email is about another application: move it to Needs review">Not this job</button></li>`));
-  const cat = info?.category_label ? ` · ${esc(info.category_label)}` : '';
-  return `<div class="details-reason"><span class="details-label">Timeline${cat}</span><ol class="timeline">${items.join('')}</ol>
-    ${info?.timeline?.length ? '' : `<span class="list-sub">No reply yet in your Gmail label "${esc(apps?.label || 'Bewerbungen')}".</span>`}</div>`;
+  return `<div class="details-reason"><span class="details-label">Timeline</span><ol class="timeline">${items.join('')}</ol>
+    ${info?.timeline?.length ? '' : '<span class="list-sub">No reply found in Gmail yet.</span>'}</div>`;
 }
 
-function renderAppPanel() {
-  const el = $('#appPanel');
-  const show = state.tab === 'jobs' && state.view === 'applied' && !state.loading && !state.demo && !!apps;
-  el.hidden = !show;
-  if (!show) return;
-  const labels = apps.category_labels || {};
-  const cats = Object.keys(labels).filter(k => apps.stats?.[k]?.applied);
-  const catLine = cats.length > 1 || (cats.length === 1 && cats[0] !== 'other')
-    ? `<div class="app-cats" aria-label="Per category">${cats.map(k => `<span>${esc(labels[k])}: ${statsText(apps.stats[k])}</span>`).join('')}</div>` : '';
-  const last = apps.last?.at ? `Emails checked ${fmtTime(apps.last.at)}${apps.last.ok === false ? ': ' + esc(apps.last.note || 'failed') : ''}`
-    : apps.enabled ? `Label "${esc(apps.label)}" is checked every few minutes` : 'Off: no Gmail login in .env';
-  const options = sel => ['<option value="">Pick the job…</option>'].concat(appliedJobs()
-    .sort((a, b) => (a.company || '').localeCompare(b.company || ''))
-    .map(j => `<option value="${j.id}"${String(j.id) === String(sel) ? ' selected' : ''}>${esc(((j.company || '?') + ' · ' + j.title).slice(0, 90))}</option>`)).join('');
-  const kinds = k => Object.entries(APP_STATUS).map(([v, l]) => `<option value="${v}"${v === k ? ' selected' : ''}>${l}</option>`).join('');
+// Needs review and the counts moved to the Applications page
+function renderAppPanel() { $('#appPanel').hidden = true; }
+
+async function unassignEmail(id) {
+  try { apps = await api('unassignEmail', id); } catch (e) { return toast('Could not save: ' + e.message); }
+  await refreshQuiet(); renderHead(); renderList(); renderTracker();
+  toast('Moved to Needs review');
+}
+
+function trShown() {
+  const q = tr.query.trim().toLowerCase();
+  return (apps?.applications || []).filter(a => (tr.type === 'all' || a.kind === tr.type)
+    && (!tr.status || (tr.status === 'waiting' ? !a.answered : a.shown === tr.status))
+    && (!q || [a.company, a.title, a.contact].some(v => (v || '').toLowerCase().includes(q))));
+}
+
+function renderTracker() {
+  if (state.tab !== 'apps') return;
+  if (state.demo) { $('#trCards').innerHTML = '<p class="co-sub">Demo data: connect the backend to see your applications.</p>'; return; }
+  if (!apps?.stats) { $('#trCards').innerHTML = '<p class="co-sub">Loading…</p>'; return; }
+  const s = apps.stats[tr.type] || apps.stats.all;
+  const last = apps.last?.at ? `Gmail checked ${fmtTime(apps.last.at)}${apps.last.ok === false ? ': ' + esc(apps.last.note || 'failed') : ''}`
+    : apps.enabled ? 'Gmail is checked every few minutes' : 'Off: no Gmail login in .env';
+  $('#trSummary').innerHTML = `<span>Built from your Gmail by itself</span><span>${last}</span>`;
+  const counter = (n, label, cls) => `<div class="tr-counter${cls ? ' tr-counter--' + cls : ''}"><div class="tr-num">${n}</div><div class="tr-label">${label}</div></div>`;
+  $('#trCounters').innerHTML = counter(s.sent, 'Sent') + counter(s.interviews, 'Interview', 'interview')
+    + counter(s.offers, 'Offer', 'offer') + counter(s.rejected, 'Rejected', 'rejection');
+  // One bar: what came back (interview, offer, other answer, rejected); the empty rest is still waiting
+  const other = Math.max(0, s.answered - s.interviews - s.offers - s.rejected);
+  const pct = n => s.sent ? 100 * n / s.sent : 0;
+  const seg = (n, cls, label) => n ? `<span class="tr-bar-seg tr-bar-seg--${cls}" style="width:${pct(n)}%" title="${label}: ${n}"></span>` : '';
+  $('#trProgress').innerHTML = `<div class="tr-bar" role="img" aria-label="${s.answered} of ${s.sent} answered">
+      ${seg(s.interviews, 'interview', 'Interview')}${seg(s.offers, 'offer', 'Offer')}${seg(other, 'reply', 'Answered')}${seg(s.rejected, 'rejection', 'Rejected')}</div>
+    <div class="tr-bar-text"><span><b>${s.rate}%</b> answered (${s.answered} of ${s.sent})</span><span>${s.waiting} waiting for an answer</span></div>`;
+  const typeLine = (k, l) => {
+    const t = apps.stats[k];
+    return `<div class="tr-type"><div class="tr-type-name">${l}</div><div class="tr-type-nums">
+      <span><b>${t.sent}</b> sent</span><span><b>${t.answered}</b> answered</span><span><b>${t.rate}%</b> response rate</span>
+      <span><b>${t.rejected}</b> rejected</span><span><b>${t.interviews}</b> interview${t.interviews === 1 ? '' : 's'}</span>${t.offers ? `<span><b>${t.offers}</b> offer${t.offers === 1 ? '' : 's'}</span>` : ''}</div></div>`;
+  };
+  $('#trTypes').innerHTML = typeLine('job', 'Job ad') + typeLine('initiativ', 'Initiativ');
+  $$('#trFilter [data-tr-type]').forEach(b => b.classList.toggle('is-on', b.dataset.trType === tr.type));
+  $('#trStatus').innerHTML = [['', 'Every status'], ['waiting', 'Waiting for an answer']].concat(
+    apps.statuses.map(k => [k, APP_STATUS[k]])).map(([v, l]) => `<option value="${v}"${v === tr.status ? ' selected' : ''}>${l}</option>`).join('');
+  const list = trShown();
+  const source = { sent: 'your email', portal: 'applied on their website', jobradar: 'marked Applied in Job Radar' };
+  const statusOptions = a => [`<option value=""${a.status_you ? '' : ' selected'}>${APP_STATUS[a.status]} · auto</option>`]
+    .concat(apps.statuses.map(k => `<option value="${k}"${a.status_you === k ? ' selected' : ''}>${APP_STATUS[k]}</option>`)).join('');
+  const replies = a => `<ol class="timeline tr-timeline">${a.replies.map(t => `<li><span class="tl-date">${t.at ? fmtShort(t.at) : '–'}</span>${appTag(t.kind)}
+        <span class="tl-subj">${esc(t.subject || '(no subject)')}</span><span class="tl-from">${esc(t.sender || '')}${t.by === 'ai' ? ' · sorted by AI' : t.by === 'you' ? ' · by you' : ''}</span>
+        <button type="button" class="link-btn" data-unassign="${esc(t.gmail_id)}" title="This email is about another application: move it to Needs review">Not this one</button></li>`).join('')
+        || '<li class="list-sub">No reply found in Gmail yet.</li>'}</ol>`;
+  $('#trCards').innerHTML = list.length ? list.map(a => `
+    <article class="tr-card" data-app="${a.id}">
+      <div class="tr-card-top">
+        <div class="tr-card-main">
+          <div class="tr-company">${esc(a.company || '?')} <span class="tr-kind">${apps.types[a.kind]}</span></div>
+          <div class="tr-title">${esc(a.title || (a.kind === 'initiativ' ? 'Initiativbewerbung' : 'Job title unknown'))}</div>
+        </div>
+        <div class="tr-card-side">${appTag(a.shown)}
+          <select class="co-select" data-tr-status aria-label="Status of ${esc(a.company || '')}">${statusOptions(a)}</select></div>
+      </div>
+      <div class="tr-meta"><span>Sent ${a.sent_at ? fmtDate(a.sent_at) : '–'}</span>
+        ${a.contact ? `<span><a href="mailto:${esc(a.contact)}">${esc(a.contact)}</a></span>` : ''}
+        <span>${source[a.source] || ''}</span>
+        <button type="button" class="link-btn" data-tr-open aria-expanded="${tr.open === a.id}">${a.replies.length ? plural(a.replies.length, 'email') : 'No reply yet'}</button>
+        <button type="button" class="link-btn" data-tr-hide title="This is not an application: remove it from the counts">Not an application</button></div>
+      ${tr.open === a.id ? replies(a) : ''}
+    </article>`).join('') : `<p class="co-sub">${apps.applications.length ? 'Nothing matches.' : 'No applications found in Gmail yet. Click "Check Gmail now".'}</p>`;
+  renderReview();
+}
+
+function renderReview() {
+  const options = sel => ['<option value="">Pick the application…</option>', '<option value="-1">New application from this email</option>']
+    .concat([...apps.applications].sort((a, b) => (a.company || '').localeCompare(b.company || ''))
+      .map(a => `<option value="${a.id}"${String(a.id) === String(sel) ? ' selected' : ''}>${esc(((a.company || '?') + ' · ' + (a.title || apps.types[a.kind])).slice(0, 90))}</option>`)).join('');
+  const kinds = k => Object.entries(APP_STATUS).filter(([v]) => v !== 'sent').map(([v, l]) => `<option value="${v}"${v === k ? ' selected' : ''}>${l}</option>`).join('');
   const rows = (apps.review || []).map(r => `
     <div class="list-row" data-review="${esc(r.gmail_id)}">
       <div class="list-main">
@@ -1651,42 +1848,55 @@ function renderAppPanel() {
         ${r.snippet ? `<div class="app-snippet">${esc(r.snippet)}</div>` : ''}
       </div>
       <div class="list-chips">
-        <select class="co-select" data-review-job aria-label="Job this email belongs to">${options(r.guess)}</select>
+        <select class="co-select" data-review-app aria-label="Application this email belongs to">${options(r.guess)}</select>
         <select class="co-select" data-review-kind aria-label="What the email says">${kinds(r.kind)}</select>
         <button type="button" class="btn btn--sm btn--primary" data-review-act="assign">Assign</button>
         <button type="button" class="btn btn--sm" data-review-act="dismiss" title="Not about one of your applications">Dismiss</button>
       </div>
     </div>`).join('');
-  el.innerHTML = `${catLine}
-    <div class="app-review-head"><h2 class="section-title">Needs review${apps.review?.length ? ` (${apps.review.length})` : ''}</h2>
-      <button type="button" class="btn btn--sm" data-app-check>${ICON.mail}Check emails now</button><span class="list-sub" data-app-msg>${last}</span></div>
-    ${rows ? `<div class="list-panel">${rows}</div>` : `<p class="list-sub">Nothing to review: every reply found its job.</p>`}`;
+  $('#trReview').innerHTML = `<div class="app-review-head"><h2 class="section-title">Needs review${apps.review?.length ? ` (${apps.review.length})` : ''}</h2>
+      <span class="list-sub">Only emails the rules and the AI could not sort or match</span></div>
+    ${rows ? `<div class="list-panel tr-review">${rows}</div>` : '<p class="list-sub">Nothing to review: every reply found its application.</p>'}`;
 }
 
-async function unassignEmail(id) {
-  try { apps = await api('unassignEmail', id); } catch (e) { return toast('Could not save: ' + e.message); }
-  await refreshQuiet(); renderHead(); renderAppPanel(); renderList();
-  toast('Moved to Needs review');
-}
-
-$('#appPanel').addEventListener('click', async e => {
-  const check = e.target.closest('[data-app-check]');
-  if (check) {
-    check.disabled = true; $('[data-app-msg]').textContent = 'Reading new emails… (can take a minute)';
-    try { apps = await api('appCheck'); await refreshQuiet(); renderHead(); renderAppPanel(); renderList(); toast('Emails checked'); }
-    catch (err) { check.disabled = false; $('[data-app-msg]').textContent = err.message; }
-    return;
+$('#trCheck').addEventListener('click', async e => {
+  const b = e.currentTarget; b.disabled = true;
+  $('#trSummary').innerHTML = '<span>Reading Sent and new replies… (the first time a minute or two)</span>';
+  try { apps = await api('appCheck'); await refreshQuiet(); toast('Gmail checked'); }
+  catch (err) { toast(err.message); }
+  b.disabled = false; $('#appsCount').textContent = apps?.stats?.all?.sent ?? '–'; renderTracker();
+});
+$('#trSearch').addEventListener('input', e => { tr.query = e.target.value; renderTracker(); });
+$('#trStatus').addEventListener('change', e => { tr.status = e.target.value; renderTracker(); });
+$('#trFilter').addEventListener('click', e => { const b = e.target.closest('[data-tr-type]'); if (b) { tr.type = b.dataset.trType; renderTracker(); } });
+$('#trCards').addEventListener('change', async e => {
+  const sel = e.target.closest('[data-tr-status]'); if (!sel) return;
+  try { apps = await api('changeApp', sel.closest('[data-app]').dataset.app, { status: sel.value }); renderTracker(); toast('Status saved'); }
+  catch (err) { toast('Could not save: ' + err.message); }
+});
+$('#trCards').addEventListener('click', async e => {
+  const un = e.target.closest('[data-unassign]');
+  if (un) return unassignEmail(un.dataset.unassign);
+  const card = e.target.closest('[data-app]'); if (!card) return;
+  const id = Number(card.dataset.app);
+  if (e.target.closest('[data-tr-open]')) { tr.open = tr.open === id ? null : id; return renderTracker(); }
+  if (e.target.closest('[data-tr-hide]')) {
+    try { apps = await api('changeApp', id, { hidden: true }); renderTracker(); }
+    catch (err) { return toast('Could not save: ' + err.message); }
+    toast('Removed from your applications', { fn: async () => { apps = await api('changeApp', id, { hidden: false }); renderTracker(); } });
   }
+});
+$('#trReview').addEventListener('click', async e => {
   const act = e.target.closest('[data-review-act]'); if (!act) return;
   const row = act.closest('[data-review]');
   const assign = act.dataset.reviewAct === 'assign';
-  const jobId = row.querySelector('[data-review-job]').value, kind = row.querySelector('[data-review-kind]').value;
-  if (assign && !jobId) return toast('Pick the job this email belongs to first');
+  const appId = row.querySelector('[data-review-app]').value, kind = row.querySelector('[data-review-kind]').value;
+  if (assign && !appId) return toast('Pick the application this email belongs to first');
   act.disabled = true;
   try {
-    apps = await api('assignEmail', row.dataset.review, assign ? { job_id: Number(jobId), kind } : { job_id: null });
-    await refreshQuiet(); renderHead(); renderAppPanel(); renderList();
-    toast(assign ? 'Email added to the job’s timeline' : 'Email dismissed');
+    apps = await api('assignEmail', row.dataset.review, assign ? { app_id: Number(appId), kind } : { app_id: null });
+    await refreshQuiet(); renderTracker();
+    toast(assign ? 'Email added to the application' : 'Email dismissed');
   } catch (err) { act.disabled = false; toast('Could not save: ' + err.message); }
 });
 
@@ -1696,6 +1906,8 @@ document.addEventListener('click', e => {
   if (v) { state.view = v.dataset.view; state.openId = null; state.focusId = null; setTab('jobs'); render(); v.scrollIntoView?.({ inline: 'nearest', block: 'nearest' }); return; }
   const t = e.target.closest('.nav-item[data-tab]');
   if (t) { setTab(t.dataset.tab); return; }
+  const go = e.target.closest('[data-tab-go]');
+  if (go) { setTab(go.dataset.tabGo); return; }
   if (e.target.closest('[data-tg]')) { toggleTelegram(); return; }
   const tgTest = e.target.closest('[data-tg-test]');
   if (tgTest) { sendTelegramTest(tgTest); return; }

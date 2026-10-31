@@ -27,12 +27,16 @@ def start() -> None:
                           max_instances=1, coalesce=True, next_run_time=now() + timedelta(seconds=60))
     # The fixed runs of the day plan (schedule.py): 08:00 LinkedIn, 13:00 read (Monday to Friday), 19:00 read,
     # 03:00 night run. Imported here: companies needs the checker's modules first
-    from . import companies, company_jobs, linkedin, schedule
+    from . import companies, company_jobs, initiativ_mail, linkedin, schedule
     what = {"linkedin": linkedin.scheduled, "midday": company_jobs.read_midday, "evening": company_jobs.read_watched,
-            "night": companies.scheduled_run}
+            "night": companies.scheduled_run, "drafts": initiativ_mail.scheduled}
     for run in schedule.runs():  # a read or search that is late (busy server) still runs within the hour
         late = {} if run["key"] == "night" else {"misfire_grace_time": 3600}
         scheduler.add_job(what[run["key"]], run["trigger"], id=run["key"], max_instances=1, coalesce=True, **late)
+    # Initiativ drafts you sent from Gmail: looked for every hour (only while drafts are waiting)
+    scheduler.add_job(initiativ_mail.scheduled_check, "interval",
+                      minutes=CONFIG["initiativ_emails"]["check_sent_every_minutes"], id="initiativ_sent",
+                      max_instances=1, coalesce=True, next_run_time=now() + timedelta(minutes=3))
     if CONFIG["companies"].get("auto_resume", True):  # Companies runs go on by themselves while there is work
         from . import auto_resume
         scheduler.add_job(auto_resume.tick, "interval", seconds=TICK.total_seconds(), id="auto_resume",

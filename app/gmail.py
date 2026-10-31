@@ -8,6 +8,11 @@ What Job Radar does - and does NOT do - with your Gmail:
   delete anything.
 - It reads emails with "BODY.PEEK", so they stay unread.
 - It remembers which emails it has read (in data/jobradar.db), so each one is read once.
+- One exception, initiativ_mail.py: it ADDS Initiativ drafts to your Drafts folder and looks into
+  Drafts and Sent to see which you sent. It never sends, deletes or changes an email.
+- The application tracker (applications.py) also opens Sent and All Mail read-only (open_folder):
+  Sent for the applications you emailed, All Mail only through searches for replies to them
+  (their threads, the companies' domains, the "Bewerbungen" label, "Bewerbung" in the subject).
 
 The login uses a Gmail *app password* (GMAIL_ADDRESS + GMAIL_APP_PASSWORD in .env),
 see the README.
@@ -115,6 +120,67 @@ def open_label(name: str) -> imaplib.IMAP4_SSL:
         raise GmailError(f"Gmail label \"{name}\" not found. Create it, and in Gmail settings > Labels "
                          f"make sure \"Show in IMAP\" is ticked for it")
     return imap
+
+
+def open_folder(flag: str) -> imaplib.IMAP4_SSL:
+    """Log in and open one of Gmail's own folders READ-ONLY, found by its flag (so a German Gmail works too):
+    "Sent" (your sent emails) or "All" (All Mail, for replies to your applications - applications.py only
+    searches it for those). Same rules as open_label: EXAMINE, nothing can be changed. Raises GmailError."""
+    address, password = credentials()
+    if not (address and password):
+        raise GmailError("Not set up: GMAIL_ADDRESS / GMAIL_APP_PASSWORD missing in .env (see README)")
+    if flag not in ("Sent", "All"):
+        raise GmailError(f"Job Radar does not open the \"{flag}\" folder")
+    try:
+        imap = imaplib.IMAP4_SSL(IMAP_HOST, timeout=30)
+    except Exception as e:
+        raise GmailError(f"Could not reach Gmail ({type(e).__name__})") from e
+    try:
+        imap.login(address, password)
+        status, lines = imap.list()
+        name = None
+        for line in lines or []:
+            m = re.match(r'\((?P<flags>[^)]*)\) (?:"[^"]*"|NIL) (?P<name>.+)', (line or b"").decode(errors="ignore"))
+            if m and "\\" + flag in m["flags"].split():
+                name = m["name"] if m["name"].startswith('"') else f'"{m["name"]}"'
+        if not name:
+            raise GmailError(f"Gmail's {'All Mail' if flag == 'All' else flag} folder not found over IMAP "
+                             "(Gmail settings > Labels: tick \"Show in IMAP\" for it)")
+        status, _ = imap.select(name, readonly=True)
+        if status != "OK":
+            raise GmailError(f"Gmail's {flag} folder could not be opened")
+    except imaplib.IMAP4.error as e:
+        _logout(imap)
+        raise GmailError("Gmail refused the login. Check GMAIL_ADDRESS and GMAIL_APP_PASSWORD in .env") from e
+    except BaseException:
+        _logout(imap)
+        raise
+    return imap
+
+
+def search(imap: imaplib.IMAP4_SSL, query: str) -> list[bytes]:
+    """UIDs in the open folder for a Gmail search ("from:x.de after:2026/05/01"). ASCII only."""
+    status, data = imap.uid("search", None, "X-GM-RAW", '"' + query.replace("\\", "").replace('"', '\\"') + '"')
+    return data[0].split() if status == "OK" and data and data[0] else []
+
+
+def thread_uids(imap: imaplib.IMAP4_SSL, thread_id: str) -> list[bytes]:
+    """UIDs of one Gmail thread in the open folder."""
+    status, data = imap.uid("search", None, "X-GM-THRID", thread_id)
+    return data[0].split() if status == "OK" and data and data[0] else []
+
+
+def ids_of(imap: imaplib.IMAP4_SSL, uids: list[bytes]) -> dict[bytes, tuple[str, str]]:
+    """UID -> (Gmail's message id, thread id), in chunks."""
+    out = {}
+    for i in range(0, len(uids), 300):
+        status, data = imap.uid("fetch", b",".join(uids[i:i + 300]), "(X-GM-MSGID X-GM-THRID)")
+        for line in data or []:
+            text = (line[0] if isinstance(line, tuple) else line or b"").decode(errors="ignore")
+            uid, gid, tid = (re.search(rf"{k} (\d+)", text) for k in ("UID", "X-GM-MSGID", "X-GM-THRID"))
+            if uid and gid:
+                out[uid[1].encode()] = (gid[1], tid[1] if tid else "")
+    return out
 
 
 def _logout(imap: imaplib.IMAP4_SSL) -> None:

@@ -1,7 +1,10 @@
 """Region coverage: every business in a town that could hire an IT Werkstudent (Darmstadt, Weiterstadt,
 Griesheim, Pfungstadt, Langen, Egelsbach, Dreieich, Neu-Isenburg, then after the airport Offenbach am Main,
 Mörfelden-Walldorf, Kelsterbach, Rüsselsheim am Main, Mühltal, Roßdorf, Ober-Ramstadt, Seeheim-Jugenheim,
-Erzhausen and Mainz: region.towns in config.yaml), and at Frankfurt Airport (see "The airport" below).
+Erzhausen, the Frankfurt districts Niederrad, Sachsenhausen, Schwanheim (with Goldstein) and Griesheim (not the
+town Griesheim: by postcode 65933 / 64347), Innenstadt, Bahnhofsviertel and Westend, and Mainz:
+region.towns in config.yaml), and at Frankfurt Airport (see "The airport" below). A Frankfurt district is
+found like the airport: its OpenStreetMap boundary, the Arbeitsagentur per postcode, the register by postcode.
 A town can have other spellings (names: "Offenbach") and places that only start like it (not_place: "Mainz-Kastel").
 
 1. Collect (no AI, every night):
@@ -212,19 +215,21 @@ def collect_aa(town: str, progress: dict) -> list[dict]:
     """One record per ad of any kind (so a company with 12 ads counts 12 times)."""
     from .companies import _ad_record
     records, seen = [], set()
-    for page in range(1, AA_MAX_PAGES + 1):
-        progress["step"] = f"Arbeitsagentur: all employers in {town} (page {page})"
-        params = {"wo": towns()[town].get("aa_where", town), "umkreis": 0, "size": 100, "page": page, "zeitarbeit": "false", "pav": "false"}
-        offers = fetch_api(arbeitsagentur.API, params=params, headers=arbeitsagentur.HEADERS).get("ergebnisliste", [])
-        for o in offers:
-            ref, firm = o.get("referenznummer"), _clean(o.get("firma") or "", town)
-            address = ((o.get("stellenlokationen") or [{}])[0].get("adresse") or {})
-            if not firm or ref in seen or not in_town(address.get("plz"), address.get("ort"), town):
-                continue
-            seen.add(ref)
-            records.append(_ad_record(o, firm, source(town, "aa")))
-        if len(offers) < 100:
-            break
+    wheres = towns()[town].get("aa_where", town)
+    for where in wheres if isinstance(wheres, list) else [wheres]:  # a Frankfurt district: each of its postcodes
+        for page in range(1, AA_MAX_PAGES + 1):
+            progress["step"] = f"Arbeitsagentur: all employers in {town} (page {page})"
+            params = {"wo": where, "umkreis": 0, "size": 100, "page": page, "zeitarbeit": "false", "pav": "false"}
+            offers = fetch_api(arbeitsagentur.API, params=params, headers=arbeitsagentur.HEADERS).get("ergebnisliste", [])
+            for o in offers:
+                ref, firm = o.get("referenznummer"), _clean(o.get("firma") or "", town)
+                address = ((o.get("stellenlokationen") or [{}])[0].get("adresse") or {})
+                if not firm or ref in seen or not in_town(address.get("plz"), address.get("ort"), town):
+                    continue
+                seen.add(ref)
+                records.append(_ad_record(o, firm, source(town, "aa")))
+            if len(offers) < 100:
+                break
     log.info("Region %s: %d job ads from the Arbeitsagentur", town, len(records))
     return records
 
@@ -246,11 +251,17 @@ def _register_file(town: str):
     return db.DB_PATH.parent / f"offeneregister-{town}.json"
 
 
+def by_postcode(town: str) -> bool:
+    """The airport and the Frankfurt districts: their companies are registered in Frankfurt am Main (city),
+    so only the postcode tells where they are."""
+    return bool(towns()[town].get("city"))
+
+
 def _register_town(office: str, plz: str | None, names: list[str]) -> str | None:
-    """Which of these towns a register entry belongs to. The airport's companies are registered in Frankfurt
-    am Main: only their postcode counts."""
+    """Which of these towns a register entry belongs to. The airport's and the Frankfurt districts' companies
+    are registered in Frankfurt am Main: only their postcode counts."""
     for town in names:
-        if is_airport(town):
+        if by_postcode(town):
             if plz and int(plz) in towns()[town]["postcodes"]:
                 return town
         elif office in spellings(town) and (not plz or in_town(plz, None, town)):  # Griesheim near Darmstadt, not another one
@@ -265,7 +276,7 @@ def _download_register(names: list[str], progress: dict) -> None:
         raise httpx.TransportError("OffeneRegister's robots.txt asks automated visitors not to download it")
     found, lines, buffer = {t: [] for t in names}, 0, b""
     # The file may write umlauts as JSON escapes (a backslash, then u00fc for ü): both forms
-    wanted = {form for t in names for w in (map(str, towns()[t]["postcodes"]) if is_airport(t) else spellings(t))
+    wanted = {form for t in names for w in (map(str, towns()[t]["postcodes"]) if by_postcode(t) else spellings(t))
               for form in (w.encode(), json.dumps(w)[1:-1].encode())}
     decompressor = bz2.BZ2Decompressor()
     with httpx.stream("GET", REGISTER_URL, headers=BOT_HEADERS, timeout=120, follow_redirects=True) as r:

@@ -43,6 +43,12 @@ applications:
   label: Bewerbungen
   days_back: 60                 # look at emails from the last N days (each one is read once)
   max_emails_per_check: 80
+  # The tracker: applications you emailed (Sent folder) and replies to them anywhere in Gmail, this far back
+  tracker_days_back: 365
+  tracker_since: "2026-09-01"     # ... but not before this day (when your Werkstudent search started)
+  # true: a confirmation / rejection from a company you never emailed starts an application by itself.
+  # false: applications on a company website come from the Applied button
+  portal_from_emails: true
   check_every_minutes: 15
   telegram_max_age_days: 3      # 🎉 interview / 📝 test messages only for emails this new
   # Newsletters and job alerts that land in the label: skipped without reading further
@@ -217,9 +223,9 @@ gemini:
     Languages: <your languages>.
 
 # Backup AI providers, all free. When Gemini hits its limit (or Google's servers are busy),
-# Job Radar switches to Groq, then Cloudflare, then OpenRouter - same prompt, same 1-10
+# Job Radar switches to Groq, then Cloudflare, then OpenRouter, then Cerebras - same prompt, same 1-10
 # scores. Only providers with a key in .env are used (GROQ_API_KEY, CLOUDFLARE_ACCOUNT_ID +
-# CLOUDFLARE_API_TOKEN, OPENROUTER_API_KEY). The rules above (min_score, batch_size, profile, ...) apply to all.
+# CLOUDFLARE_API_TOKEN, OPENROUTER_API_KEY, CEREBRAS_API_KEY). The rules above (min_score, batch_size, profile, ...) apply to all.
 # max_prompt_chars: the free tier only takes short requests, so fewer jobs go into one request.
 groq:
   model: openai/gpt-oss-120b
@@ -254,13 +260,27 @@ github:
   enabled: false
   model: openai/gpt-4.1-mini
   max_prompt_chars: 18000
-# Off: both need a payment method on file. Job Radar stays 100% free.
+# Off: needs a payment method on file. Job Radar stays 100% free.
 mistral:
   enabled: false
   model: mistral-small-latest
+# Cerebras (cloud.cerebras.ai, free, needs CEREBRAS_API_KEY in .env): the last backup, after OpenRouter.
+# Its free limit is 5 requests a minute, 150 an hour, 2,400 and 1,000,000 tokens a day: Job Radar keeps under
+# requests_per_minute. Tested on 2026-10-27: scored 2 jobs correctly and read 6 careers pages in 0.6-1.3 s.
 cerebras:
-  enabled: false
   model: gpt-oss-120b
+  requests_per_minute: 4
+# NVIDIA (build.nvidia.com, free, needs NVIDIA_API_KEY in .env): ONLY reads careers pages (public page text), before
+# the chain above; scoring and everything else never use it. Its limit is 40 requests a minute and no known daily
+# one: Job Radar keeps under requests_per_minute and counts today's requests. No answer within timeout_seconds,
+# "too many requests" (a 1-minute pause) or busy: the careers page goes to Gemini -> Groq -> Cloudflare -> OpenRouter
+# -> Cerebras.
+# Tested on 2026-10-26: answers in ~1.3 s, thinking off (enable_thinking: false).
+nvidia:
+  model: nvidia/nemotron-3.5-lightning-30b-a3b
+  timeout_seconds: 45
+  requests_per_minute: 30
+  extra_body: {chat_template_kwargs: {enable_thinking: false}}
 
 # AI requests per provider and day (counted by Job Radar, shown in the AI bar at the top).
 # Estimates of the free limits (Cloudflare: cloudflare.daily_neurons, Groq: groq.daily_tokens). Groq and OpenRouter
@@ -378,6 +398,23 @@ linkedin:
   max_pages: 5                   # 10 jobs per page; stops at once if LinkedIn says "too many requests"
   pause_seconds: [5, 10]         # random pause between two pages
 
+# Initiativ email drafts (Companies > Initiativ > "Initiativ emails"): every day at `hour` (German time) Job Radar
+# makes up to per_day Gmail DRAFTS for Initiativ companies (it never sends; you send each one from Gmail).
+# No AI: the text is one of 3 fixed templates, {{company}} replaced by the name. The templates and the 3 CVs are
+# personal: they are uploaded in the dashboard and kept in data/initiativ/ (never in git). Turn it on and set
+# per_day in the dashboard. Each day's mix follows what is left in each group: Template 1 (IT services/Software,
+# Cybersecurity, Cloud), Template 3 (Banks/Finance, Insurance; at least min_template3 a day) and Other.
+# An email you sent from Gmail is noticed by itself (every check_sent_every_minutes): "Sent" on the company.
+initiativ_emails:
+  hour: 7
+  per_day: 10
+  subject: "Initiativbewerbung als Werkstudent IT"
+  min_template3: 1
+  paused_templates: ["3"]        # Template 3 (Banks/Finance, Insurance) paused: no addresses found there yet
+  no_email: skip                 # no address on its careers page or Impressum: skip, or "draft" with an empty "To"
+  max_lookups_per_run: 40
+  check_sent_every_minutes: 60
+
 # Region coverage (Coverage page): every business in these towns that could hire an IT Werkstudent,
 # from OpenStreetMap, the Arbeitsagentur (all employers, all job types) and OffeneRegister.de.
 # Shops, restaurants, craftsmen and staffing agencies are skipped by rules; the rest goes through the
@@ -453,6 +490,61 @@ region:
       ags: "06432006"
       postcodes: [64390]
       hall: Gemeinde Erzhausen
+    # Frankfurt districts (south of the Main). Not Frankfurt-Griesheim (65933): "Griesheim" above is the town.
+    # Like the airport: the district's boundary on OpenStreetMap (osm_areas), the Arbeitsagentur searched per
+    # postcode (aa_where; the district's name would find all of Frankfurt), the register only by postcode.
+    Frankfurt-Niederrad:         # with the Lyoner Quartier (Bürostadt Niederrad)
+      osm_areas: [3870398]
+      postcodes: [60528]
+      aa_where: ["60528"]
+      place: "niederrad|lyoner"  # an address without postcode: "Frankfurt-Niederrad"
+      city: Frankfurt am Main
+      hall: Stadt Frankfurt am Main
+    Frankfurt-Sachsenhausen:     # Sachsenhausen-Nord + Sachsenhausen-Süd (60599 is shared with Oberrad)
+      osm_areas: [3891374, 4209942]
+      postcodes: [60594, 60596, 60598, 60599]
+      aa_where: ["60594", "60596", "60598", "60599"]
+      place: "sachsenhausen"
+      city: Frankfurt am Main
+      hall: Stadt Frankfurt am Main
+    Frankfurt-Schwanheim:        # with Goldstein (part of the Schwanheim district, same postcode 60529)
+      osm_areas: [3870399]
+      postcodes: [60529]
+      aa_where: ["60529"]
+      place: "schwanheim|goldstein"
+      city: Frankfurt am Main
+      hall: Stadt Frankfurt am Main
+    Frankfurt-Griesheim:         # the Frankfurt district (65933), NOT the town "Griesheim" (64347) above
+      osm_areas: [4209937]
+      postcodes: [65933]
+      aa_where: ["65933"]
+      place: "frankfurt\\b.{0,12}griesheim"   # "Frankfurt-Griesheim"; "Griesheim" alone is the town
+      city: Frankfurt am Main
+      hall: Stadt Frankfurt am Main
+    # The centre. "Innenstadt" and "Westend" alone are in other towns too (Wiesbaden-Westend): the place must
+    # have "Frankfurt" before them. 60311 is shared with the Altstadt, 60329 with Gallus, 60322 / 60320 with
+    # Nordend-West / Dornbusch (not covered): their companies there count for this area.
+    Frankfurt-Innenstadt:
+      osm_areas: [4209940]
+      postcodes: [60313, 60311, 60310]          # 60310 = TaunusTurm
+      aa_where: ["60313", "60311", "60310"]
+      place: "frankfurt\\b.{0,12}innenstadt"
+      city: Frankfurt am Main
+      hall: Stadt Frankfurt am Main
+    Frankfurt-Bahnhofsviertel:
+      osm_areas: [4209935]
+      postcodes: [60329]
+      aa_where: ["60329"]
+      place: "frankfurt\\b.{0,12}bahnhofsviertel"
+      city: Frankfurt am Main
+      hall: Stadt Frankfurt am Main
+    Frankfurt-Westend:           # Westend-Nord + Westend-Süd; 60306 = OpernTurm, 60308 = Messeturm
+      osm_areas: [4206777, 4206778]
+      postcodes: [60325, 60323, 60322, 60320, 60306, 60308]
+      aa_where: ["60325", "60323", "60322", "60320", "60306", "60308"]
+      place: "frankfurt\\b.{0,12}westend"
+      city: Frankfurt am Main
+      hall: Stadt Frankfurt am Main
     Mainz:                       # last: the biggest (55099 = the university's own postcode)
       ags: "07315000"
       postcodes: [55099, 55116, 55118, 55120, 55122, 55124, 55126, 55127, 55128, 55129, 55130, 55131]

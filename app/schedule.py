@@ -1,6 +1,7 @@
 """The day plan (German time, summer and winter time): the fixed runs, in one place for the scheduler,
 auto-resume (it pauses before and during them), the Coverage page and the log.
 
+  07:00 every day       Initiativ email drafts (initiativ_mail.py; does nothing while off in the dashboard)
   08:00 every day       LinkedIn search (linkedin.py)
   13:00 Monday-Friday   the busy Watched / Initiativ companies (company_jobs.read_midday)
   19:00 every day       busy companies, the quiet ones every third day (company_jobs.read_watched)
@@ -23,9 +24,10 @@ DAY_NAMES = {"*": "every day", "mon-fri": "Monday to Friday", "sat,sun": "weeken
 
 def runs() -> list[dict]:
     """[{"key", "label", "hour", "days", "trigger"}] of the fixed runs that are on (config)."""
-    cfg, linkedin = CONFIG["companies"], CONFIG["linkedin"]
+    cfg, linkedin, drafts = CONFIG["companies"], CONFIG["linkedin"], CONFIG["initiativ_emails"]
     found = []
     for key, label, hour, days, on in (
+            ("drafts", "Initiativ drafts", drafts.get("hour"), "*", True),
             ("linkedin", "LinkedIn search", linkedin.get("hour"), "*", linkedin.get("enabled")),
             ("midday", "{h} read", cfg.get("midday_read_hour"), cfg.get("midday_read_days") or "*", True),
             ("evening", "{h} read", cfg.get("watched_read_hour"), "*", True),
@@ -41,14 +43,15 @@ def next_at(run: dict, now: datetime) -> datetime:
 
 
 def fixed_times(now: datetime) -> list[tuple[datetime, str]]:
-    """The next start of each fixed run, soonest first: [(when, "the 13:00 read")]. For auto-resume."""
+    """The next start of each fixed run, soonest first: [(when, "the 13:00 read")]. For auto-resume, which need
+    not wait for the Initiativ drafts (a few emails, no AI)."""
     return sorted((next_at(r, now), f"the {r['hour']:02d}:00 {r['label']}" if r["key"] in ("linkedin", "night")
-                   else f"the {r['label']}") for r in runs())
+                   else f"the {r['label']}") for r in runs() if r["key"] != "drafts")
 
 
 def running() -> set[str]:
-    """Which fixed runs are going now ("linkedin", "midday", "evening", "night") and "auto" (auto-resume)."""
-    from . import companies, company_jobs, linkedin  # they import modules that import this one
+    """Which fixed runs are going now ("drafts", "linkedin", "midday", "evening", "night") and "auto" (auto-resume)."""
+    from . import companies, company_jobs, initiativ_mail, linkedin  # they import modules that import this one
     now = set()
     p = companies.progress()
     if p["running"]:
@@ -57,6 +60,8 @@ def running() -> set[str]:
         now.add(company_jobs.reading_kind["now"])
     if linkedin.running():
         now.add("linkedin")
+    if initiativ_mail.running["now"]:
+        now.add("drafts")
     return now
 
 
@@ -74,6 +79,9 @@ def status(now: datetime | None = None) -> list[dict]:
             note += ", busy companies only"
         elif r["key"] == "evening":
             note += f", quiet companies every {CONFIG['companies']['quiet_every_days']} days"
+        elif r["key"] == "drafts":
+            from . import initiativ_mail
+            note += "" if initiativ_mail.is_on() else ", off (turn on in Companies > Initiativ)"
         plan.append({"key": r["key"], "label": r["label"], "next_at": at.isoformat(timespec="seconds"),
                      "running": r["key"] in going, "note": note})
     return sorted(plan, key=lambda p: p["next_at"])

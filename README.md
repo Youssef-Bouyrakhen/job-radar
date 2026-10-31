@@ -574,7 +574,8 @@ still need it stay unchecked and the next night goes on with them.
       **OpenRouter** (free models only). Only providers with a key in `.env` (`GROQ_API_KEY`,
       `OPENROUTER_API_KEY`) are used; Settings shows which one is active. 10 jobs per request.
 - [x] **AI limits (v9.1)**: 100% free. Gemini → Groq → OpenRouter (free models). GitHub Models is
-      built in but off (GitHub retired it on 2026-07-30); Mistral / Cerebras are off. Rules first, AI last (company sizes from
+      built in but off (GitHub retired it on 2026-07-30); Mistral is off. **Cerebras** (v12.9) is the last
+      backup after OpenRouter (`CEREBRAS_API_KEY`, at most 4 requests a minute). Rules first, AI last (company sizes from
       job ad counts, Initiativ reasons only for the top 10). Jobs that can't be scored wait and are
       scored as soon as any provider is free. The **AI usage bar** at the top of every page shows
       used / estimated limit per provider, the active one (green), empty ones (red), the reset time

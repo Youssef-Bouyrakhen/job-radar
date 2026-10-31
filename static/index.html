@@ -20,6 +20,7 @@
         <div class="nav-section">Jobs</div>
         <div class="nav" id="navViews"></div>
         <div class="nav-section">App</div>
+        <button type="button" class="nav-item" data-tab="apps" title="Your applications, from Gmail"><svg data-icon="checks"></svg><span class="nav-label">Applications</span><span class="nav-count" id="appsCount">–</span></button>
         <button type="button" class="nav-item" data-tab="links" title="Watched links"><svg data-icon="link"></svg><span class="nav-label">Watched links</span><span class="nav-count" id="linksCount">–</span></button>
         <button type="button" class="nav-item" data-tab="companies" title="Companies"><svg data-icon="building"></svg><span class="nav-label">Companies</span><span class="nav-count" id="companiesCount">–</span></button>
         <button type="button" class="nav-item" data-tab="coverage" title="Region coverage"><svg data-icon="globe"></svg><span class="nav-label">Coverage</span><span class="nav-count" id="coverageCount">–</span></button>
@@ -133,6 +134,7 @@
           <div class="filters"><div class="src-row" id="companyBoxes" role="group" aria-label="Status"></div>
             <div class="src-row src-row--compact" id="categoryBoxes" role="group" aria-label="Category"></div>
             <div class="src-row src-row--compact diag-row" id="diagBoxes" role="group" aria-label="Why 0 jobs"></div></div>
+          <div class="ini" id="initiativPanel" hidden></div>
           <div class="co-head">
             <div class="th th-search">
               <label class="search">
@@ -161,6 +163,27 @@
           </div>
           <div id="coverageList" aria-live="polite"></div>
           <p class="shortcuts cov-legend"><span><strong>Watched</strong> careers page, read every day at 19:00</span><span><strong>Initiativ</strong> IT jobs but no student job (careers page read every day at 19:00 too), or a small IT company without a careers page (email from its Impressum)</span><span><strong>No careers page</strong> none found</span><span><strong>Skipped</strong> shop, restaurant, craft, care or staffing business, or closed</span><span><strong>Waiting</strong> still in line for the nightly run</span></p>
+        </section>
+
+        <section id="tab-apps" hidden>
+          <div class="page-head page-head--row">
+            <div><h1 class="page-title">Applications</h1><div class="summary" id="trSummary"><span>Built from your Gmail by itself</span></div></div>
+            <button type="button" class="btn btn--sm" id="trCheck"><svg data-icon="mail"></svg><span>Check Gmail now</span></button>
+          </div>
+          <div class="tr-wrap">
+            <div class="tr-counters" id="trCounters"></div>
+            <div class="tr-progress" id="trProgress"></div>
+            <div class="tr-types" id="trTypes"></div>
+            <div class="tr-tools">
+              <label class="tr-search"><svg data-icon="search"></svg><input type="search" id="trSearch" placeholder="Search company, job or contact" aria-label="Search applications"></label>
+              <div class="tr-seg" id="trFilter" role="group" aria-label="Type">
+                <button type="button" data-tr-type="all" class="is-on">All</button><button type="button" data-tr-type="job">Job ad</button><button type="button" data-tr-type="initiativ">Initiativ</button>
+              </div>
+              <select class="co-select" id="trStatus" aria-label="Status"></select>
+            </div>
+            <div class="tr-cards" id="trCards"><p class="co-sub">Loading…</p></div>
+            <div id="trReview"></div>
+          </div>
         </section>
 
         <section id="tab-timeline" hidden>

@@ -216,8 +216,11 @@ _ai_lock = threading.Lock()
 
 
 def _pace() -> None:
-    """The free AI tiers also limit requests and words per MINUTE: keep a gap between ours."""
+    """The free AI tiers also limit requests and words per MINUTE: keep a gap between ours.
+    Not when NVIDIA takes the request: ai.ask_json keeps it under its requests per minute."""
     global _last_ai
+    if ai.next_provider("careers") in ai.NO_DAILY_LIMIT:
+        return
     with _ai_lock:
         wait = _last_ai + CONFIG["companies"]["ai_seconds_between_requests"] - time.monotonic()
         if wait > 0:

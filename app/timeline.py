@@ -8,14 +8,14 @@ for the countdowns.
 import math
 from datetime import date, datetime, time, timedelta, timezone
 
-from . import ai, auto_resume, companies, company_jobs, db, linkedin, schedule, scheduler
+from . import ai, auto_resume, companies, company_jobs, db, initiativ_mail, linkedin, schedule, scheduler
 from .checker import checking_all
 from .clock import GERMANY
 from .config import CONFIG
 
 # How long a fixed run usually takes (minutes) until it has run once; a longer last run counts instead.
 # Also the "don't deploy" windows: DEPLOY_BEFORE minutes before a run until this long after its start.
-USUAL = {"night": 30, "night_full": 60, "linkedin": 15, "midday": 30, "evening": 45}
+USUAL = {"night": 30, "night_full": 60, "linkedin": 15, "midday": 30, "evening": 45, "drafts": 5}
 DEPLOY_BEFORE = 15
 DAY = 24 * 60
 
@@ -78,6 +78,13 @@ def last_results() -> dict:
             if r.get("ai_skipped"):
                 text += f", {r['ai_skipped']} skipped (no AI left)"
             found[kind] = {"finished_at": r["at"], "seconds": r.get("seconds"), "text": text}
+    r = initiativ_mail.last_run()
+    if r.get("finished_at") and not r.get("test"):
+        text = r.get("error") or (f"{len(r['made'])} drafts made in Gmail"
+                                  + (f", {r['no_email']} without an address" if r.get("no_email") else "")
+                                  + (f", {len(r['failed'])} failed" if r.get("failed") else ""))
+        found["drafts"] = {"finished_at": r["finished_at"], "seconds": _seconds_between(r["at"], r["finished_at"]),
+                           "text": text}
     found["hourly"] = _hourly_result()
     return found
 
@@ -99,10 +106,11 @@ def _minutes(key: str, last: dict) -> int:
 
 
 def _ai_resets(day: date) -> list[dict]:
-    """The AI providers whose free day starts again on this German day: [{"name", "at"}]. Groq has no fixed reset."""
+    """The AI providers whose free day starts again on this German day: [{"name", "at"}]. Groq has no fixed reset,
+    NVIDIA no daily limit."""
     resets = {}
     for name in ai.providers():
-        if name in ai.ROLLING:
+        if name in ai.ROLLING or name in ai.NO_DAILY_LIMIT:
             continue
         zone = ai._zone(name)
         for d in (day - timedelta(days=1), day, day + timedelta(days=1)):
@@ -140,11 +148,15 @@ def plan_day(day: date, last: dict) -> dict:
             note = f"busy companies every day, quiet ones every {CONFIG['companies']['quiet_every_days']} days"
         elif key == "linkedin":
             note = f"{CONFIG['linkedin'].get('keywords_per_day', 2)} keywords, new hiring companies go into Companies"
+        elif key == "drafts":
+            note = (f"up to {initiativ_mail.per_day()} Gmail drafts for Initiativ companies (you send them)"
+                    if initiativ_mail.is_on() else "off: turn on in Companies > Initiativ")
         length = _minutes(size, last)
         end = minute + length
         events.append({"key": key, "label": r["label"], "at": _iso(at), "minute": minute, "minutes": length,
                        "until": max(end, longest) if longest else None, "note": note,
-                       "auto_pause": _span(minute - int(auto_resume.BEFORE_FIXED.total_seconds() // 60), end),
+                       "auto_pause": None if key == "drafts" else
+                       _span(minute - int(auto_resume.BEFORE_FIXED.total_seconds() // 60), end),
                        "no_deploy": _span(minute - DEPLOY_BEFORE, end)})
     events.sort(key=lambda e: e["minute"])
     weekly = CONFIG["companies"].get("weekly_summary") or {}
@@ -171,6 +183,8 @@ def running_now() -> list[dict]:
         found.append({"key": kind, "label": company_jobs.READS[kind][1], "step": r.get("step", ""),
                       "done": r.get("done", 0), "total": r.get("total", 0),
                       "started_at": company_jobs.reading_progress.get("started_at")})
+    if initiativ_mail.running["now"]:
+        found.append({"key": "drafts", "label": "Initiativ drafts", "step": "", "done": 0, "total": 0, "started_at": None})
     if linkedin.running():
         s = linkedin.now_searching
         found.append({"key": "linkedin", "label": "LinkedIn search", "step": f"\"{s['word']}\"" if s["word"] else "",
@@ -196,7 +210,7 @@ def status() -> dict:
         if span[0] <= minute < span[1]:
             blocked = {"why": f"the {e['label']}", "until": _iso(datetime.combine(now.date(), time(), GERMANY)
                                                                    + timedelta(minutes=span[1]))}
-    fixed = [g for g in going if g["key"] in ("night", "linkedin", "midday", "evening")]
+    fixed = [g for g in going if g["key"] in ("night", "linkedin", "midday", "evening", "drafts")]
     if fixed and not blocked:
         blocked = {"why": f"the {fixed[0]['label']} is running", "until": None}
     return {

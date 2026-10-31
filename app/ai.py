@@ -1,7 +1,8 @@
 """Layer 2 filter: an AI scores each job 1-10 for how well it fits you.
 
 Only jobs that passed the keyword filter are sent. Free providers only: Gemini first, then
-Groq, Cloudflare Workers AI (free 10,000 neurons a day) and OpenRouter (free models).
+Groq, Cloudflare Workers AI (free 10,000 neurons a day), OpenRouter (free models) and Cerebras.
+Careers pages ask NVIDIA (free, no known daily limit) first, then the same chain.
 Without any of their keys in .env this
 layer is skipped and every keyword-filtered job is shown.
 """
@@ -121,13 +122,14 @@ def enabled() -> bool:
 # are busy), the next one takes over until the first one's pause is over.
 
 PROVIDERS = (  # name, key in .env, section in config.yaml
+    ("NVIDIA", "NVIDIA_API_KEY", "nvidia"),        # careers pages only (ONLY_FOR), before the others
     ("Gemini", "GEMINI_API_KEY", "gemini"),
     ("Groq", "GROQ_API_KEY", "groq"),
     ("Cloudflare", "CLOUDFLARE_API_TOKEN", "cloudflare"),  # also needs CLOUDFLARE_ACCOUNT_ID
     ("OpenRouter", "OPENROUTER_API_KEY", "openrouter"),
     ("GitHub", "GITHUB_MODELS_TOKEN", "github"),   # off: GitHub Models was retired on 2026-07-30
     ("Mistral", "MISTRAL_API_KEY", "mistral"),     # off (enabled: false): they need a payment method
-    ("Cerebras", "CEREBRAS_API_KEY", "cerebras"),
+    ("Cerebras", "CEREBRAS_API_KEY", "cerebras"),  # the last backup, keeps under cerebras.requests_per_minute
 )
 OPENAI_STYLE_URLS = {
     "Groq": "https://api.groq.com/openai/v1/chat/completions",
@@ -136,7 +138,13 @@ OPENAI_STYLE_URLS = {
     "Mistral": "https://api.mistral.ai/v1/chat/completions",
     "Cerebras": "https://api.cerebras.ai/v1/chat/completions",
     "Cloudflare": "https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1/chat/completions",
+    "NVIDIA": "https://integrate.api.nvidia.com/v1/chat/completions",
 }
+# A provider only used for these purposes (the others skip it). NVIDIA reads careers pages: public page text only.
+ONLY_FOR = {"NVIDIA": {"careers"}}
+# No known daily limit: Job Radar only counts its requests today (German day) and keeps under
+# nvidia.requests_per_minute. It stops only when it answers "limit reached" or is busy.
+NO_DAILY_LIMIT = {"NVIDIA"}
 # Cloudflare's free limit is 10,000 "neurons" a day (its unit of AI work), not a number of requests.
 # Job Radar counts the neurons each answer reports and stops at cloudflare.daily_neurons (below 10,000),
 # so it never needs the Workers Paid plan.
@@ -148,8 +156,9 @@ TOKENS = {"Groq"}
 # When each provider's free day starts again, on its own clock: Gemini at midnight US Pacific time
 # (09:00 in Germany), the others at midnight UTC (02:00 in Germany; in winter 08:00 / 01:00).
 # Groq has no fixed time: each request comes back 24 hours after it was made (it says when in its answers).
+# NVIDIA has no free day: its counter starts at midnight German time.
 PACIFIC = ZoneInfo("America/Los_Angeles")
-RESET_ZONE = {"Gemini": PACIFIC}
+RESET_ZONE = {"Gemini": PACIFIC, "NVIDIA": GERMANY}
 ROLLING = {"Groq"}
 REPORT_TTL = 3600  # a provider's own numbers (Groq, OpenRouter) count this many seconds, then the counter again
 
@@ -191,7 +200,7 @@ def _zone(name: str):
 def quota_day(name: str) -> str:
     """The provider's own "today" for the counter: the UTC date, for Gemini the Pacific date ("2026-10-22 PT")."""
     day = datetime.now(_zone(name)).date().isoformat()
-    return f"{day} PT" if name in RESET_ZONE else day
+    return f"{day} PT" if _zone(name) is PACIFIC else day
 
 
 def reset_at(name: str) -> datetime:
@@ -426,6 +435,10 @@ def usage() -> list[dict]:
     what is left and where the numbers come from. Groq also: its requests (requests_used / requests_budget)."""
     rows = []
     for p in providers():
+        if p in NO_DAILY_LIMIT:  # only counted: budget / left None, it has room until it says "limit reached"
+            rows.append({"name": p, "used": requests_used(p), "budget": None, "left": None, "source": "counter",
+                         "unit": "requests", "only_for": sorted(ONLY_FOR.get(p, PURPOSES))})
+            continue
         budget, n, extra, out = budget_of(p), used_of(p), {}, False
         if p in TOKENS:  # its 1,000 requests a day are a limit too
             extra = {"requests_used": requests_used(p), "requests_budget": requests_budget(p)}
@@ -454,7 +467,10 @@ def spent(name: str) -> dict[str, float]:
 def share_left(name: str, purpose: str) -> float:
     """How much of the provider's free day this purpose may still use, in its unit. Scoring: all that is left.
     The others never touch scoring's score_reserved %: careers pages at most careers %, categories and the rest
-    together at most other % ("unknown" use counts as theirs, so scoring's part stays safe)."""
+    together at most other % ("unknown" use counts as theirs, so scoring's part stays safe).
+    A provider without a daily limit (NVIDIA) has no shares: no end."""
+    if name in NO_DAILY_LIMIT:
+        return math.inf
     budget, per = budget_of(name), spent(name)
     left = budget - sum(per.values())
     if purpose == "score":
@@ -481,8 +497,10 @@ def avg_cost(name: str, purpose: str) -> float:
 def requests_left(purpose: str) -> int:
     """About how many requests of this purpose fit into what the providers that work now still have for it."""
     left = _left()
-    return sum(math.floor(max(0.0, share_left(p, purpose)) / avg_cost(p, purpose))
-               for p in providers() if _ready(p, left))
+    # one without a daily limit (NVIDIA): what it takes in an hour at its requests per minute
+    return sum(int(_section(p)["requests_per_minute"]) * 60 if p in NO_DAILY_LIMIT
+               else math.floor(max(0.0, share_left(p, purpose)) / avg_cost(p, purpose))
+               for p in providers(purpose) if _ready(p, left))
 
 
 def _rolling_back(name: str, need: float) -> datetime:
@@ -499,9 +517,11 @@ def share_back_at(purpose: str) -> datetime | None:
     """When this purpose can get requests again: the first provider whose limit and share have room again
     (its reset; Groq bit by bit: when enough of its last 24 hours is free for a few requests)."""
     found = []
-    for p in providers():
+    for p in providers(purpose):
         if until := blocked_until(p):
             found.append(until)
+        elif p in NO_DAILY_LIMIT:
+            continue  # no free day that ends: only a pause (provider_status has when it is over)
         elif p in ROLLING:
             found.append(_rolling_back(p, max(0.0, -share_left(p, purpose)) + 5 * avg_cost(p, purpose)))
         else:
@@ -521,6 +541,7 @@ def used_for_today() -> dict:
 
 
 _paused: dict[str, float] = {}   # provider -> time.monotonic() when it may be used again
+_rate_limited: set[str] = set()  # paused because it said "too many requests" (not busy or broken)
 _active: str | None = None       # the provider that answered last
 _warned: set[str] = set()
 
@@ -539,10 +560,13 @@ def prompt_limit(name: str) -> int | None:
     return _section(name).get("max_prompt_chars")
 
 
-def providers() -> list[str]:
-    """Providers with a key in .env, in order. OpenRouter only with a free model."""
+def providers(purpose: str | None = None) -> list[str]:
+    """Providers with a key in .env, in order. OpenRouter only with a free model.
+    purpose: only the ones used for it (NVIDIA only for careers pages, see ONLY_FOR)."""
     found = []
     for name, key, section in PROVIDERS:
+        if purpose and purpose not in ONLY_FOR.get(name, PURPOSES):
+            continue
         if not os.environ.get(key) or (name == "Cloudflare" and not os.environ.get("CLOUDFLARE_ACCOUNT_ID")):
             continue
         if name != "Gemini" and not CONFIG[section].get("enabled", True):  # gemini: enabled = AI on/off
@@ -561,15 +585,19 @@ def _left() -> dict[str, int]:
 
 
 def _ready(name: str, left: dict[str, int]) -> bool:
-    """Not paused, not at its daily limit and still has requests left today."""
-    return time.monotonic() >= _paused.get(name, 0) and left.get(name, 0) > 0
+    """Not paused, not at its daily limit and still has requests left today (without a daily limit: not blocked)."""
+    if time.monotonic() < _paused.get(name, 0):
+        return False
+    room = left.get(name, 0)
+    return not blocked_until(name) if room is None else room > 0
 
 
 def next_provider(purpose: str = "score") -> str | None:
     """The provider the next request of this purpose goes to, None if all are paused, used up, or (not scoring)
     this purpose's share is used up on all of them."""
     left = _left()
-    return next((p for p in providers() if _ready(p, left) and (purpose == "score" or share_left(p, purpose) > 0)), None)
+    return next((p for p in providers(purpose) if _ready(p, left) and (purpose == "score" or share_left(p, purpose) > 0)),
+                None)
 
 
 def provider_status() -> dict:
@@ -577,7 +605,10 @@ def provider_status() -> dict:
     (gets the next request), next (a backup), paused (a short limit or servers busy, back in a few minutes),
     limit (it answered "today's limit reached") or empty (Job Radar's count of today is used up).
     back_at: when a paused / limit / empty one works again; resets_at: when its free day starts again.
-    used_for: today's requests per purpose (scoring / careers pages / categories / other)."""
+    used_for: today's requests per purpose (scoring / careers pages / categories / other).
+    A provider only for some work (NVIDIA: careers pages) is active when it can take their next request, but is never
+    the scoring one ("active" / "model") and doesn't count for all_empty (scoring has no AI left).
+    rate_limited: paused because it said "too many requests"."""
     now, utc_now = time.monotonic(), datetime.now(timezone.utc)
     active, rows = None, []
     for u in usage():
@@ -588,23 +619,26 @@ def provider_status() -> dict:
         back = None
         if until:
             status, back = "limit", until
-        elif u["left"] <= 0:
+        elif u["left"] is not None and u["left"] <= 0:
             status, back = "empty", _rolling_back(name, avg_cost(name, "score")) if name in ROLLING else resets
         elif paused:
             status, back = "paused", utc_now + timedelta(seconds=paused)
+        elif name in ONLY_FOR:
+            status = "active"
         elif active is None:
             status, active = "active", name
         else:
             status = "next"
         iso = lambda t: t.astimezone(timezone.utc).isoformat(timespec="seconds") if t else None
         rows.append({**u, "model": model_of(name), "status": status, "paused_minutes": math.ceil(paused / 60),
-                     "back_at": iso(back), "resets_at": iso(resets)})
+                     "rate_limited": bool(paused) and name in _rate_limited, "back_at": iso(back), "resets_at": iso(resets)})
     waiting = [r["back_at"] for r in rows if r["back_at"]]
+    scoring = [r for r in rows if r["name"] not in ONLY_FOR]
     return {
         "active": active,
         "model": model_of(active) if active else None,
         "providers": rows,
-        "all_empty": bool(rows) and all(r["status"] in ("limit", "empty") for r in rows),
+        "all_empty": bool(scoring) and all(r["status"] in ("limit", "empty") for r in scoring),
         "next_back_at": min(waiting) if waiting else None,  # the first provider that works again
         "used_for": used_for_today(),
         "shares": shares(),
@@ -636,7 +670,7 @@ def ask_json(prompt: str, schema: dict, temperature: float, purpose: str = "othe
     provider that was tried failed. Every request that reached a provider is written down (data: ai_calls)."""
     global _active
     error, shared_out = None, False
-    for name in providers():
+    for name in providers(purpose):
         if not _ready(name, _left()):
             continue  # paused, at its daily limit, or this provider's free requests for today are used up
         if (prompt_limit(name) or len(prompt)) < len(prompt):
@@ -644,6 +678,7 @@ def ask_json(prompt: str, schema: dict, temperature: float, purpose: str = "othe
         if purpose != "score" and share_left(name, purpose) <= 0:
             shared_out = True  # this purpose's share of the provider's day is used up: the rest is kept for scoring
             continue
+        _keep_per_minute(name)
         day, meter = quota_day(name), {"tokens": 0, "neurons": 0.0}
         db.count_ai_request(name, day)  # counted before: requests running at the same time see it
         try:
@@ -659,6 +694,7 @@ def ask_json(prompt: str, schema: dict, temperature: float, purpose: str = "othe
             else:
                 wait = (e.wait if isinstance(e, RateLimited) else None) or (600 if isinstance(e, RateLimited) else 180)
                 _paused[name] = time.monotonic() + wait
+                (_rate_limited.add if isinstance(e, RateLimited) else _rate_limited.discard)(name)
                 log.warning("%s: %s, pausing it for %s and using the next AI provider (%s)",
                             name, "limit reached" if isinstance(e, RateLimited) else "servers busy",
                             f"{math.ceil(wait / 60)} min" if wait >= 60 else f"{math.ceil(wait)} s", str(e)[:160])
@@ -666,11 +702,16 @@ def ask_json(prompt: str, schema: dict, temperature: float, purpose: str = "othe
             continue
         except BrokenAnswer as e:
             db.add_ai_call(name, purpose, meter["tokens"], meter["neurons"], "broken")
+            if name in ONLY_FOR:  # NVIDIA comes before the usual chain: that one gets the same question
+                log.warning("%s: broken answer (%s), using the next AI provider", name, str(e)[:160])
+                error = e
+                continue
             log.warning("%s: broken answer (%s), not asking the next AI the same", name, str(e)[:160])
             raise
         except Exception as e:  # e.g. an empty answer or "request too large": the next provider may manage
             db.add_ai_call(name, purpose, meter["tokens"], meter["neurons"], "failed")
             _paused[name] = time.monotonic() + 5 * 60
+            _rate_limited.discard(name)
             log.warning("%s failed (%s), pausing it for 5 min and using the next AI provider", name, str(e)[:160])
             error = e
             continue
@@ -685,6 +726,24 @@ def ask_json(prompt: str, schema: dict, temperature: float, purpose: str = "othe
         raise BudgetSaved(f"today's AI share for {PURPOSE_NAMES.get(purpose, purpose)} is used up",
                           until=share_back_at(purpose))
     raise error or RateLimited("every AI provider is paused or has used up today's requests")
+
+
+_minute: dict[str, list[float]] = {}  # provider -> time.monotonic() of its requests in the last minute
+_minute_lock = threading.Lock()
+
+
+def _keep_per_minute(name: str) -> None:
+    """At most <section>.requests_per_minute requests in any 60 seconds (NVIDIA: 30, its limit is 40): waits if needed."""
+    most = _section(name).get("requests_per_minute")
+    while most:
+        with _minute_lock:
+            now = time.monotonic()
+            sent = [t for t in _minute.get(name, []) if now - t < 60]
+            if len(sent) < most:
+                _minute[name] = sent + [now]
+                return
+            wait = 60 - (now - sent[0])
+        time.sleep(wait)
 
 
 def _json_answer(text: str, cut_off: bool) -> list | dict:
@@ -710,8 +769,15 @@ def _ask_openai_style(name: str, prompt: str, schema: dict, temperature: float, 
             "response_format": {"type": "json_object"}}
     if _section(name).get("max_tokens"):
         body["max_tokens"] = _section(name)["max_tokens"]
+    body.update(_section(name).get("extra_body") or {})  # NVIDIA: chat_template_kwargs {enable_thinking: false}
     url = OPENAI_STYLE_URLS[name].format(account=os.environ.get("CLOUDFLARE_ACCOUNT_ID", ""))
-    r = httpx.post(url, headers={"Authorization": f"Bearer {os.environ[key]}"}, json=body, timeout=180)
+    timeout = _section(name).get("timeout_seconds")  # a short one (NVIDIA): no answer in time = busy, the next AI
+    try:
+        r = httpx.post(url, headers={"Authorization": f"Bearer {os.environ[key]}"}, json=body, timeout=timeout or 180)
+    except httpx.TimeoutException:
+        if not timeout:
+            raise
+        raise Overloaded(f"no answer within {timeout} s") from None
     data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
     _note_headers(name, r)
     meter["tokens"] = int((data.get("usage") or {}).get("total_tokens") or 0)
@@ -728,9 +794,14 @@ def _ask_openai_style(name: str, prompt: str, schema: dict, temperature: float, 
     if status == 200 and isinstance(code, int):  # OpenRouter sometimes reports errors inside a 200
         status = code
     if status == 429:
-        raise _limit_error(name, r, message[:300])
+        e = _limit_error(name, r, message[:300])
+        if name in ONLY_FOR and not e.until and not e.wait:  # NVIDIA: a per-minute limit, back after a minute
+            e.wait = 60
+        raise e
     if isinstance(status, int) and status >= 500:
         raise Overloaded(f"HTTP {status}")
+    if name in ONLY_FOR and "unavailable" in message.lower():  # NVIDIA: "model ... is unavailable"
+        raise Overloaded(message[:160])
     if status == 400 and ("validate json" in message.lower() or code == "json_validate_failed"):
         raise BrokenAnswer(f"{name} could not make valid JSON")  # Groq checks the JSON itself
     if status != 200 or not data.get("choices"):
@@ -741,6 +812,8 @@ def _ask_openai_style(name: str, prompt: str, schema: dict, temperature: float, 
         raise RuntimeError(f"{name} gave an empty answer")
     answer = _json_answer(content, choice.get("finish_reason") == "length")
     if wrapped and isinstance(answer, dict):  # some models name the list differently ("jobs", ...)
+        if "items" not in answer and isinstance(answer.get("properties"), dict):
+            answer = answer["properties"]  # NVIDIA copies the schema around it: {"type": "OBJECT", "properties": {"items": [...]}}
         lists = [v for v in answer.values() if isinstance(v, list)]
         return answer.get("items") or (lists[0] if lists else [])
     return answer

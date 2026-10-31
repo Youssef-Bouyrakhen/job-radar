@@ -25,6 +25,11 @@ The owner is a beginner: explain in plain language and give exact commands.
 - `app/arbeitsagentur.py`, `app/gmail.py` - built-in sources
 - `app/filters.py` - layer 1 keyword filter; `app/ai.py` - layer 2 AI scoring + daily budget
 - `app/details.py` - full job description; `app/dedup.py` - same job from two sources
+- `app/initiativ_mail.py` - Initiativ email drafts: 07:00 daily Gmail DRAFTS (IMAP, never sent) from 3 fixed
+  templates + CVs in `data/initiativ/` (personal, uploaded in the dashboard); notices sent ones by Gmail thread id
+- `app/applications.py` - Applications page (tracker): applications from Gmail Sent + portal confirmations +
+  jobs marked Applied (table `applications`), replies found in All Mail (read-only) by thread / domain / name,
+  sorted by rules (AI only when unsure); Job ad vs Initiativ counted separately; `tracker_since` = start date
 - `app/must_apply.py` - the "Must apply" list; `app/telegram.py`, `app/weekly.py` - messages
 - `app/companies.py`, `careers.py`, `company_jobs.py`, `company_import.py`, `categories.py`,
   `discover.py` - Company Discovery Engine (find companies, careers pages, rank them)

@@ -16,7 +16,7 @@ DEFAULTS = {
     },
     "emails": {"enabled": True, "label": "JobRadar", "days_back": 14, "max_emails_per_check": 50},
     "applications": {"enabled": True, "label": "Bewerbungen", "days_back": 60, "max_emails_per_check": 80,
-                     "check_every_minutes": 15, "telegram_max_age_days": 3,
+                     "check_every_minutes": 15, "telegram_max_age_days": 3, "tracker_days_back": 365, "tracker_since": "2026-09-01", "portal_from_emails": True,
                      "ignore_senders": ["vaia.com", "studysmarter.de", "jobagent.stepstone.de", "shop-apotheke.com",
                                         "freelance.de", "jobseeker.com", "match.indeed.com", "updates-noreply@linkedin.com",
                                         "notifications-noreply@linkedin.com"]},
@@ -44,7 +44,11 @@ DEFAULTS = {
                    "neurons_factor": 1.5},
     "github": {"enabled": False, "model": "openai/gpt-4.1-mini", "max_prompt_chars": 18000},
     "mistral": {"enabled": False, "model": "mistral-small-latest"},
-    "cerebras": {"enabled": False, "model": "gpt-oss-120b"},
+    # careers pages only, before the others (ai.ONLY_FOR); its limit is 40 requests a minute, no known daily one
+    "nvidia": {"model": "nvidia/nemotron-3.5-lightning-30b-a3b", "timeout_seconds": 45, "requests_per_minute": 30,
+               "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
+    # the last backup, after OpenRouter; its free limit is 5 requests a minute (and 150 an hour)
+    "cerebras": {"model": "gpt-oss-120b", "requests_per_minute": 4},
     "ai_budget": {
         "daily_requests": {"Gemini": 20, "Groq": 1000, "OpenRouter": 50, "GitHub": 150, "Mistral": 300, "Cerebras": 300},
         # % of each provider's day: scoring keeps score_reserved for itself, careers pages at most careers,
@@ -137,6 +141,33 @@ DEFAULTS = {
             "Seeheim-Jugenheim": {"ags": "06432022", "postcodes": [64342], "hall": "Gemeinde Seeheim-Jugenheim",
                                   "names": ["Seeheim"]},  # not "Jugenheim": there is one in Rheinhessen too
             "Erzhausen": {"ags": "06432006", "postcodes": [64390], "hall": "Gemeinde Erzhausen"},
+            # Frankfurt districts (not Frankfurt-Griesheim): their boundary on OpenStreetMap, one Arbeitsagentur
+            # search per postcode (the district's name finds all of Frankfurt), the register by postcode
+            "Frankfurt-Niederrad": {"osm_areas": [3870398], "postcodes": [60528], "aa_where": ["60528"],
+                                    "place": r"niederrad|lyoner", "city": "Frankfurt am Main",
+                                    "hall": "Stadt Frankfurt am Main"},
+            "Frankfurt-Sachsenhausen": {"osm_areas": [3891374, 4209942], "postcodes": [60594, 60596, 60598, 60599],
+                                        "aa_where": ["60594", "60596", "60598", "60599"], "place": r"sachsenhausen",
+                                        "city": "Frankfurt am Main", "hall": "Stadt Frankfurt am Main"},
+            "Frankfurt-Schwanheim": {"osm_areas": [3870399], "postcodes": [60529], "aa_where": ["60529"],  # with Goldstein
+                                     "place": r"schwanheim|goldstein", "city": "Frankfurt am Main",
+                                     "hall": "Stadt Frankfurt am Main"},
+            # Not the town "Griesheim" (64347) above: "Griesheim" alone in a place is the town
+            "Frankfurt-Griesheim": {"osm_areas": [4209937], "postcodes": [65933], "aa_where": ["65933"],
+                                    "place": r"frankfurt\b.{0,12}griesheim", "city": "Frankfurt am Main",
+                                    "hall": "Stadt Frankfurt am Main"},
+            # The centre: 60310 / 60306 / 60308 are the TaunusTurm, OpernTurm and Messeturm. "Innenstadt" and
+            # "Westend" alone are in other towns too (Wiesbaden-Westend): only with "Frankfurt" before them
+            "Frankfurt-Innenstadt": {"osm_areas": [4209940], "postcodes": [60313, 60311, 60310],
+                                     "aa_where": ["60313", "60311", "60310"], "place": r"frankfurt\b.{0,12}innenstadt",
+                                     "city": "Frankfurt am Main", "hall": "Stadt Frankfurt am Main"},
+            "Frankfurt-Bahnhofsviertel": {"osm_areas": [4209935], "postcodes": [60329], "aa_where": ["60329"],
+                                          "place": r"frankfurt\b.{0,12}bahnhofsviertel", "city": "Frankfurt am Main",
+                                          "hall": "Stadt Frankfurt am Main"},
+            "Frankfurt-Westend": {"osm_areas": [4206777, 4206778], "postcodes": [60325, 60323, 60322, 60320, 60306, 60308],
+                                  "aa_where": ["60325", "60323", "60322", "60320", "60306", "60308"],
+                                  "place": r"frankfurt\b.{0,12}westend", "city": "Frankfurt am Main",
+                                  "hall": "Stadt Frankfurt am Main"},
             # 55099: the university's own postcode
             "Mainz": {"ags": "07315000", "postcodes": [55099, 55116, 55118, 55120, 55122, 55124, 55126, 55127, 55128,
                                                        55129, 55130, 55131],
@@ -161,6 +192,18 @@ DEFAULTS = {
         "max_hours": 20,
         "reminder_hours": 24,
         "low_competition_categories": ["insurance", "finance", "cloud", "security"],
+    },
+    # Initiativ email drafts (initiativ_mail.py). On / off and per_day are also set in the dashboard (Companies >
+    # Initiativ); the dashboard's choice wins. Templates and CVs live in data/initiativ/ (personal, not in git).
+    "initiativ_emails": {
+        "hour": 7,                   # every day at this hour (German time), before you start your day
+        "per_day": 10,
+        "subject": "Initiativbewerbung als Werkstudent IT",
+        "min_template3": 1,          # Banks/Finance + Insurance: at least this many a day while any are left
+        "paused_templates": ["3"],   # these templates make no drafts, their companies are left alone (3: no addresses yet)
+        "no_email": "skip",          # no address found: skip (next company) or draft (empty "To", you fill it in)
+        "max_lookups_per_run": 40,   # careers pages / Impressums opened per run to find an address
+        "check_sent_every_minutes": 60,
     },
     "fetch": {
         "delay_per_site_seconds": 5,

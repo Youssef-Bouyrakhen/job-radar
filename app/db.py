@@ -136,6 +136,35 @@ CREATE TABLE IF NOT EXISTS app_emails (
     read_at     TEXT NOT NULL
 );
 
+-- Your applications (applications.py), built from Gmail by itself: emails you sent (Sent folder), confirmations
+-- from applicant portals (you applied on a website, no email), and jobs you marked Applied in Job Radar.
+CREATE TABLE IF NOT EXISTS applications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,        -- job (a job ad) / initiativ (Initiativbewerbung)
+    source     TEXT NOT NULL,        -- sent (your email) / portal (a confirmation email) / jobradar (marked Applied)
+    origin     TEXT NOT NULL UNIQUE, -- what it was made from: the Gmail id of the email, or "job:<id>"
+    company    TEXT,
+    title      TEXT,                 -- the job's title (Initiativ: what you asked for, e.g. "Werkstudent IT")
+    sent_at    TEXT,
+    contact    TEXT,                 -- the address you wrote to / the portal wrote from
+    contact_key TEXT,                -- the company's email domain ("musterfirma@personio.de" for shared portals)
+    thread_id  TEXT,                 -- Gmail's thread (X-GM-THRID): replies in it are matched first
+    ref        TEXT,                 -- a reference number from the subject (Stellen-ID 12345)
+    job_id     INTEGER,              -- the job in Job Radar it belongs to, if any
+    status     TEXT NOT NULL DEFAULT 'sent',  -- from the emails: sent / confirmation / reply / test / interview / offer / rejection
+    status_you TEXT,                 -- your choice in the dropdown (wins over the emails)
+    hidden     INTEGER NOT NULL DEFAULT 0,    -- 1 = you said it is not an application
+    created_at TEXT NOT NULL
+);
+
+-- Emails in your Sent folder Job Radar has looked at (each once)
+CREATE TABLE IF NOT EXISTS app_sent (
+    gmail_id  TEXT PRIMARY KEY,
+    thread_id TEXT,
+    result    TEXT NOT NULL,         -- application / follow-up / not (not an application)
+    read_at   TEXT NOT NULL
+);
+
 -- Why a Watched / Initiativ company shows 0 jobs for you (diagnosis.py). One row per such company.
 CREATE TABLE IF NOT EXISTS diagnosis (
     company_id INTEGER PRIMARY KEY,
@@ -146,6 +175,22 @@ CREATE TABLE IF NOT EXISTS diagnosis (
     seen       TEXT,                 -- JSON: what the tool saw on the careers page
     at         TEXT NOT NULL,
     wrong_at   TEXT                  -- you clicked "This is wrong": on the re-check list
+);
+
+-- Initiativ email drafts (initiativ_mail.py): one row per company, made once. Gmail keeps the draft; you send it.
+CREATE TABLE IF NOT EXISTS initiativ_drafts (
+    company_id  INTEGER PRIMARY KEY,
+    template    TEXT NOT NULL,        -- 1 / 3 / other
+    to_email    TEXT,                 -- empty: no address found
+    email_from  TEXT,                 -- where the address came from, e.g. "careers page"
+    state       TEXT NOT NULL,        -- draft / sent / deleted (you deleted it in Gmail) / no_email / failed
+    test        INTEGER NOT NULL DEFAULT 0,  -- 1 = a test draft to your own address (the company stays on the list)
+    gmail_msgid TEXT,                 -- Gmail's ids of the draft (X-GM-MSGID) and its thread (X-GM-THRID):
+    gmail_thrid TEXT,                 --   the sent email stays in the draft's thread
+    created_at  TEXT NOT NULL,
+    sent_at     TEXT,
+    checked_at  TEXT,
+    note        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -189,6 +234,12 @@ MIGRATIONS = {
         "area": "TEXT",
         "area_km": "REAL",              # km from the area's center (empty: remote or unknown)
     },
+}
+
+# Replies to your applications: matched to an application (not only to a job you marked Applied)
+MIGRATIONS["app_emails"] = {
+    "app_id": "INTEGER",            # the application it belongs to (while in review: the best guess)
+    "thread_id": "TEXT",            # Gmail's thread id (X-GM-THRID)
 }
 
 # Cloudflare's free limit is counted in "neurons" (its own unit of AI work), not requests
@@ -239,6 +290,8 @@ MIGRATIONS["companies"] = {
     "list_checked_at": "TEXT",       # when that job list was last found / checked (checked again once a month)
     "list_browser": "INTEGER",       # 1 = the job list only shows its jobs in a browser (JavaScript)
     "landing_tried_at": "TEXT",      # the last search for a job list behind its landing page
+    # Initiativ email drafts, see initiativ_mail.py
+    "initiativ_sent_date": "TEXT",   # when you sent its Initiativ email from Gmail (found by Job Radar), empty = not yet
 }
 
 AFTER_ADDING = {
@@ -267,6 +320,19 @@ def connect() -> Iterator[sqlite3.Connection]:
             yield conn
     finally:
         conn.close()
+
+
+def backup(label: str) -> Path:
+    """A full copy of the database next to it, e.g. data/backup-before-tracker-20261101-0930.db. SQLite's own
+    backup, so it is safe while Job Radar runs (WAL)."""
+    target = DB_PATH.parent / f"backup-{label}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.db"
+    src, dst = sqlite3.connect(DB_PATH), sqlite3.connect(target)
+    try:
+        src.backup(dst)
+    finally:
+        src.close()
+        dst.close()
+    return target
 
 
 def init_db() -> None:
@@ -803,7 +869,49 @@ def remember_emails(gmail_ids: list[str]) -> None:
 # ---- application emails (applications.py) -----------------------------------------
 
 APP_EMAIL_COLUMNS = ("gmail_id", "received_at", "sender", "subject", "body", "kind", "kind_from", "company",
-                     "job_id", "state", "note", "notified")
+                     "job_id", "state", "note", "notified", "app_id", "thread_id")
+APPLICATION_COLUMNS = ("kind", "source", "origin", "company", "title", "sent_at", "contact", "contact_key", "thread_id",
+                       "ref", "job_id")
+
+
+def applications(hidden: bool = False) -> list[dict]:
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM applications WHERE hidden = ? ORDER BY sent_at",
+                                              (int(hidden),))]
+
+
+def application(app_id: int) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def add_application(a: dict) -> int:
+    """Saves a new application, returns its id (an application from the same email: that one's id)."""
+    row = {c: a.get(c) for c in APPLICATION_COLUMNS}
+    with connect() as conn:
+        conn.execute(f"""INSERT OR IGNORE INTO applications ({', '.join(APPLICATION_COLUMNS)}, created_at)
+                         VALUES ({', '.join(':' + c for c in APPLICATION_COLUMNS)}, :created_at)""",
+                     {**row, "created_at": now()})
+        return conn.execute("SELECT id FROM applications WHERE origin = ?", (row["origin"],)).fetchone()[0]
+
+
+def update_application(app_id: int, fields: dict) -> None:
+    with connect() as conn:
+        conn.execute(f"UPDATE applications SET {', '.join(f'{k} = :{k}' for k in fields)} WHERE id = :id",
+                     {**fields, "id": app_id})
+
+
+def known_sent(gmail_ids: list[str]) -> set[str]:
+    with connect() as conn:
+        rows = conn.execute("SELECT gmail_id FROM app_sent").fetchall()
+    return {r[0] for r in rows} & set(gmail_ids)
+
+
+def save_sent(gmail_id: str, thread_id: str | None, result: str) -> None:
+    with connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO app_sent (gmail_id, thread_id, result, read_at) VALUES (?, ?, ?, ?)",
+                     (gmail_id, thread_id, result, now()))
 
 
 def known_app_emails(gmail_ids: list[str]) -> set[str]:
@@ -855,9 +963,11 @@ def app_emails_to_notify(since: str) -> list[dict]:
     """Interview invites and tests that came in after `since` and weren't sent to Telegram yet."""
     with connect() as conn:
         return [dict(r) for r in conn.execute(
-            """SELECT e.*, j.title AS job_title, j.url AS job_url, j.company AS job_company
-               FROM app_emails e LEFT JOIN jobs j ON j.id = e.job_id AND e.state = 'matched'
-               WHERE e.kind IN ('interview', 'test') AND e.state IN ('matched', 'review') AND e.notified = 0
+            """SELECT e.*, COALESCE(j.title, a.title) AS job_title, j.url AS job_url,
+                      COALESCE(a.company, j.company) AS job_company
+               FROM app_emails e LEFT JOIN applications a ON a.id = e.app_id AND e.state = 'matched'
+               LEFT JOIN jobs j ON j.id = a.job_id
+               WHERE e.kind IN ('interview', 'test', 'offer') AND e.state IN ('matched', 'review') AND e.notified = 0
                AND e.received_at >= ? ORDER BY e.received_at""", (since,))]
 
 
@@ -1095,3 +1205,25 @@ def set_setting(key: str, value: str) -> None:
     with connect() as conn:
         conn.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
                      "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+
+
+# ---- Initiativ email drafts (initiativ_mail.py) ------------------------------------------
+
+def initiativ_drafts() -> list[dict]:
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM initiativ_drafts ORDER BY created_at DESC")]
+
+
+def save_initiativ_draft(row: dict) -> None:
+    with connect() as conn:
+        conn.execute(f"INSERT OR REPLACE INTO initiativ_drafts ({', '.join(row)}) VALUES ({', '.join(':' + k for k in row)})",
+                     row)
+
+
+def update_initiativ_draft(company_id: int, fields: dict) -> None:
+    with connect() as conn:
+        conn.execute(f"UPDATE initiativ_drafts SET {', '.join(f'{k} = :{k}' for k in fields)} WHERE company_id = :id",
+                     {**fields, "id": company_id})
+        if fields.get("state") == "sent":
+            conn.execute("UPDATE companies SET initiativ_sent_date = ? WHERE id = ? AND initiativ_sent_date IS NULL",
+                         (fields.get("sent_at"), company_id))
