@@ -171,6 +171,13 @@
             <button type="button" class="btn btn--sm" id="trCheck"><svg data-icon="mail"></svg><span>Check Gmail now</span></button>
           </div>
           <div class="tr-wrap">
+            <div class="tr-period">
+              <div class="tr-seg" id="trPeriod" role="group" aria-label="Period">
+                <button type="button" data-tr-period="today">Today</button><button type="button" data-tr-period="2d">2 days</button><button type="button" data-tr-period="3d">3 days</button><button type="button" data-tr-period="week">This week</button><button type="button" data-tr-period="lastweek">Last week</button><button type="button" data-tr-period="30d">30 days</button><button type="button" data-tr-period="all" class="is-on">All</button><button type="button" data-tr-period="custom">Custom</button>
+              </div>
+              <span class="tr-dates" id="trDates" hidden><label>From <input type="date" id="trFrom"></label><label>To <input type="date" id="trTo"></label></span>
+              <span class="list-sub" id="trPeriodLine"></span>
+            </div>
             <div class="tr-counters" id="trCounters"></div>
             <div class="tr-progress" id="trProgress"></div>
             <div class="tr-types" id="trTypes"></div>

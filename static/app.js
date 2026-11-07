@@ -1733,7 +1733,41 @@ const APP_STATUS = {
 };
 const appTag = st => st && st !== 'sent' ? `<span class="app-tag app-tag--${esc(st)}">${APP_STATUS[st] || esc(st)}</span>` : '<span class="app-tag" title="No answer yet">Applied</span>';
 const appliedJobs = () => jobs.filter(j => j.status === 'applied');
-const tr = { type: 'all', status: '', query: '', open: null };
+const tr = { type: 'all', status: '', query: '', open: null, period: 'all' };
+tr.from = tr.to = '';  // the Custom range, as days
+try {
+  const p = localStorage.getItem('jr-tr-period'); if (p) tr.period = p;
+  Object.assign(tr, JSON.parse(localStorage.getItem('jr-tr-custom') || '{}'));
+} catch (e) {}
+
+// Time filter. Days are German calendar days ("YYYY-MM-DD"); apps.today comes from the server.
+const dayAdd = (day, n) => { const d = new Date(day + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const dayOf = iso => iso ? new Date(iso).toLocaleDateString('en-CA', { timeZone: TZ }) : '';
+const dayShort = day => new Date(day + 'T00:00:00Z').toLocaleDateString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short' });
+function trRange() {  // { from, to } as days, or null for All
+  const today = apps?.today; if (!today || tr.period === 'all') return null;
+  if (tr.period === 'custom') return tr.from && tr.to ? { from: tr.from < tr.to ? tr.from : tr.to, to: tr.from < tr.to ? tr.to : tr.from } : null;  // swapped if backwards
+  const monday = dayAdd(today, -((new Date(today + 'T00:00:00Z').getUTCDay() + 6) % 7));
+  const days = { today: [today, today], '2d': [dayAdd(today, -1), today], '3d': [dayAdd(today, -2), today], '30d': [dayAdd(today, -29), today],
+    week: [monday, today], lastweek: [dayAdd(monday, -7), dayAdd(monday, -1)] }[tr.period];
+  return days ? { from: days[0], to: days[1] } : null;
+}
+const inRange = (iso, r) => { const d = dayOf(iso); return !!d && d >= r.from && d <= r.to; };
+// Sent by the day it was sent; answers by the day the reply arrived (a hand-set status has no date: only in All)
+function trStats(list, r) {
+  const sentIn = list.filter(a => inRange(a.sent_at, r));
+  const got = (a, kinds) => a.replies.some(t => kinds.includes(t.kind) && inRange(t.at, r));
+  const n = kinds => list.filter(a => got(a, kinds)).length;
+  const answered = n([...ANSWERS_KINDS]), sent = sentIn.length;
+  return { sent, answered, rate: sent ? Math.min(100, Math.round(100 * answered / sent)) : 0, rejected: n(['rejection']),
+    interviews: n(['interview']), offers: n(['offer']), waiting: sentIn.filter(a => !a.answered).length };
+}
+const ANSWERS_KINDS = ['reply', 'test', 'interview', 'offer', 'rejection'];
+const trPool = () => (apps?.applications || []).filter(a => tr.type === 'all' || a.kind === tr.type);
+function trPeriodLine(r) {
+  if (!r) return tr.period === 'custom' ? 'Pick both dates (From and To)' : 'Showing all time';
+  return r.from === r.to ? `Showing ${dayShort(r.from)}` : `Showing ${dayShort(r.from)} to ${dayShort(r.to)}`;
+}
 
 async function loadApps(quiet) {
   if (state.demo) return;
@@ -1774,7 +1808,9 @@ async function unassignEmail(id) {
 
 function trShown() {
   const q = tr.query.trim().toLowerCase();
+  const r = trRange();
   return (apps?.applications || []).filter(a => (tr.type === 'all' || a.kind === tr.type)
+    && (!r || inRange(a.sent_at, r) || a.replies.some(t => inRange(t.at, r)))
     && (!tr.status || (tr.status === 'waiting' ? !a.answered : a.shown === tr.status))
     && (!q || [a.company, a.title, a.contact].some(v => (v || '').toLowerCase().includes(q))));
 }
@@ -1783,7 +1819,12 @@ function renderTracker() {
   if (state.tab !== 'apps') return;
   if (state.demo) { $('#trCards').innerHTML = '<p class="co-sub">Demo data: connect the backend to see your applications.</p>'; return; }
   if (!apps?.stats) { $('#trCards').innerHTML = '<p class="co-sub">Loading…</p>'; return; }
-  const s = apps.stats[tr.type] || apps.stats.all;
+  const r = trRange();
+  const s = r ? trStats(trPool(), r) : (apps.stats[tr.type] || apps.stats.all);
+  $('#trPeriodLine').textContent = trPeriodLine(r);
+  $('#trDates').hidden = tr.period !== 'custom';
+  $('#trFrom').value = tr.from; $('#trTo').value = tr.to;
+  $$('#trPeriod [data-tr-period]').forEach(b => b.classList.toggle('is-on', b.dataset.trPeriod === tr.period));
   const last = apps.last?.at ? `Gmail checked ${fmtTime(apps.last.at)}${apps.last.ok === false ? ': ' + esc(apps.last.note || 'failed') : ''}`
     : apps.enabled ? 'Gmail is checked every few minutes' : 'Off: no Gmail login in .env';
   $('#trSummary').innerHTML = `<span>Built from your Gmail by itself</span><span>${last}</span>`;
@@ -1792,13 +1833,14 @@ function renderTracker() {
     + counter(s.offers, 'Offer', 'offer') + counter(s.rejected, 'Rejected', 'rejection');
   // One bar: what came back (interview, offer, other answer, rejected); the empty rest is still waiting
   const other = Math.max(0, s.answered - s.interviews - s.offers - s.rejected);
-  const pct = n => s.sent ? 100 * n / s.sent : 0;
+  const base = Math.max(s.sent, s.answered);  // in a period, answers can belong to older applications
+  const pct = n => base ? 100 * n / base : 0;
   const seg = (n, cls, label) => n ? `<span class="tr-bar-seg tr-bar-seg--${cls}" style="width:${pct(n)}%" title="${label}: ${n}"></span>` : '';
   $('#trProgress').innerHTML = `<div class="tr-bar" role="img" aria-label="${s.answered} of ${s.sent} answered">
       ${seg(s.interviews, 'interview', 'Interview')}${seg(s.offers, 'offer', 'Offer')}${seg(other, 'reply', 'Answered')}${seg(s.rejected, 'rejection', 'Rejected')}</div>
     <div class="tr-bar-text"><span><b>${s.rate}%</b> answered (${s.answered} of ${s.sent})</span><span>${s.waiting} waiting for an answer</span></div>`;
   const typeLine = (k, l) => {
-    const t = apps.stats[k];
+    const t = r ? trStats((apps.applications || []).filter(a => a.kind === k), r) : apps.stats[k];
     return `<div class="tr-type"><div class="tr-type-name">${l}</div><div class="tr-type-nums">
       <span><b>${t.sent}</b> sent</span><span><b>${t.answered}</b> answered</span><span><b>${t.rate}%</b> response rate</span>
       <span><b>${t.rejected}</b> rejected</span><span><b>${t.interviews}</b> interview${t.interviews === 1 ? '' : 's'}</span>${t.offers ? `<span><b>${t.offers}</b> offer${t.offers === 1 ? '' : 's'}</span>` : ''}</div></div>`;
@@ -1865,6 +1907,17 @@ $('#trCheck').addEventListener('click', async e => {
   try { apps = await api('appCheck'); await refreshQuiet(); toast('Gmail checked'); }
   catch (err) { toast(err.message); }
   b.disabled = false; $('#appsCount').textContent = apps?.stats?.all?.sent ?? '–'; renderTracker();
+});
+$('#trPeriod').addEventListener('click', e => {
+  const b = e.target.closest('[data-tr-period]'); if (!b) return;
+  tr.period = b.dataset.trPeriod;
+  try { localStorage.setItem('jr-tr-period', tr.period); } catch (err) {}
+  renderTracker();
+});
+$('#trDates').addEventListener('change', () => {
+  tr.from = $('#trFrom').value; tr.to = $('#trTo').value;
+  try { localStorage.setItem('jr-tr-custom', JSON.stringify({ from: tr.from, to: tr.to })); } catch (err) {}
+  renderTracker();
 });
 $('#trSearch').addEventListener('input', e => { tr.query = e.target.value; renderTracker(); });
 $('#trStatus').addEventListener('change', e => { tr.status = e.target.value; renderTracker(); });

@@ -97,7 +97,7 @@ def parse(raw: bytes) -> dict:
     if len(text) < 400:  # some portals (Indeed) only name the company in the HTML part
         text = f"{text} {_text(msg, ('html',))}".strip()
     return {"sender": str(msg.get("From", ""))[:300], "subject": re.sub(r"\s+", " ", str(msg.get("Subject", "")))[:300],
-            "body": text[:5000], "received_at": received, "to": to}
+            "body": text[:5000], "received_at": received, "to": to, "bulk": bool(msg.get("List-Unsubscribe"))}
 
 
 def _address(sender: str) -> str:
@@ -116,6 +116,19 @@ def ignored_sender(sender: str) -> bool:
         if address == entry or domain == entry or domain.endswith("." + entry):
             return True
     return address == _me()  # your own emails
+
+
+# Job-ad mailers: newsletters with "jobs for you", never an answer to an application
+NEWSLETTER_DOMAINS = {"jobleads.com", "jobleads.de", "jooble.org", "joblift.de", "jobrapido.com", "talent.com",
+                      "adzuna.de", "ziprecruiter.com", "whatjobs.com", "kimeta.de"}
+
+
+def newsletter(e: dict, known: bool) -> bool:
+    """A job-ad mailer, or a mass mail (it has an unsubscribe header) that is not about one of your applications.
+    Not when it comes from a company you applied to, or when the subject says it is about your application."""
+    if registrable(_address(e["sender"]).rpartition("@")[2] or "x.x") in NEWSLETTER_DOMAINS:
+        return True
+    return bool(e.get("bulk")) and not known and not (ABOUT_APPLICATION.search(e["subject"]) or STRONG_SUBJECT.search(e["subject"]))
 
 
 # ---- the company's email domain ---------------------------------------------------
@@ -729,6 +742,10 @@ def _before(a: dict, e: dict) -> bool:
     return datetime.fromisoformat(e["received_at"]) >= sent
 
 
+def _is_indeed_apply(e: dict) -> bool:
+    return _address(e["sender"]).endswith("@indeed.com") and _address(e["sender"]).startswith("indeedapply")
+
+
 def find(e: dict, apps: list[dict], ai_company: str = "") -> tuple[int | None, int | None, str]:
     """(application id, best guess, note). The id only when the match is clear; otherwise the best guess
     (may be None) and why it needs review. Thread, then the sender's domain, then the company's name."""
@@ -761,6 +778,10 @@ def find(e: dict, apps: list[dict], ai_company: str = "") -> tuple[int | None, i
             fits = [a for a in apps if a["title_words"] and len(title & a["title_words"]) / len(title | a["title_words"]) >= 0.75]
             if len(fits) == 1:
                 return fits[0]["id"], fits[0]["id"], ""
+        if title and _is_indeed_apply(e):  # Indeed cuts long titles ("Developer" for "Developer & Cloud")
+            fits = [a for a in apps if a["title_words"] and title <= a["title_words"]]
+            if len(fits) == 1:
+                return fits[0]["id"], fits[0]["id"], ""
     if not candidates:
         return None, None, NOT_FOUND
     text = set(_words(e["subject"])) | set(_words(e["body"][:600]))
@@ -788,6 +809,10 @@ def find(e: dict, apps: list[dict], ai_company: str = "") -> tuple[int | None, i
         return a["id"], a["id"], ""
     if e.get("kind") in ("confirmation", "rejection") and title and best < 0.34:
         return None, None, "new job at this company"
+    if e.get("kind") == "confirmation":
+        # A confirmation changes no status, so it doesn't have to be exact: the job named most closely, else the newest
+        a = max(candidates, key=lambda x: (_title_score(x, text, ref), len(x["title_words"] & text), x["sent_at"] or "", x["id"]))
+        return a["id"], a["id"], ""
     return None, a["id"], f"{len(candidates)} applications at {a['company']}: which one?"
 
 
@@ -900,7 +925,7 @@ def _check() -> dict:
 
     unsure = []
     for e in emails:
-        if ignored_sender(e["sender"]):
+        if ignored_sender(e["sender"]) or newsletter(e, known(e)):
             kind = ""
         else:
             kind = rule_kind(e, known(e))
@@ -977,6 +1002,8 @@ def _file(e: dict, counts: dict, apps: list[dict]) -> None:
             guess = app_id
     if e["kind"] == "other" and not e.get("note"):
         state, note = "ignored", None   # a portal / account / out-of-office email: nothing to review
+    elif app_id is None and e["kind"] == "confirmation" and _is_indeed_apply(e):
+        state, note = "ignored", None   # Indeed's "your application was forwarded": no job of ours to attach it to
     elif app_id is not None and not e.get("note"):
         state, note = "matched", None
     else:
@@ -1001,7 +1028,12 @@ def rematch_review(apps: list[dict] | None = None) -> int:
     threads = {a["thread_id"] for a in apps if a["thread_id"]}
     keys = {a["contact_key"] for a in apps if a["contact_key"]}
     for e in db.app_emails(state="review"):
-        if e["kind_from"] == "you" or (e["note"] or "").startswith(("The AI isn't sure", "Unclear")):
+        if e["kind_from"] == "you":
+            continue  # you sorted it yourself
+        if newsletter(e, e["thread_id"] in threads or contact_key(_address(e["sender"])) in keys):
+            db.update_app_email(e["gmail_id"], {"state": "ignored", "note": None})
+            continue
+        if (e["note"] or "").startswith(("The AI isn't sure", "Unclear")):
             continue
         if e["kind_from"] == "rules" and e["body"]:  # sorted by older rules: sorted again with today's
             kind = rule_kind(e, e["thread_id"] in threads or contact_key(_address(e["sender"])) in keys)
@@ -1017,6 +1049,9 @@ def rematch_review(apps: list[dict] | None = None) -> int:
         if app_id is not None:
             db.update_app_email(e["gmail_id"], {"app_id": app_id, "state": "matched", "note": None})
             done += 1
+        elif e["kind"] == "confirmation" and _is_indeed_apply(e):
+            db.update_app_email(e["gmail_id"], {"app_id": None, "state": "ignored", "note": None})
+            continue
         elif why == NOT_FOUND and not portal_on():
             why = NOT_FOUND_HINT
         if app_id is None and (guess != e["app_id"] or why != e["note"]):
@@ -1136,7 +1171,8 @@ def overview() -> dict:
     return {"applications": sorted(apps, key=lambda a: a["sent_at"] or "", reverse=True), "stats": stats,
             "types": TYPES, "labels": LABELS, "statuses": STATUSES, "jobs": jobs,
             "review": sorted(review, key=lambda r: r["at"] or "", reverse=True),
-            "label": settings()["label"], "enabled": enabled(), "last": last_result()}
+            "label": settings()["label"], "enabled": enabled(), "last": last_result(),
+            "today": clock.today().isoformat()}  # German date: the page's time filter counts days from it
 
 
 # ---- Telegram ----------------------------------------------------------------------
