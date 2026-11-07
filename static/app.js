@@ -174,7 +174,7 @@ const DEMO = {
 
 /* STATE */
 const state = {
-  tab: 'jobs', view: 'must', query: '', sort: 'score', mustDays: 3, mustScore: 8, mustCenter: 'Darmstadt',
+  tab: 'jobs', view: 'best', query: '', sort: 'score', mustDays: 3, mustScore: 8, mustCenter: 'Darmstadt',
   openId: null, focusId: null,
   loading: true, demo: false, checking: false, telegramOn: true,
   lastCheck: null, nextCheck: null, minScore: 7,
@@ -194,11 +194,17 @@ const mustOverdue = j => isMust(j) && daysSince(j) > state.mustDays;
 const VIEWS = {
   must:     { label: 'Must apply',   icon: 'flame',       test: isMust },
   best:    { label: 'Best new',     icon: 'sparkle',     test: j => (j.status === 'new' || j.status === 'saved') && good(j) && !isOld(j) },
-  all:      { label: 'All',          icon: 'list',        test: j => isActive(j) && j.status !== 'applied' },
   saved:    { label: 'Saved',        icon: 'bookmark',    test: j => j.status === 'saved' },
   applied:  { label: 'Applied',      icon: 'checkCircle', test: j => j.status === 'applied' },
-  low:      { label: 'Low score',    icon: 'trendDown',   test: j => state.aiOn && isActive(j) && j.status !== 'applied' && scored(j) && j.ai_score < state.minScore },
+  all:      { label: 'All',          icon: 'list',        test: j => isActive(j) && j.status !== 'applied' },
+  low:     { label: 'Low score',    icon: 'trendDown',   test: j => state.aiOn && isActive(j) && j.status !== 'applied' && scored(j) && j.ai_score < state.minScore },
   filtered: { label: 'Filtered out', icon: 'eyeOff',      test: j => !isActive(j) }
+};
+
+const VIEW_HINTS = {
+  must: 'Jobs you should apply to first.', best: 'New jobs with a high AI score. Start here.',
+  saved: 'Jobs you saved for later.', applied: 'Jobs you marked as applied.', all: 'Every job Job Radar found.',
+  low: 'Jobs below your minimum score.', filtered: 'Jobs removed by your rules or hidden by you.'
 };
 
 /* HELPERS */
@@ -229,9 +235,77 @@ const scoreLabel = s => s >= 9 ? 'Top match' : s >= state.minScore ? 'Good fit' 
 const shortReason = r => r ? r.split('. ')[0].replace(/\.$/, '') : '';
 const city = l => (l || '').replace(/ am Main/, '').replace(/, DE$/, '');
 // No place is "Location unknown" (never Darmstadt); farther than the area's max_km: "Outside your area (Koblenz)"
-const placeOf = j => j.area === 'outside' ? `Outside your area (${city(j.location).split(/[,;/(]/)[0].trim()})`
-  : j.location ? city(j.location) : 'Location unknown';
-const placeText = j => [placeOf(j), j.hours].filter(Boolean).join(' · ');
+const NOT_A_PLACE = /^(hessen|deutschland|germany|de|d|homeoffice|home office|remote|hybrid|bundesweit|deutschlandweit|baden-württemberg|bayern|nordrhein-westfalen|nrw|rheinland-pfalz|niedersachsen|sachsen|thüringen|berlin und umgebung)$/i;
+// The real places in a location text: "Mannheim, München, Köln, Homeoffice" -> ["Mannheim", "München", "Köln"]
+function placeParts(loc) {
+  const clean = (loc || '').replace(/\(\s*(?:remote|hybrid|m\s*[\/|]\s*w\s*[\/|]\s*d|f\s*[\/|]\s*m\s*[\/|]\s*d|all genders|de)[^)]*\)/ig, ' ');
+  const parts = clean.split(/[;|,\/]| oder | und | or | and /i).map(p => city(p).replace(/\s+/g, ' ').trim()).filter(p => p.length >= 2 && !NOT_A_PLACE.test(p));
+  return [...new Set(parts)];
+}
+// Where a job is, for the card. kind: remote | unknown | multi | place.
+// The distance (area_km) comes from the server: straight line from Darmstadt to the nearest place of the job.
+// With several places (multi) the km belongs to the nearest one, so only the list is shown.
+function placeInfo(j) {
+  if (j.area === 'remote') return { kind: 'remote', text: 'Remote' };
+  const parts = placeParts(j.location);
+  if (!parts.length || j.area === 'unknown') return { kind: 'unknown', text: 'Location unknown' };
+  if (parts.length > 1) return { kind: 'multi', text: parts.slice(0, 3).join(', ') + (parts.length > 3 ? ` +${parts.length - 3}` : ''), title: parts.join(', ') };
+  const km = (j.area === 'near' || j.area === 'outside') && typeof j.area_km === 'number' ? Math.round(j.area_km) : null;
+  return { kind: 'place', text: parts[0], km, outside: j.area === 'outside' };
+}
+// A job without a known place never shows a top score: at most 5 (display only; the stored score is unchanged)
+const UNKNOWN_MAX = 5;
+const scoreInfo = j => {
+  const raw = j.ai_score, unknown = placeInfo(j).kind === 'unknown';
+  const lowered = scored(j) && unknown && raw > UNKNOWN_MAX;
+  return { shown: lowered ? UNKNOWN_MAX : raw, raw, lowered, unknown };
+};
+const shownScore = j => scored(j) ? scoreInfo(j).shown : -1;
+
+// Skills named on the card: found in the title, the AI's reason and the job type (the job list has no description,
+// and one request per job would be too much). Skills that are also in your profile are shown in green and first.
+const SKILLS = [
+  ['Python', /\bpython\b/i], ['Java', /\bjava\b(?!\s*script)/i], ['JavaScript', /javascript|\bnode\.?js\b/i], ['TypeScript', /typescript/i],
+  ['C++', /c\+\+/i], ['C#/.NET', /c#|\.net\b/i], ['SQL', /\bsql\b/i], ['Linux', /linux/i], ['Git', /\bgit\b/i],
+  ['Docker', /docker/i], ['Kubernetes', /kubernetes|\bk8s\b/i], ['AWS', /\baws\b/i], ['Azure', /azure/i], ['Cloud', /cloud/i],
+  ['DevOps', /devops|\bci\/cd\b/i], ['IT security', /security|sicherheit|cyber/i], ['Networking', /netzwerk|network/i],
+  ['Data', /\bdata\b|\bdaten/i], ['AI', /\bai\b|\bki\b|machine learning|\bllms?\b|\brag\b/i], ['Web', /\bhtml|\bcss\b|react|angular|\bvue\b|frontend|front-end/i],
+  ['IT support', /it-support|it support|helpdesk|service desk|\b1st level|\b2nd level/i], ['SAP', /\bsap\b/i], ['Embedded', /embedded/i]
+];
+const skillsOf = j => {
+  const text = [j.title, j.ai_reason, j.employment].join(' ');
+  const mine = (settings?.profile || '');
+  return SKILLS.filter(([, re]) => re.test(text)).map(([name, re]) => ({ name, yours: re.test(mine) }))
+    .sort((a, b) => b.yours - a.yours).slice(0, 4);
+};
+
+/* Icons of the new design (styled by design.css) */
+const DI = {
+  ext: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  bm: '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  eyeoff: '<path d="M9.9 4.2A10 10 0 0 1 12 4c7 0 10 8 10 8a13 13 0 0 1-1.7 2.7M6.6 6.6A13 13 0 0 0 2 12s3 8 10 8a9.7 9.7 0 0 0 5.4-1.6M2 2l20 20"/>',
+  eye: '<path d="M2 12s3.6-8 10-8 10 8 10 8-3.6 8-10 8-10-8-10-8z"/><circle cx="12" cy="12" r="3"/>',
+  ref: '<path d="M21 12a9 9 0 0 0-15-6.7L3 8M3 3v5h5M3 12a9 9 0 0 0 15 6.7L21 16M16 16h5v5"/>',
+  pin: '<path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  jobs: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+  inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+  cal: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  set: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  warn: '<path d="m10.3 3.9-8.5 14.7A2 2 0 0 0 3.5 21.6h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/>',
+  filter: '<path d="M22 3H2l8 9.5V19l4 2v-8.5z"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  chev: '<path d="m6 9 6 6 6-6"/>',
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
+  flame: '<path d="M12 21c-3.9 0-6.5-2.6-6.5-6.2 0-3.1 2-5.3 3.6-7 .3 1.7 1.2 2.9 2.4 3.4-.2-3 1-5.8 3.4-7.7.4 2.6 1.8 4.4 3.2 6.1 1.1 1.4 1.4 2.8 1.4 4.2 0 4.4-3.1 7.2-7.5 7.2z"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
+  moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
+};
+const di = n => `<svg viewBox="0 0 24 24" aria-hidden="true">${DI[n]}</svg>`;
 const initials = c => (c || '?').replace(/[^A-Za-zÄÖÜäöü ]/g, ' ').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
 const hue = s => [...(s || '?')].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -279,44 +353,26 @@ function filteredJobs({ view = state.view, source = state.source, time = state.t
 
 function visibleJobs() {
   const byDate = (a, b) => parseDay(dateOf(b)) - parseDay(dateOf(a));
-  const byScore = (a, b) => (b.ai_score ?? -1) - (a.ai_score ?? -1) || byDate(a, b);
+  const byScore = (a, b) => shownScore(b) - shownScore(a) || byDate(a, b);  // unknown-place jobs sort by their lowered score
   const sorter = { score: byScore, newest: byDate, oldest: (a, b) => byDate(b, a) }[state.sort];
   return filteredJobs().sort(sorter);
 }
 
-// Source box counts follow the time filter; time counts follow the source filter.
+// Source and time counts follow the other filter. They sit in the one "Filters" panel.
+const SORTS = { score: 'Best score', newest: 'Newest', oldest: 'Oldest' };
 function renderFilters() {
   const count = opts => state.loading ? '–' : filteredJobs(opts).length;
-  $('#sourceBoxes').innerHTML = Object.entries(SOURCES).map(([k, s]) => {
-    const n = count({ source: k });
-    if (k === 'other' && !state.loading && !jobs.some(j => j.site === 'other') && state.source !== 'other') return '';
-    const on = state.source === k;
-    return `<button type="button" class="src-box${on ? ' is-active' : ''}" data-source="${k}" aria-pressed="${on}">
-      <span class="src-box-head">${srcIcon(s)}<span class="src-box-name">${s.label}</span></span><span class="src-box-count">${n}</span></button>`;
-  }).join('');
-  $('#timeBtn').innerHTML = `${ICON.calendar}<span>Time: ${TIMES[state.time]}</span>${ICON.chevron}`;
-  $('#timeMenu').innerHTML = Object.entries(TIMES).map(([k, label]) => {
-    const on = state.time === k;
-    return `<button type="button" class="dd-item${on ? ' is-active' : ''}" data-time="${k}" role="option" aria-selected="${on}">
-      <span class="dd-check">${on ? ICON.check : ''}</span><span class="dd-label">${label}</span><span class="dd-count">${count({ time: k })}</span></button>`;
-  }).join('');
-  renderSortArrow();
+  const opt = (value, label, on) => `<option value="${value}"${on ? ' selected' : ''}>${esc(label)}</option>`;
+  $('#fSource').innerHTML = Object.entries(SOURCES).filter(([k]) => !(k === 'other' && !state.loading && !jobs.some(j => j.site === 'other') && state.source !== 'other'))
+    .map(([k, s]) => opt(k, `${k === 'all' ? 'All sources' : s.label} (${count({ source: k })})`, state.source === k)).join('');
+  $('#fTime').innerHTML = Object.entries(TIMES).map(([k, label]) => opt(k, `${label} (${count({ time: k })})`, state.time === k)).join('');
+  $('#fSort').innerHTML = Object.entries(SORTS).map(([k, label]) => opt(k, label, state.sort === k)).join('');
+  // The button shows how many of the three differ from the defaults
+  const changed = (state.source !== 'all') + (state.time !== '7') + (state.sort !== 'score');
+  $('#fbtn').innerHTML = `${di('filter')}Filters${changed ? `<span class="d-n">${changed}</span>` : ''}`;
+  $('#fbtn').setAttribute('aria-expanded', $('#fpanel').classList.contains('d-open'));
 }
-function openTimeMenu(open) {
-  $('#timeMenu').hidden = !open;
-  $('#timeBtn').setAttribute('aria-expanded', open);
-  $('#timeDd').classList.toggle('is-open', open);
-}
-// "Posted" header: newest first, click again for oldest first
-function renderSortArrow() {
-  const dir = { newest: 'arrowDown', oldest: 'arrowUp' }[state.sort];
-  $('#postedArrow').innerHTML = dir ? ICON[dir] : '';
-  $('#postedSort').classList.toggle('is-sorted', !!dir);
-  $('#postedSort').title = state.sort === 'newest' ? 'Newest first. Click for oldest first'
-    : state.sort === 'oldest' ? 'Oldest first. Click for newest first' : 'Sort by posting date';
-  $$('[data-sort]').forEach(b => b.classList.toggle('is-active', b.dataset.sort === state.sort));
-}
-function setSort(sort) { state.sort = sort; renderSortArrow(); renderList(); }
+function setSort(sort) { state.sort = sort; renderFilters(); renderList(); }
 function setFilter(kind, value) {
   state[kind] = value; state.openId = null;
   sessionSet(kind === 'source' ? 'jr-source' : 'jr-time', value);
@@ -328,21 +384,35 @@ function srcTag(j) {
 }
 
 /* RENDER */
+// The 5 pages of the new design. Watched links, Companies and Coverage are tabs of "Sources".
+const PAGES = [['jobs', 'Jobs', 'Jobs to look at', 'jobs'], ['apps', 'Applications', 'What you sent', 'inbox'], ['sources', 'Sources', 'Links and companies', 'link'],
+  ['timeline', 'Schedule', 'What runs when', 'cal'], ['settings', 'Settings', 'What it looks for', 'set']];
+const SRC_TABS = ['links', 'companies', 'coverage'];
+const pageOf = tab => SRC_TABS.includes(tab) ? 'sources' : tab;
+// "Watched links" = the active rows of the links table (your links plus Arbeitsagentur and Gmail). One number everywhere.
+const watchedCount = () => links.filter(l => l.active).length;
+const pausedCount = () => links.filter(l => !l.active).length;
 function renderNav() {
-  const html = Object.entries(VIEWS).map(([key, v]) => {
-    const active = state.tab === 'jobs' && state.view === key;
+  const cur = pageOf(state.tab);
+  const best = state.loading ? 0 : filteredJobs({ view: 'best' }).length;
+  const badge = best ? `<span class="d-badge">${best}</span>` : '';
+  $('#nav').innerHTML = PAGES.map(([id, name, sub, icon]) =>
+    `<button type="button" class="${cur === id ? 'd-on' : ''}" data-p="${id}" aria-current="${cur === id}"><svg viewBox="0 0 24 24" aria-hidden="true">${DI[icon]}</svg><span><b>${name}</b><small>${sub}</small></span>${id === 'jobs' ? badge : ''}</button>`).join('');
+  $('#tabbar').innerHTML = PAGES.map(([id, name, , icon]) =>
+    `<button type="button" class="${cur === id ? 'd-on' : ''}" data-p="${id}"><svg viewBox="0 0 24 24" aria-hidden="true">${DI[icon]}</svg>${name}${id === 'jobs' ? badge : ''}</button>`).join('');
+  // Tabs of the Jobs page: they wrap, never cut off
+  $('#jobTabs').innerHTML = Object.entries(VIEWS).map(([key, v]) => {
     const n = state.loading ? '–' : filteredJobs({ view: key }).length;
-    return `<button type="button" class="nav-item${active ? ' is-active' : ''}" data-view="${key}" title="${v.label}" aria-current="${active}">${ICON[v.icon]}<span class="nav-label">${v.label}</span><span class="nav-count">${n}</span></button>`;
+    return `<button type="button" class="d-tab${state.view === key ? ' d-on' : ''}" data-view="${key}" aria-pressed="${state.view === key}">${v.label}<span class="d-n${key === 'best' ? ' d-hot' : ''}">${n}</span></button>`;
   }).join('');
-  $('#navViews').innerHTML = html;
-  // On phones the sidebar is hidden: the app pages go into the same scrolling row
-  const pages = [['apps', 'Applications'], ['links', 'Watched links'], ['companies', 'Companies'], ['coverage', 'Coverage'], ['timeline', 'Timeline'], ['settings', 'Settings']]
-    .map(([tab, label]) => `<button type="button" class="nav-item" data-tab="${tab}"><span class="nav-label">${label}</span></button>`).join('');
-  $('#mobileViews').innerHTML = html + pages;
-  $('#linksCount').textContent = state.loading ? '–' : links.length;
-  $('#companiesCount').textContent = coLoaded ? companies.length : '–';
-  $('#coverageCount').textContent = coverage ? coverage.covered_percent + '%' : '–';
-  $$('.nav-item[data-tab]').forEach(b => b.classList.toggle('is-active', state.tab === b.dataset.tab));
+  // Tabs of the Sources page
+  const paused = pausedCount();
+  const srcTabs = [['links', 'Watched links', state.loading ? '–' : watchedCount(), `Active links, Arbeitsagentur and Gmail included${paused ? `; ${paused} paused` : ''}`],
+    ['companies', 'Companies', coLoaded ? companies.length.toLocaleString('en') : '–', 'Every company found in your area'],
+    ['coverage', 'Coverage', coverage ? coverage.covered_percent + '%' : '–', 'How much of the region has been checked']];
+  const bar = $('#srcTabs');
+  bar.hidden = cur !== 'sources';
+  bar.innerHTML = `<div class="d-tabs">${srcTabs.map(([k, label, n, tip]) => `<button type="button" class="d-tab${state.tab === k ? ' d-on' : ''}" data-src="${k}" title="${esc(tip)}">${label}<span class="d-n">${n}</span>${k === 'links' && paused ? `<span class="d-n" title="Paused links">${paused} paused</span>` : ''}</button>`).join('')}</div>`;
 }
 
 function checkText() {
@@ -361,7 +431,7 @@ function renderStatus() {
 
 function renderHead() {
   renderTitle();
-  $('#pageTitle').textContent = VIEWS[state.view].label;
+  $('#jobHint').textContent = VIEW_HINTS[state.view] || '';
   const el = $('#summary');
   if (state.loading) { el.innerHTML = '<span class="skel" style="width:240px;height:12px;margin-top:5px"></span>'; return; }
   const best = filteredJobs({ view: 'best' });
@@ -388,88 +458,79 @@ function renderHead() {
   el.innerHTML = parts.join('');
 }
 
-function scoreChip(j) {
-  if (scoring(j)) return `<span class="chip chip--pending" title="Gemini is scoring this job"><span class="chip-text">Scoring…</span></span>`;
-  if (!scored(j)) return `<span class="chip chip--muted" title="${j.keyword_out ? 'Filtered jobs are not scored' : state.aiOn ? 'Gemini could not score this job' : 'Gemini is off'}"><span class="chip-text">No score</span></span>`;
-  const t = scoreTier(j.ai_score);
-  return `<span class="chip chip--${t}" title="AI score ${j.ai_score}/10"><span class="score-num">${j.ai_score}</span><span class="score-of">/10</span><span class="score-label">${scoreLabel(j.ai_score)}</span></span>`;
-}
-function postedChip(j) {
-  if (!j.posted_at) return `<span class="chip chip--muted" title="The source gave no posting date. This is when Job Radar first saw it."><span class="chip-text">first seen ${fmtShort(j.first_seen)}</span></span>`;
-  const days = ageDays(j.posted_at);
-  if (days > 30) return `<span class="chip chip--old" title="Posted ${fmtDate(j.posted_at)}, more than 30 days ago"><span class="chip-text">Old ad · ${fmtShort(j.posted_at)}</span></span>`;
-  return `<span class="chip"><span class="chip-text">${fmtAge(j.posted_at)}</span></span>`;
-}
 function postedPlain(j) { return !j.posted_at ? 'first seen ' + fmtShort(j.first_seen) : isOld(j) ? 'old ad · ' + fmtShort(j.posted_at) : fmtAge(j.posted_at); }
 
-function jobRow(j) {
+function scoreBox(j) {
+  if (scoring(j)) return `<div class="d-score d-pend" title="The AI is scoring this job"><b>…</b><span>Scoring</span></div>`;
+  if (!scored(j)) return `<div class="d-score d-weak" title="${j.keyword_out ? 'Filtered jobs are not scored' : state.aiOn ? 'The AI could not score this job' : 'AI scoring is off'}"><b>–</b><span>No score</span></div>`;
+  const sc = scoreInfo(j), n = sc.shown;
+  // 9-10: Top match. At or above your minimum score: Good match (softer). A lowered unknown-place job: Check location.
+  const cls = sc.lowered ? 'd-low' : n >= 9 ? 'd-hi' : n >= state.minScore ? 'd-mid' : 'd-weak';
+  const label = sc.lowered ? 'Check location' : n >= 9 ? 'Top match' : n >= state.minScore ? 'Good match' : n >= 4 ? 'Maybe' : 'Weak';
+  return `<div class="d-score ${cls}" title="${sc.lowered ? `AI score ${sc.raw}/10, shown as ${n} because the place is unknown` : `AI score ${n}/10`}"><b>${n}<small>/10</small></b><span>${label}</span></div>`;
+}
+const appTagD = st => st === 'rejected' ? `<span class="d-tag d-red">${APP_STATUS[st] || 'Rejected'}</span>`
+  : st && st !== 'sent' ? `<span class="d-tag d-blue">${APP_STATUS[st] || esc(st)}</span>` : '<span class="d-tag d-green">Applied</span>';
+
+function jobRow(j, sameCo) {
   const open = state.openId === j.id;
   const saved = j.status === 'saved', applied = j.status === 'applied', hidden = !isActive(j);
   const canHide = j.status !== 'filtered'; // keyword-filtered jobs can't be restored, the filter decides
   const tooMany = j.max_hours && j.max_hours > 20;
-  const statusTag = saved && state.view !== 'saved' ? '<span class="status-tag">Saved</span>'
-                  : applied ? appTag(j.app_status) : '';
-  const reason = hidden && j.filter_reason ? j.filter_reason : shortReason(j.ai_reason);
+  const pl = placeInfo(j), sc = scoreInfo(j);
   const must = isMust(j), overdue = mustOverdue(j);
-  const mustTag = must && state.view !== 'must' ? `<span class="status-tag status-tag--must">${ICON.flame}Must apply</span>` : '';
-  const overdueTag = overdue ? `<span class="status-tag status-tag--overdue" title="In Must apply for more than ${state.mustDays} days and not applied yet">${daysSince(j)} days old: apply now</span>` : '';
-  const mustMet = must && j.must_met.length ? `<ul class="must-met" aria-label="Must-apply conditions met">${j.must_met.map(m => `<li>${ICON.check}${esc(m)}</li>`).join('')}</ul>` : '';
+  const key = (j.company || '').trim().toLowerCase();
+  const same = key ? sameCo[key] || 1 : 1;
+  const reason = hidden && j.filter_reason ? j.filter_reason : shortReason(j.ai_reason);
+  const skills = skillsOf(j);
+  const where = pl.kind === 'unknown'
+    ? `<span class="d-warn-s" title="The ad has no place Job Radar could find. Open the ad to check.">${di('warn')}Location unknown${sc.lowered ? ` (was ${sc.raw})` : ''}</span>`
+    : `<span${pl.title ? ` title="${esc(pl.title)}"` : ''}>${di('pin')}${esc(pl.text)}${pl.km != null ? ` · ${pl.km < 1 ? '<1' : pl.km} km` : ''}${pl.outside ? ' <span class="d-outside">· outside your area</span>' : ''}</span>`;
+  const tags = (!j.seen && !hidden ? '<span class="d-tag">New</span>' : '')
+    + (applied ? appTagD(j.app_status) : saved && state.view !== 'saved' ? '<span class="d-tag d-grey">Saved</span>' : '')
+    + (must && state.view !== 'must' ? `<span class="d-tag d-must">${di('flame')} Must apply</span>` : '')
+    + (overdue ? `<span class="d-tag d-late" title="In Must apply for more than ${state.mustDays} days and not applied yet">${daysSince(j)} days old: apply now</span>` : '');
+  const chips = skills.map(k => `<span class="d-tag ${k.yours ? 'd-yours' : 'd-grey'}"${k.yours ? ' title="In your profile"' : ''}>${esc(k.name)}</span>`).join('');
+  const why = reason || chips ? `<p class="d-why" data-action="toggle">${reason ? `<b>Why:</b> ${esc(reason)}` : '<b>Skills:</b>'}${chips ? `<span class="d-skills">${chips}</span>` : ''}</p>` : '';
+  const mustMet = must && j.must_met.length ? `<ul class="d-mustmet" aria-label="Must-apply conditions met">${j.must_met.map(m => `<li>${di('check')}${esc(m)}</li>`).join('')}</ul>` : '';
+  const assess = esc(j.ai_reason || (scored(j) ? '' : scoring(j) ? 'The AI is still scoring this job.' : 'No AI score for this job.'));
   return `
-  <article class="job${open ? ' is-open' : ''}${state.focusId === j.id ? ' is-focused' : ''}${isOld(j) ? ' is-old' : ''}${overdue ? ' is-overdue' : ''}" data-id="${j.id}">
-    <div class="job-row" data-action="toggle" aria-expanded="${open}">
-      <div class="cell cell-who">
-        <span class="avatar" style="--h:${hue(j.company)}">${esc(initials(j.company))}</span>
-        <div class="who-text">
-          <div class="job-head"><h3 class="job-title">${esc(j.title)}</h3>${!j.seen && !hidden ? '<span class="new-mark">New</span>' : ''}${statusTag}${mustTag}${overdueTag}</div>
-          <div class="job-sub">${esc(j.company)} · ${srcTag(j)}<span class="sub-place"> · ${esc(placeText(j))}</span><span class="sub-age"> · ${esc(postedPlain(j))}</span></div>
-          ${reason ? `<p class="job-reason">${esc(reason)}</p>` : ''}${state.view === 'must' ? mustMet : ''}
+  <article class="d-card d-job${open ? ' d-open' : ''}${state.focusId === j.id ? ' is-focused' : ''}${isOld(j) ? ' is-old' : ''}" data-id="${j.id}">
+    ${scoreBox(j)}
+    <div class="d-jmain">
+      <div class="d-jt" data-action="toggle"><h3>${esc(j.title)}</h3>${tags}</div>
+      <div class="d-co" data-action="toggle">${esc(j.company)} · ${esc((SOURCES[j.site] || SOURCES.other).short)}${same > 1 ? ` <span class="d-tag d-blue">${same} jobs at this company</span>` : ''}</div>
+      <div class="d-meta" data-action="toggle">${where}${j.hours ? `<span${tooMany ? ' class="d-bad" title="More than 20 h per week"' : ''}>${di('clock')}${esc(j.hours)}</span>` : ''}<span>${esc(postedPlain(j))}</span></div>
+      ${why}${state.view === 'must' ? mustMet : ''}
+      <div class="d-acts">
+        <button type="button" class="d-btn d-primary" data-action="open" title="Open the ad (o)">${di('ext')}Open job</button>
+        <button type="button" class="d-btn${applied ? ' d-done' : ''}" data-action="applied" title="${applied ? 'Unmark as applied' : 'Mark as applied'} (a)">${di('check')}${applied ? 'Applied' : 'I applied'}</button>
+        <button type="button" class="d-btn${saved ? ' d-saved' : ''}" data-action="save" title="${saved ? 'Remove from saved' : 'Save for later'} (s)">${di('bm')}${saved ? 'Saved' : 'Save'}</button>
+        ${canHide ? `<button type="button" class="d-btn d-icon" data-action="hide" title="${hidden ? 'Show this job again' : 'Hide this job'} (h)" aria-label="${hidden ? 'Show this job again' : 'Hide this job'}">${di(hidden ? 'eye' : 'eyeoff')}</button>` : ''}
+      </div>
+      <div class="d-jd">
+        <p><span class="d-lab">${scored(j) ? `AI assessment · ${j.ai_score}/10` : 'AI assessment'}</span>${assess}${j.ai_full_time ? '<br>The AI thinks this is really a full-time job.' : ''}${sc.lowered ? '<br>The place is unknown, so the card shows at most 5. The stored score is unchanged.' : ''}${hidden && j.filter_reason ? `<br><span class="d-lab" style="margin-top:8px">${j.keyword_out ? 'Keyword filter' : 'Filtered because'}</span>${esc(j.filter_reason)}` : ''}</p>
+        ${applied ? timeline(j) : ''}
+        ${must ? `<p><span class="d-lab">Must apply · all 6 conditions met</span></p>${mustMet}`
+          : j.must_why_not && isActive(j) && !applied ? `<p><span class="d-lab">Not in Must apply</span>${esc(j.must_why_not)}</p>` : ''}
+        <div class="d-facts">
+          <span>${j.posted_at ? 'Posted' : 'First seen'} <b>${fmtDate(dateOf(j))}</b>${j.posted_at ? '' : ' (the site shows no posting date)'}</span>
+          <span>Source <b>${esc(j.source || '–')}</b></span>
+          <span>Location <b>${esc(j.location || 'unknown')}</b>${j.area === 'outside' && typeof j.area_km === 'number' ? ` (${Math.round(j.area_km)} km from ${esc(state.mustCenter || 'Darmstadt')}, outside your area)` : ''}</span>
+          <span>Hours <b>${j.hours ? esc(j.hours) : 'not stated'}</b></span>
+          ${j.employment ? `<span>Type <b>${esc(j.employment)}</b></span>` : ''}
         </div>
-      </div>
-      <div class="cell cell-score">${scoreChip(j)}</div>
-      <div class="cell cell-place"><span class="chip${tooMany || j.area === 'outside' ? ' chip--warn-hours' : ''}"${tooMany ? ' title="More than 20 h per week"' : j.area === 'outside' ? ` title="${Math.round(j.area_km)} km from ${esc(state.mustCenter || 'Darmstadt')}"` : ''}><span class="chip-text">${esc(placeText(j))}</span></span></div>
-      <div class="cell cell-age">${postedChip(j)}</div>
-      <div class="cell cell-actions">
-        <button type="button" class="act" data-action="open" title="Open ad (o)" aria-label="Open ad">${ICON.open}</button>
-        <button type="button" class="act${saved ? ' is-on' : ''}" data-action="save" title="${saved ? 'Unsave' : 'Save'} (s)" aria-label="Save">${saved ? ICON.bookmarkFill : ICON.bookmark}</button>
-        <button type="button" class="act${applied ? ' is-on' : ''}" data-action="applied" title="Mark applied (a)" aria-label="Mark applied">${ICON.check}</button>
-        ${canHide ? `<button type="button" class="act" data-action="hide" title="${hidden ? 'Restore' : 'Hide'} (h)" aria-label="${hidden ? 'Restore' : 'Hide'}">${hidden ? ICON.eye : ICON.eyeOff}</button>` : ''}
-      </div>
-    </div>
-    <div class="job-details">
-      <p class="details-reason"><span class="details-label">${scored(j) ? `AI assessment · ${j.ai_score}/10` : 'AI assessment'}</span>${esc(j.ai_reason || (scored(j) ? '' : scoring(j) ? 'Gemini is still scoring this job.' : 'No AI score for this job.'))}${j.ai_full_time ? '<br>Gemini thinks this is really a full-time job.' : ''}${hidden && j.filter_reason ? `<br><span class="details-label" style="margin-top:8px">${j.keyword_out ? 'Keyword filter' : 'Filtered because'}</span>${esc(j.filter_reason)}` : ''}</p>
-      ${applied ? timeline(j) : ''}
-      ${must ? `<div class="details-reason"><span class="details-label">Must apply · all 6 conditions met</span>${mustMet}</div>`
-        : j.must_why_not && isActive(j) && j.status !== 'applied' ? `<p class="details-reason"><span class="details-label">Not in Must apply</span>${esc(j.must_why_not)}</p>` : ''}
-      <div class="details-facts">
-        <span>${j.posted_at ? 'Posted' : 'First seen'} <b>${fmtDate(dateOf(j))}</b>${j.posted_at ? '' : ' (the site shows no posting date)'}</span>
-        <span>Source <b>${esc(j.source || '–')}</b>${SOURCES[j.site] ? ` (${SOURCES[j.site].short})` : ''}</span>
-        <span>Location <b>${esc(j.location || 'unknown')}</b>${j.area === 'outside' ? ` (outside your area, ${Math.round(j.area_km)} km from ${esc(state.mustCenter || 'Darmstadt')})` : ''}</span>
-        <span>Hours <b>${j.hours ? esc(j.hours) : 'not stated'}</b></span>
-        ${j.employment ? `<span>Type <b>${esc(j.employment)}</b></span>` : ''}
-      </div>
-      <div class="details-actions">
-        <button type="button" class="btn btn--primary" data-action="open">${ICON.open}Open ad</button>
-        <button type="button" class="btn${saved ? ' is-on' : ''}" data-action="save">${saved ? ICON.bookmarkFill : ICON.bookmark}${saved ? 'Saved' : 'Save'}</button>
-        <button type="button" class="btn${applied ? ' is-on' : ''}" data-action="applied">${ICON.check}${applied ? 'Applied' : 'Mark applied'}</button>
-        ${canHide ? `<button type="button" class="btn" data-action="hide">${hidden ? ICON.eye : ICON.eyeOff}${hidden ? 'Show anyway' : 'Hide'}</button>` : ''}
-        <button type="button" class="btn" data-action="copy">${ICON.copy}Copy for cover letter</button>
+        <button type="button" class="d-btn" data-action="copy">${di('copy')}Copy for cover letter</button>
       </div>
     </div>
   </article>`;
 }
 
 function emptyState() {
-  if (state.query.trim()) return `
-    <div class="empty"><div class="empty-icon">${ICON.search}</div>
-      <h3 class="empty-title">No jobs match “${esc(state.query.trim())}”</h3>
-      <p class="empty-text">Try another word, or look in All.</p>
-      <button type="button" class="btn" data-empty="clear">Clear search</button></div>`;
+  const box = (title, text, btn, go) => `<div class="d-empty"><h3>${title}</h3><p>${text}</p>${btn ? `<button type="button" class="d-btn" data-empty="${go}">${btn}</button>` : ''}</div>`;
+  if (state.query.trim()) return box(`No jobs match “${esc(state.query.trim())}”`, 'Try another word, or look in All.', 'Clear search', 'clear');
   const outside = jobs.filter(VIEWS[state.view].test).length; // jobs in this view the filters hide
-  if (outside) return `
-    <div class="empty"><div class="empty-icon">${ICON.calendar}</div>
-      <h3 class="empty-title">Nothing here with these filters</h3>
-      <p class="empty-text">${plural(outside, 'job')} in ${VIEWS[state.view].label} ${outside === 1 ? 'is' : 'are'} hidden by the source or time filter.</p>
-      <button type="button" class="btn" data-empty="filters">Show all sources, any time</button></div>`;
+  if (outside) return box('Nothing here with these filters', `${plural(outside, 'job')} in ${VIEWS[state.view].label} ${outside === 1 ? 'is' : 'are'} hidden by the source or time filter.`, 'Show all sources, any time', 'filters');
   const next = fmtTime(state.nextCheck);
   const m = {
     must: ['Nothing you must apply to right now', `A job comes here when it meets all 6 conditions: Werkstudent, AI score ${state.mustScore}+, posted in the last ${state.mustDays} days, near ${esc(state.mustCenter)} or remote, no blockers, and a low-competition sign. You also get a Telegram message.`, 'Show best new', 'best'],
@@ -480,10 +541,7 @@ function emptyState() {
     low: ['No low-score jobs', `Everything scores ${state.minScore} or higher.`],
     filtered: ['Nothing filtered out', 'Hidden and keyword-filtered jobs appear here.']
   }[state.view];
-  return `
-    <div class="empty"><div class="empty-icon">${ICON.radar}</div>
-      <h3 class="empty-title">${m[0]}</h3><p class="empty-text">${m[1]}</p>
-      ${m[2] ? `<button type="button" class="btn" data-empty="${m[3]}">${m[2]}</button>` : ''}</div>`;
+  return box(m[0], m[1], m[2], m[3]);
 }
 
 function renderList() {
@@ -496,7 +554,10 @@ function renderList() {
     return;
   }
   const list = visibleJobs();
-  el.innerHTML = list.length ? list.map(jobRow).join('') : emptyState();
+  // Jobs of the same company in the list on screen: "2 jobs at this company"
+  const sameCo = {};
+  list.forEach(j => { const k = (j.company || '').trim().toLowerCase(); if (k) sameCo[k] = (sameCo[k] || 0) + 1; });
+  el.innerHTML = list.length ? list.map(j => jobRow(j, sameCo)).join('') : emptyState();
 }
 
 function renderLinks() {
@@ -556,70 +617,47 @@ function renderSettings() {
   ].join('');
 }
 
-// AI usage bar at the top of every page: one box per provider (used / free limit today). Red after the provider
-// answered "limit reached" (or Job Radar's count is used up) until its own real reset: "resets at 09:00"
-const AI_STATUS = { active: 'Active', next: 'Next', paused: 'Paused', empty: 'Used up', limit: 'Limit reached' };
+// AI services: a pill in the top bar ("2 AI working, 1 at limit") that opens a list of all of them with today's use.
+// Red after the provider answered "limit reached" (or Job Radar's count is used up) until its own real reset.
+const AI_UI = { active: ['Working', 'd-ok'], next: ['Waiting', 'd-wait'], paused: ['Paused', 'd-wait'], empty: ['Used up', 'd-bad'], limit: ['Limit reached', 'd-bad'] };
 const AI_USES = { score: 'scoring', careers: 'careers pages', categories: 'categories', other: 'other' };
 const clockOf = iso => fmtTime(iso) || '–';
 function renderAiBar() {
-  const bar = $('#aiBar'), ai = state.ai;
-  bar.hidden = state.demo || !ai;
-  if (bar.hidden) return;
-  const boxes = ai.providers.map(p => {
-    if (p.budget === null) return aiBoxNoLimit(p);
+  const btn = $('#aiBtn'), pop = $('#aiPop'), ai = state.ai;
+  btn.hidden = state.demo || !ai;
+  if (btn.hidden) { pop.classList.remove('d-open'); return; }
+  const working = ai.providers.filter(p => p.status === 'active').length;
+  const atLimit = ai.providers.filter(p => p.status === 'limit' || p.status === 'empty').length;
+  btn.classList.toggle('d-allout', !!ai.all_empty);
+  btn.innerHTML = `<span class="d-dot${working ? '' : ' d-red'}" style="margin:0"></span><span>${working ? `${working} AI working` : 'No AI working'}</span>${atLimit ? `<span class="d-lim d-full">● ${atLimit} at limit</span>` : ''}${di('chev')}`;
+  const n = x => x.toLocaleString('en-US'), k = x => x < 1000 ? `${x}` : `${+(x / 1000).toFixed(1)}k`;
+  const rows = ai.providers.map(p => {
+    const [label, cls] = AI_UI[p.status] || [p.status, 'd-wait'];
+    const tag = p.status === 'paused' && p.rate_limited ? 'Rate limited' : p.status === 'paused' && p.paused_minutes ? `Paused ${p.paused_minutes} min` : label;
     const red = p.status === 'limit' || p.status === 'empty';
-    const pct = red ? 100 : Math.min(100, Math.round(100 * p.used / Math.max(1, p.budget)));
-    const tag = p.status === 'paused' && p.paused_minutes ? `Paused ${p.paused_minutes} min` : AI_STATUS[p.status];
-    // Cloudflare counts "neurons" (its unit of AI work), Groq tokens (and requests), the others requests
-    const neurons = p.unit === 'neurons', tokens = p.unit === 'tokens', n = x => x.toLocaleString('en-US');
-    const k = x => x < 1000 ? `${x}` : `${+(x / 1000).toFixed(1)}k`;  // 4.2k: fits the small box
-    const said = p.source === 'provider' ? ` (${p.name}'s own numbers)` : ' (counted by Job Radar)';
-    const title = neurons ? `${n(p.used)} of ${n(p.budget)} free neurons used today${said} (Cloudflare's daily limit: 10,000)`
-      : tokens ? `${n(p.used)} of ${n(p.budget)} free tokens used in the last 24 hours${said}; ${p.requests_used} of ${p.requests_budget} requests`
-      : `${p.used} of ${p.source === 'provider' ? '' : 'about '}${p.budget} free requests used today${said}`;
-    const count = neurons ? `${k(p.used)} / ${k(p.budget)} neurons` : tokens ? `${k(p.used)} / ${k(p.budget)} tokens`
-      : `${p.used} / ${p.source === 'provider' ? '' : '~'}${p.budget}`;
-    const when = red ? `resets at ${clockOf(p.back_at)}` : p.status === 'paused' ? `back at ${clockOf(p.back_at)}`
-      : p.resets_at ? `new day at ${clockOf(p.resets_at)}` : 'comes back bit by bit';
-    return `<div class="ai-box ai-box--${red ? 'empty' : p.status}" title="${esc(p.name)} · ${esc(p.model)}: ${esc(title)}">
-      <div class="ai-box-head"><span class="ai-name">${esc(p.name)}</span><span class="ai-tag">${esc(tag)}</span></div>
-      <div class="ai-count">${count}${tokens ? `<span class="ai-sub">${p.requests_used} / ${p.requests_budget} requests</span>` : ''}</div>
-      <div class="ai-meter"><span style="width:${pct}%"></span></div>
-      <div class="ai-when">${esc(when)}</div>
-    </div>`;
+    let count, pct = null, when;
+    if (p.budget === null) {
+      count = `${n(p.used)} today`;
+      when = p.status === 'paused' || p.status === 'limit' ? `Back at ${clockOf(p.back_at)}` : 'No daily limit · careers pages only';
+    } else {
+      const neurons = p.unit === 'neurons', tokens = p.unit === 'tokens';
+      count = neurons ? `${k(p.used)} / ${k(p.budget)} neurons` : tokens ? `${k(p.used)} / ${k(p.budget)} tokens` : `${n(p.used)} / ${p.source === 'provider' ? '' : '~'}${n(p.budget)}`;
+      pct = red ? 100 : Math.min(100, Math.round(100 * p.used / Math.max(1, p.budget)));
+      when = red ? `Resets at ${clockOf(p.back_at)}` : p.status === 'paused' ? `Back at ${clockOf(p.back_at)}`
+        : p.resets_at ? `${p.status === 'next' ? 'Next in line · ' : ''}new day at ${clockOf(p.resets_at)}` : p.status === 'next' ? 'Next in line' : 'Comes back bit by bit';
+    }
+    const tip = `${p.name} · ${p.model}${p.source === 'provider' ? " (the provider's own numbers)" : ' (counted by Job Radar)'}`;
+    return `<div class="d-svc" title="${esc(tip)}"><div class="d-l1"><span>${esc(p.name)}</span><span class="${cls}">${esc(tag)}</span></div>
+      ${pct !== null ? `<div class="d-bar"><i style="width:${pct}%;background:${cls === 'd-bad' ? 'var(--d-red)' : cls === 'd-wait' ? 'var(--d-faint)' : 'var(--d-green)'}"></i></div>` : ''}
+      <div class="d-l2"><span>${esc(when)}</span><span>${esc(count)}</span></div></div>`;
   }).join('');
   const waiting = state.aiPending || 0;
-  // What today's AI requests were for (since midnight German time), each with its providers in the tooltip
   const uses = Object.entries(AI_USES).map(([key, label]) => {
     const u = (ai.used_for || {})[key] || { requests: 0, providers: {} };
-    const by = Object.entries(u.providers).map(([name, x]) => `${name} ${x}`).join(', ');
-    // the AI only used for some work (NVIDIA: careers pages) shown right there: "careers pages 12 (NVIDIA 10)"
-    const own = ai.providers.filter(x => x.only_for && u.providers[x.name]).map(x => `${x.name} ${u.providers[x.name]}`).join(', ');
-    return `<span title="${esc(`${label}: ${u.requests} request${u.requests === 1 ? '' : 's'} today${by ? ` (${by})` : ''}`)}">${esc(label)} <b>${u.requests}</b>${own ? ` (${esc(own)})` : ''}</span>`;
+    return `${esc(label)} <b>${u.requests}</b>`;
   }).join(' · ');
-  const sh = ai.shares || {};
-  bar.classList.toggle('is-empty', !!ai.all_empty);
-  bar.innerHTML = `${boxes}<div class="ai-info">
-      <span class="ai-waiting${waiting ? ' has-waiting' : ''}">${waiting} job${waiting === 1 ? '' : 's'} waiting for a score</span>
-      <span class="ai-uses" title="${esc(`Each AI's day: scoring keeps ${sh.score_reserved}% for itself, careers pages may use at most ${sh.careers}%, categories and the rest ${sh.other}%`)}">AI used for today: ${uses}</span>
-      ${ai.all_empty ? `<span class="ai-reset">All AI limits reached · first back at ${esc(clockOf(ai.next_back_at))}</span>` : ''}
-    </div>`;
-}
-
-// An AI without a known daily limit (NVIDIA, careers pages only): today's requests and its status, no meter
-function aiBoxNoLimit(p) {
-  const tag = p.status === 'paused' && p.rate_limited ? 'Rate limited'
-    : p.status === 'paused' && p.paused_minutes ? `Paused ${p.paused_minutes} min` : AI_STATUS[p.status];
-  const when = p.status === 'paused' || p.status === 'limit' ? `back at ${clockOf(p.back_at)}` : 'careers pages only';
-  const title = `${p.used} request${p.used === 1 ? '' : 's'} today (since midnight German time, counted by Job Radar). `
-    + `Only reads careers pages, before the other AIs; no known daily limit, at most 30 requests a minute. `
-    + `Rate limited or busy: the other AIs take over.`;
-  return `<div class="ai-box ai-box--${p.status === 'limit' ? 'empty' : p.status}" title="${esc(p.name)} · ${esc(p.model)}: ${esc(title)}">
-      <div class="ai-box-head"><span class="ai-name">${esc(p.name)}</span><span class="ai-tag">${esc(tag)}</span></div>
-      <div class="ai-count">${p.used} today<span class="ai-sub">no daily limit</span></div>
-      <div class="ai-meter"><span style="width:0%"></span></div>
-      <div class="ai-when">${esc(when)}</div>
-    </div>`;
+  pop.innerHTML = `<h4>AI services today</h4><p>When one runs out, the next one takes over by itself. ${waiting} job${waiting === 1 ? '' : 's'} waiting for a score.</p>${rows}`
+    + `<div class="d-svc"><div class="d-l2"><span>Used for today: ${uses}</span></div>${ai.all_empty ? `<div class="d-l2"><span class="d-bad">All AI limits reached · first back at ${esc(clockOf(ai.next_back_at))}</span></div>` : ''}</div>`;
 }
 
 function render() { renderAiBar(); renderStatus(); renderNav(); renderHead(); renderAppPanel(); renderFilters(); renderList(); renderLinks(); renderSettings(); }
@@ -710,7 +748,7 @@ const apiStatus = status => STATUS_TO_API[status] ?? '';
 async function setStatus(job, status, msg) {
   const prev = job.status;
   job.status = localStatus(job, status); job.seen = true; // the backend also marks it seen
-  const row = document.querySelector(`.job[data-id="${job.id}"]`);
+  const row = document.querySelector(`.d-job[data-id="${job.id}"]`);
   if (row && !VIEWS[state.view].test(job)) { row.classList.add('is-leaving'); setTimeout(render, 180); } else render();
   try {
     await persist('setStatus', job.id, { status: apiStatus(status) });
@@ -1720,7 +1758,8 @@ function setTab(tab) {
     api('settings').then(s => { settings = settingsFromApi(s); renderSettings(); }).catch(() => {});
   }
   $$('.jobs-only').forEach(el => el.hidden = tab !== 'jobs');
-  $('#mainScroll').scrollTop = 0;
+  if (SRC_TABS.includes(tab)) state.srcLast = tab;
+  $('#dScroll').scrollTop = 0;
   renderNav();
 }
 
@@ -1772,7 +1811,6 @@ function trPeriodLine(r) {
 async function loadApps(quiet) {
   if (state.demo) return;
   try { apps = await api('applications'); } catch (e) { if (!quiet) apps = null; return; }
-  $('#appsCount').textContent = apps.stats?.all?.sent ?? '–';
   if (state.view === 'applied' && state.tab === 'jobs') { renderHead(); if (!state.openId || !quiet) renderList(); }
   if (state.tab === 'apps') renderTracker();
 }
@@ -1815,65 +1853,66 @@ function trShown() {
     && (!q || [a.company, a.title, a.contact].some(v => (v || '').toLowerCase().includes(q))));
 }
 
+// Status tag colours: rejected red, interview / offer green, confirmations and answers blue, the rest grey
+const appStatusTag = st => `<span class="d-tag ${st === 'rejection' ? 'd-red' : st === 'interview' || st === 'offer' ? 'd-green' : ['confirmation', 'reply', 'test'].includes(st) ? 'd-blue' : 'd-grey'}">${APP_STATUS[st] || esc(st)}</span>`;
+const sentAgo = iso => !iso ? '–' : ageDays(iso) === 0 ? 'today' : ageDays(iso) === 1 ? 'yesterday' : ageDays(iso) <= 30 ? `${ageDays(iso)} days ago` : fmtDate(iso);
+
 function renderTracker() {
   if (state.tab !== 'apps') return;
-  if (state.demo) { $('#trCards').innerHTML = '<p class="co-sub">Demo data: connect the backend to see your applications.</p>'; return; }
-  if (!apps?.stats) { $('#trCards').innerHTML = '<p class="co-sub">Loading…</p>'; return; }
+  const msg = t => { $('#trCards').innerHTML = `<div class="d-empty">${t}</div>`; };
+  if (state.demo) { msg('Demo data: connect the backend to see your applications.'); return; }
+  if (!apps?.stats) { msg('Loading…'); return; }
   const r = trRange();
   const s = r ? trStats(trPool(), r) : (apps.stats[tr.type] || apps.stats.all);
   $('#trPeriodLine').textContent = trPeriodLine(r);
   $('#trDates').hidden = tr.period !== 'custom';
   $('#trFrom').value = tr.from; $('#trTo').value = tr.to;
-  $$('#trPeriod [data-tr-period]').forEach(b => b.classList.toggle('is-on', b.dataset.trPeriod === tr.period));
+  $$('#trPeriod [data-tr-period]').forEach(b => b.classList.toggle('d-on', b.dataset.trPeriod === tr.period));
   const last = apps.last?.at ? `Gmail checked ${fmtTime(apps.last.at)}${apps.last.ok === false ? ': ' + esc(apps.last.note || 'failed') : ''}`
     : apps.enabled ? 'Gmail is checked every few minutes' : 'Off: no Gmail login in .env';
   $('#trSummary').innerHTML = `<span>Built from your Gmail by itself</span><span>${last}</span>`;
-  const counter = (n, label, cls) => `<div class="tr-counter${cls ? ' tr-counter--' + cls : ''}"><div class="tr-num">${n}</div><div class="tr-label">${label}</div></div>`;
-  $('#trCounters').innerHTML = counter(s.sent, 'Sent') + counter(s.interviews, 'Interview', 'interview')
-    + counter(s.offers, 'Offer', 'offer') + counter(s.rejected, 'Rejected', 'rejection');
+  const stat = (n, label, dot) => `<div class="d-card d-stat"><small>${dot ? `<span class="d-dot d-${dot}" style="margin-right:7px"></span>` : ''}${label}</small><b>${n}</b></div>`;
+  $('#trCounters').innerHTML = stat(s.sent, 'Sent') + stat(s.interviews, 'Interviews', 'blue') + stat(s.offers, 'Offers', 'orange') + stat(s.rejected, 'Rejected', 'red');
   // One bar: what came back (interview, offer, other answer, rejected); the empty rest is still waiting
   const other = Math.max(0, s.answered - s.interviews - s.offers - s.rejected);
   const base = Math.max(s.sent, s.answered);  // in a period, answers can belong to older applications
   const pct = n => base ? 100 * n / base : 0;
-  const seg = (n, cls, label) => n ? `<span class="tr-bar-seg tr-bar-seg--${cls}" style="width:${pct(n)}%" title="${label}: ${n}"></span>` : '';
-  $('#trProgress').innerHTML = `<div class="tr-bar" role="img" aria-label="${s.answered} of ${s.sent} answered">
-      ${seg(s.interviews, 'interview', 'Interview')}${seg(s.offers, 'offer', 'Offer')}${seg(other, 'reply', 'Answered')}${seg(s.rejected, 'rejection', 'Rejected')}</div>
-    <div class="tr-bar-text"><span><b>${s.rate}%</b> answered (${s.answered} of ${s.sent})</span><span>${s.waiting} waiting for an answer</span></div>`;
+  const seg = (n, color, label) => n ? `<i style="width:${pct(n)}%;background:${color}" title="${label}: ${n}"></i>` : '';
+  $('#trProgress').innerHTML = `<div class="d-l"><b>${s.rate}% got an answer</b><span>${s.waiting} still waiting</span></div>
+    <div class="d-meter d-multi" role="img" aria-label="${s.answered} of ${s.sent} answered">${seg(s.interviews, 'var(--d-blue)', 'Interview')}${seg(s.offers, 'var(--d-accent)', 'Offer')}${seg(other, 'var(--d-green)', 'Answered')}${seg(s.rejected, 'var(--d-red)', 'Rejected')}</div>
+    <p class="d-sm">${s.answered} of ${s.sent} answered</p>`;
   const typeLine = (k, l) => {
     const t = r ? trStats((apps.applications || []).filter(a => a.kind === k), r) : apps.stats[k];
-    return `<div class="tr-type"><div class="tr-type-name">${l}</div><div class="tr-type-nums">
-      <span><b>${t.sent}</b> sent</span><span><b>${t.answered}</b> answered</span><span><b>${t.rate}%</b> response rate</span>
+    return `<div class="d-card d-type"><b>${l}</b><div class="d-nums"><span><b>${t.sent}</b> sent</span><span><b>${t.answered}</b> answered</span><span><b>${t.rate}%</b> response</span>
       <span><b>${t.rejected}</b> rejected</span><span><b>${t.interviews}</b> interview${t.interviews === 1 ? '' : 's'}</span>${t.offers ? `<span><b>${t.offers}</b> offer${t.offers === 1 ? '' : 's'}</span>` : ''}</div></div>`;
   };
   $('#trTypes').innerHTML = typeLine('job', 'Job ad') + typeLine('initiativ', 'Initiativ');
-  $$('#trFilter [data-tr-type]').forEach(b => b.classList.toggle('is-on', b.dataset.trType === tr.type));
+  $$('#trFilter [data-tr-type]').forEach(b => b.classList.toggle('d-on', b.dataset.trType === tr.type));
   $('#trStatus').innerHTML = [['', 'Every status'], ['waiting', 'Waiting for an answer']].concat(
     apps.statuses.map(k => [k, APP_STATUS[k]])).map(([v, l]) => `<option value="${v}"${v === tr.status ? ' selected' : ''}>${l}</option>`).join('');
   const list = trShown();
   const source = { sent: 'your email', portal: 'applied on their website', jobradar: 'marked Applied in Job Radar' };
   const statusOptions = a => [`<option value=""${a.status_you ? '' : ' selected'}>${APP_STATUS[a.status]} · auto</option>`]
     .concat(apps.statuses.map(k => `<option value="${k}"${a.status_you === k ? ' selected' : ''}>${APP_STATUS[k]}</option>`)).join('');
-  const replies = a => `<ol class="timeline tr-timeline">${a.replies.map(t => `<li><span class="tl-date">${t.at ? fmtShort(t.at) : '–'}</span>${appTag(t.kind)}
-        <span class="tl-subj">${esc(t.subject || '(no subject)')}</span><span class="tl-from">${esc(t.sender || '')}${t.by === 'ai' ? ' · sorted by AI' : t.by === 'you' ? ' · by you' : ''}</span>
-        <button type="button" class="link-btn" data-unassign="${esc(t.gmail_id)}" title="This email is about another application: move it to Needs review">Not this one</button></li>`).join('')
-        || '<li class="list-sub">No reply found in Gmail yet.</li>'}</ol>`;
-  $('#trCards').innerHTML = list.length ? list.map(a => `
-    <article class="tr-card" data-app="${a.id}">
-      <div class="tr-card-top">
-        <div class="tr-card-main">
-          <div class="tr-company">${esc(a.company || '?')} <span class="tr-kind">${apps.types[a.kind]}</span></div>
-          <div class="tr-title">${esc(a.title || (a.kind === 'initiativ' ? 'Initiativbewerbung' : 'Job title unknown'))}</div>
-        </div>
-        <div class="tr-card-side">${appTag(a.shown)}
-          <select class="co-select" data-tr-status aria-label="Status of ${esc(a.company || '')}">${statusOptions(a)}</select></div>
+  const replies = a => `<div class="d-replies">${a.replies.map(t => `<div class="d-reply"><span class="d-when">${t.at ? fmtShort(t.at) : '–'}</span>${appStatusTag(t.kind)}
+        <span class="d-subj">${esc(t.subject || '(no subject)')}<small>${esc(t.sender || '')}${t.by === 'ai' ? ' · sorted by AI' : t.by === 'you' ? ' · by you' : ''}</small></span>
+        <button type="button" class="d-link" data-unassign="${esc(t.gmail_id)}" title="This email is about another application: move it to Needs review">Not this one</button></div>`).join('')
+        || '<div class="d-reply d-sm">No reply found in Gmail yet.</div>'}</div>`;
+  const rows = list.map(a => {
+    const n = a.replies.length;
+    return `<div class="d-approw" data-app="${a.id}"><div class="d-rowi">
+      <div class="d-grow">
+        <h4>${esc(a.company || '?')} <span class="d-tag d-grey">${esc(apps.types[a.kind])}</span></h4>
+        <p>${esc(a.title || (a.kind === 'initiativ' ? 'Initiativbewerbung' : 'Job title unknown'))}</p>
+        <p class="d-sm"><span title="${a.sent_at ? fmtDate(a.sent_at) : ''}">Sent ${sentAgo(a.sent_at)}</span>${a.contact ? ` · <a href="mailto:${esc(a.contact)}">${esc(a.contact)}</a>` : ''}${source[a.source] ? ` · ${source[a.source]}` : ''}
+          · <button type="button" class="d-link" data-tr-open aria-expanded="${tr.open === a.id}">${n ? `${plural(n, 'email')} from them` : 'No reply yet'}</button>
+          · <button type="button" class="d-link" data-tr-hide title="This is not an application: remove it from the counts">Not an application</button></p>
       </div>
-      <div class="tr-meta"><span>Sent ${a.sent_at ? fmtDate(a.sent_at) : '–'}</span>
-        ${a.contact ? `<span><a href="mailto:${esc(a.contact)}">${esc(a.contact)}</a></span>` : ''}
-        <span>${source[a.source] || ''}</span>
-        <button type="button" class="link-btn" data-tr-open aria-expanded="${tr.open === a.id}">${a.replies.length ? plural(a.replies.length, 'email') : 'No reply yet'}</button>
-        <button type="button" class="link-btn" data-tr-hide title="This is not an application: remove it from the counts">Not an application</button></div>
-      ${tr.open === a.id ? replies(a) : ''}
-    </article>`).join('') : `<p class="co-sub">${apps.applications.length ? 'Nothing matches.' : 'No applications found in Gmail yet. Click "Check Gmail now".'}</p>`;
+      <div class="d-right">${appStatusTag(a.shown)}<select data-tr-status aria-label="Status of ${esc(a.company || '')}">${statusOptions(a)}</select></div>
+    </div>${tr.open === a.id ? replies(a) : ''}</div>`;
+  }).join('');
+  $('#trCards').innerHTML = list.length ? `<div class="d-card d-rows">${rows}</div>`
+    : `<div class="d-empty">${apps.applications.length ? 'Nothing matches.' : 'No applications found in Gmail yet. Click "Check Gmail now".'}</div>`;
   renderReview();
 }
 
@@ -1883,22 +1922,22 @@ function renderReview() {
       .map(a => `<option value="${a.id}"${String(a.id) === String(sel) ? ' selected' : ''}>${esc(((a.company || '?') + ' · ' + (a.title || apps.types[a.kind])).slice(0, 90))}</option>`)).join('');
   const kinds = k => Object.entries(APP_STATUS).filter(([v]) => v !== 'sent').map(([v, l]) => `<option value="${v}"${v === k ? ' selected' : ''}>${l}</option>`).join('');
   const rows = (apps.review || []).map(r => `
-    <div class="list-row" data-review="${esc(r.gmail_id)}">
-      <div class="list-main">
-        <div class="list-title">${esc(r.subject || '(no subject)')}</div>
-        <div class="list-sub">${r.at ? fmtDate(r.at) : '–'} · ${esc(r.sender)}${r.note ? ` · <b>${esc(r.note)}</b>` : ''}</div>
-        ${r.snippet ? `<div class="app-snippet">${esc(r.snippet)}</div>` : ''}
+    <div class="d-rowi d-review" data-review="${esc(r.gmail_id)}">
+      <div class="d-grow">
+        <h4>${esc(r.subject || '(no subject)')}</h4>
+        <p class="d-sm">${r.at ? fmtDate(r.at) : '–'} · ${esc(r.sender)}${r.note ? ` · <b>${esc(r.note)}</b>` : ''}</p>
+        ${r.snippet ? `<p class="d-sm d-snip">${esc(r.snippet)}</p>` : ''}
       </div>
-      <div class="list-chips">
-        <select class="co-select" data-review-app aria-label="Application this email belongs to">${options(r.guess)}</select>
-        <select class="co-select" data-review-kind aria-label="What the email says">${kinds(r.kind)}</select>
-        <button type="button" class="btn btn--sm btn--primary" data-review-act="assign">Assign</button>
-        <button type="button" class="btn btn--sm" data-review-act="dismiss" title="Not about one of your applications">Dismiss</button>
+      <div class="d-right d-wrapr">
+        <select data-review-app aria-label="Application this email belongs to">${options(r.guess)}</select>
+        <select data-review-kind aria-label="What the email says">${kinds(r.kind)}</select>
+        <button type="button" class="d-btn d-primary" data-review-act="assign">Assign</button>
+        <button type="button" class="d-btn" data-review-act="dismiss" title="Not about one of your applications">Dismiss</button>
       </div>
     </div>`).join('');
-  $('#trReview').innerHTML = `<div class="app-review-head"><h2 class="section-title">Needs review${apps.review?.length ? ` (${apps.review.length})` : ''}</h2>
-      <span class="list-sub">Only emails the rules and the AI could not sort or match</span></div>
-    ${rows ? `<div class="list-panel tr-review">${rows}</div>` : '<p class="list-sub">Nothing to review: every reply found its application.</p>'}`;
+  $('#trReview').innerHTML = `<div class="d-sec">NEEDS REVIEW${apps.review?.length ? ` (${apps.review.length})` : ''}</div>
+    <p class="d-hint">Only emails the rules and the AI could not sort or match</p>
+    ${rows ? `<div class="d-card d-rows">${rows}</div>` : '<div class="d-empty">Nothing to review: every reply found its application.</div>'}`;
 }
 
 $('#trCheck').addEventListener('click', async e => {
@@ -1906,7 +1945,7 @@ $('#trCheck').addEventListener('click', async e => {
   $('#trSummary').innerHTML = '<span>Reading Sent and new replies… (the first time a minute or two)</span>';
   try { apps = await api('appCheck'); await refreshQuiet(); toast('Gmail checked'); }
   catch (err) { toast(err.message); }
-  b.disabled = false; $('#appsCount').textContent = apps?.stats?.all?.sent ?? '–'; renderTracker();
+  b.disabled = false; renderTracker();
 });
 $('#trPeriod').addEventListener('click', e => {
   const b = e.target.closest('[data-tr-period]'); if (!b) return;
@@ -1955,10 +1994,16 @@ $('#trReview').addEventListener('click', async e => {
 
 /* EVENTS */
 document.addEventListener('click', e => {
-  const v = e.target.closest('.nav-item[data-view]');
+  const pg = e.target.closest('[data-p]');
+  if (pg) {
+    const id = pg.dataset.p;
+    setTab(id === 'sources' ? (state.srcLast || 'links') : id);
+    $('#dScroll').scrollTop = 0; return;
+  }
+  const sr = e.target.closest('[data-src]');
+  if (sr) { setTab(sr.dataset.src); return; }
+  const v = e.target.closest('[data-view]');
   if (v) { state.view = v.dataset.view; state.openId = null; state.focusId = null; setTab('jobs'); render(); v.scrollIntoView?.({ inline: 'nearest', block: 'nearest' }); return; }
-  const t = e.target.closest('.nav-item[data-tab]');
-  if (t) { setTab(t.dataset.tab); return; }
   const go = e.target.closest('[data-tab-go]');
   if (go) { setTab(go.dataset.tabGo); return; }
   if (e.target.closest('[data-tg]')) { toggleTelegram(); return; }
@@ -1967,18 +2012,14 @@ document.addEventListener('click', e => {
   const tgWeekly = e.target.closest('[data-tg-weekly]');
   if (tgWeekly) { sendTelegramTest(tgWeekly, 'weeklySummary'); return; }
   if (e.target.closest('[data-theme-toggle]')) { toggleTheme(); return; }
-  const src = e.target.closest('[data-source]');
-  if (src) { setFilter('source', src.dataset.source); return; }
-  const tm = e.target.closest('[data-time]');
-  if (tm) { openTimeMenu(false); setFilter('time', tm.dataset.time); $('#timeBtn').focus(); return; }
-  if (e.target.closest('#timeBtn')) { openTimeMenu($('#timeMenu').hidden); return; }
-  if (e.target.closest('#postedSort')) { setSort(state.sort === 'newest' ? 'oldest' : 'newest'); return; }
-  const s = e.target.closest('[data-sort]');
-  if (s) setSort(s.dataset.sort);
+  if (e.target.closest('#fbtn')) { const o = $('#fpanel').classList.toggle('d-open'); $('#fbtn').setAttribute('aria-expanded', o); return; }
+  if (e.target.closest('#aiBtn')) { $('#aiPop').classList.toggle('d-open'); return; }
+  if (!e.target.closest('#aiPop')) $('#aiPop').classList.remove('d-open');
 });
+$('#fSource').addEventListener('change', e => setFilter('source', e.target.value));
+$('#fTime').addEventListener('change', e => setFilter('time', e.target.value));
+$('#fSort').addEventListener('change', e => setSort(e.target.value));
 
-// A click anywhere outside the time menu closes it
-document.addEventListener('pointerdown', e => { if (!e.target.closest('#timeDd')) openTimeMenu(false); });
 
 $('#jobList').addEventListener('click', e => {
   const emptyBtn = e.target.closest('[data-empty]');
@@ -1992,7 +2033,7 @@ $('#jobList').addEventListener('click', e => {
   const un = e.target.closest('[data-unassign]');
   if (un) { e.stopPropagation(); return unassignEmail(un.dataset.unassign); }
   const actEl = e.target.closest('[data-action]'); if (!actEl) return;
-  const row = actEl.closest('.job'); if (!row) return;
+  const row = actEl.closest('.d-job'); if (!row) return;
   e.stopPropagation();
   doAction(row.dataset.id, actEl.dataset.action);
 });
@@ -2003,7 +2044,7 @@ $('#checkNow').addEventListener('click', checkNow);
 
 /* Theme (only the theme is remembered, never the view) */
 const root = document.documentElement;
-function syncThemeIcons() { $$('[data-theme-toggle]').forEach(b => b.innerHTML = root.dataset.theme === 'dark' ? ICON.sun : ICON.moon); }
+function syncThemeIcons() { $$('[data-theme-toggle]').forEach(b => b.innerHTML = di(root.dataset.theme === 'dark' ? 'sun' : 'moon')); }
 function toggleTheme() {
   root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
   try { localStorage.setItem('jr-theme', root.dataset.theme); } catch (e) {}
@@ -2013,7 +2054,7 @@ try { const t = localStorage.getItem('jr-theme'); if (t) root.dataset.theme = t;
 
 /* Keyboard */
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !$('#timeMenu').hidden) { openTimeMenu(false); $('#timeBtn').focus(); return; }
+  if (e.key === 'Escape' && $('#aiPop').classList.contains('d-open')) { $('#aiPop').classList.remove('d-open'); return; }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setTab('jobs'); $('#search').focus(); return; }
   if (state.tab !== 'jobs' || state.loading || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.target.matches('input, select')) { if (e.key === 'Escape') e.target.blur(); return; }
@@ -2023,7 +2064,7 @@ document.addEventListener('keydown', e => {
   const move = d => {
     i = i < 0 ? 0 : Math.min(list.length - 1, Math.max(0, i + d));
     state.focusId = list[i].id; renderList();
-    document.querySelector(`.job[data-id="${CSS.escape(String(state.focusId))}"]`)?.scrollIntoView({ block: 'nearest' });
+    document.querySelector(`.d-job[data-id="${CSS.escape(String(state.focusId))}"]`)?.scrollIntoView({ block: 'nearest' });
   };
   const k = e.key.toLowerCase();
   if (k === 'j' || e.key === 'ArrowDown') { e.preventDefault(); return move(1); }
@@ -2035,6 +2076,7 @@ document.addEventListener('keydown', e => {
 });
 
 hydrateIcons();
+$('#i-ref').innerHTML = DI.ref; $('#i-search').innerHTML = DI.search; $('#i-search2').innerHTML = DI.search; $('#trCheck').innerHTML = DI.mail ? di('mail') + 'Check Gmail now' : 'Check Gmail now'; $('#markSeen').innerHTML = di('check') + 'Mark all seen';
 syncThemeIcons();
 render();
 loadAll();

@@ -8,91 +8,83 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/design.css">
 </head>
 <body>
 
-<div class="app">
-  <div class="shell">
+<div class="d-scroll" id="dScroll">
+<div class="d-app">
+  <aside class="nd d-side">
+    <div class="d-logo"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>Job Radar</div>
+    <nav class="d-nav" id="nav" aria-label="Main"></nav>
+    <div class="d-sidefoot">
+      <div data-check><span class="d-dot"></span><span data-check-text>Loading…</span></div>
+      <div class="d-row">Telegram alerts <button type="button" class="d-switch" data-tg aria-label="Telegram alerts" title="Telegram alerts"></button></div>
+    </div>
+  </aside>
 
-    <aside class="sidebar">
-      <div class="brand"><svg class="logo" data-icon="logo"></svg><span class="brand-name">Job Radar</span></div>
-      <nav class="nav" aria-label="Main">
-        <div class="nav-section">Jobs</div>
-        <div class="nav" id="navViews"></div>
-        <div class="nav-section">App</div>
-        <button type="button" class="nav-item" data-tab="apps" title="Your applications, from Gmail"><svg data-icon="checks"></svg><span class="nav-label">Applications</span><span class="nav-count" id="appsCount">–</span></button>
-        <button type="button" class="nav-item" data-tab="links" title="Watched links"><svg data-icon="link"></svg><span class="nav-label">Watched links</span><span class="nav-count" id="linksCount">–</span></button>
-        <button type="button" class="nav-item" data-tab="companies" title="Companies"><svg data-icon="building"></svg><span class="nav-label">Companies</span><span class="nav-count" id="companiesCount">–</span></button>
-        <button type="button" class="nav-item" data-tab="coverage" title="Region coverage"><svg data-icon="globe"></svg><span class="nav-label">Coverage</span><span class="nav-count" id="coverageCount">–</span></button>
-        <button type="button" class="nav-item" data-tab="timeline" title="Timeline: the day plan, live"><svg data-icon="clock"></svg><span class="nav-label">Timeline</span></button>
-        <button type="button" class="nav-item" data-tab="settings" title="Settings"><svg data-icon="sliders"></svg><span class="nav-label">Settings</span></button>
-      </nav>
-      <div class="side-foot">
-        <div class="status-line" data-check><span class="status-dot"></span><span data-check-text>Loading…</span></div>
-        <button type="button" class="tg-row" data-tg title="Telegram alerts">
-          <svg data-icon="send"></svg><span class="nav-label tg-label">Telegram alerts</span><span class="switch"></span>
-        </button>
+  <section class="d-main">
+    <header class="nd d-top">
+      <div class="d-status" data-check><span class="d-dot"></span><span data-check-text>Loading…</span></div>
+      <svg class="d-mlogo" viewBox="0 0 24 24"><path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>
+      <button type="button" class="d-pill" id="aiBtn" aria-haspopup="true" hidden></button>
+      <button type="button" class="d-checkbtn" id="checkNow" aria-label="Check all sources now" title="Check all sources now"><svg viewBox="0 0 24 24" id="i-ref"></svg><span>Check now</span></button>
+      <button type="button" class="d-iconbtn" data-theme-toggle aria-label="Light / dark" title="Light / dark"></button>
+      <div class="d-pop" id="aiPop"></div>
+    </header>
+
+    <div id="tab-jobs" class="nd d-page">
+      <div class="d-head">
+        <div><h1 id="pageTitle">Jobs</h1><p class="d-sub" id="summary"></p></div>
+        <button type="button" class="d-btn" id="markSeen" title="Mark all as seen"></button>
       </div>
-    </aside>
-
-    <main class="main">
-      <div class="mobile-bar">
-        <div class="brand"><svg class="logo" data-icon="logo"></svg><span>Job Radar</span></div>
-        <button type="button" class="tg-mini" data-tg title="Telegram alerts"><svg data-icon="send"></svg></button>
-        <button type="button" class="tbtn tbtn--icon" data-theme-toggle title="Light / dark"><svg data-icon="moon"></svg></button>
+      <div class="d-tabs" id="jobTabs"></div>
+      <p class="d-hint" id="jobHint"></p>
+      <div class="app-panel" id="appPanel" hidden></div>
+      <div class="d-filters">
+        <label class="d-search"><svg viewBox="0 0 24 24" id="i-search"></svg><input id="search" type="search" placeholder="Search title, company or city" autocomplete="off" aria-label="Search jobs"></label>
+        <button type="button" class="d-btn d-fbtn" id="fbtn" aria-expanded="false"></button>
       </div>
-
-      <div class="ai-bar" id="aiBar" hidden></div>
-
-      <div class="mobile-views" id="mobileViews"></div>
-
-      <div class="toolbar">
-        <div class="tb-group jobs-only">
-          <button type="button" class="tbtn tbtn--sort is-active" data-sort="score"><svg data-icon="star"></svg><span class="tb-text">Score</span></button>
-          <button type="button" class="tbtn tbtn--sort" data-sort="newest"><svg data-icon="calendar"></svg><span class="tb-text">Newest</span></button>
-        </div>
-        <button type="button" class="tbtn jobs-only" id="markSeen" title="Mark all as seen"><svg data-icon="checks"></svg><span class="tb-text">Mark all seen</span></button>
-        <button type="button" class="tbtn" id="checkNow" title="Check all sources now"><svg data-icon="refresh"></svg><span class="tb-text">Check now</span></button>
-        <span class="tb-spacer"></span>
-        <span class="tb-status" data-check><span class="status-dot"></span><span data-check-text>Loading…</span></span>
-        <button type="button" class="tbtn tbtn--icon hide-mobile" data-theme-toggle title="Light / dark"><svg data-icon="moon"></svg></button>
+      <div class="d-fpanel" id="fpanel">
+        <select id="fSource" aria-label="Source"></select>
+        <select id="fTime" aria-label="Time"></select>
+        <select id="fSort" aria-label="Sort"></select>
       </div>
+      <div id="jobList" aria-live="polite"></div>
+      <div class="d-shortcuts">
+        <span><kbd>Ctrl K</kbd> search</span><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>↵</kbd> details</span>
+        <span><kbd>o</kbd> open</span><span><kbd>s</kbd> save</span><span><kbd>a</kbd> applied</span><span><kbd>h</kbd> hide</span><span><kbd>c</kbd> copy</span>
+      </div>
+    </div>
 
-      <div class="main-scroll" id="mainScroll">
-        <section id="tab-jobs">
-          <div class="page-head">
-            <h1 class="page-title" id="pageTitle">Best new</h1>
-            <div class="summary" id="summary"></div>
-            <div class="mobile-status" data-check><span class="status-dot"></span><span data-check-text>Loading…</span></div>
-          </div>
-          <div class="app-panel" id="appPanel" hidden></div>
-          <div class="filters">
-            <div class="src-row" id="sourceBoxes" role="group" aria-label="Source"></div>
-            <div class="dd" id="timeDd">
-              <button type="button" class="tbtn dd-btn" id="timeBtn" aria-haspopup="listbox" aria-expanded="false"></button>
-              <div class="dd-menu" id="timeMenu" role="listbox" aria-label="Time" hidden></div>
-            </div>
-          </div>
-          <div class="table-head">
-            <div class="th th-search">
-              <label class="search">
-                <svg data-icon="search"></svg>
-                <input class="search-input" id="search" type="search" placeholder="Search" autocomplete="off" aria-label="Search jobs">
-                <span class="kbd">Ctrl K</span>
-              </label>
-            </div>
-            <div class="th">AI score</div>
-            <div class="th th-place">Location &amp; hours</div>
-            <button type="button" class="th th-sort" id="postedSort" title="Sort by posting date">Posted<span class="sort-arrow" id="postedArrow"></span></button>
-            <div class="th"></div>
-          </div>
-          <div id="jobList" aria-live="polite"></div>
-          <div class="shortcuts">
-            <span><kbd>Ctrl K</kbd> search</span><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>↵</kbd> expand</span>
-            <span><kbd>o</kbd> open</span><span><kbd>s</kbd> save</span><span><kbd>a</kbd> applied</span><span><kbd>h</kbd> hide</span><span><kbd>c</kbd> copy</span>
-          </div>
-        </section>
+    <!-- Pages that are not redesigned yet (old look, same features) -->
+    <section id="tab-apps" class="nd d-page" hidden>
+      <div class="d-head">
+        <div><h1>Applications</h1><p class="d-sub" id="trSummary"><span>Built from your Gmail by itself</span></p></div>
+        <button type="button" class="d-btn" id="trCheck"></button>
+      </div>
+      <div class="d-tabs" id="trPeriod" role="group" aria-label="Period">
+        <button type="button" class="d-tab" data-tr-period="today">Today</button><button type="button" class="d-tab" data-tr-period="2d">2 days</button><button type="button" class="d-tab" data-tr-period="3d">3 days</button><button type="button" class="d-tab" data-tr-period="week">This week</button><button type="button" class="d-tab" data-tr-period="lastweek">Last week</button><button type="button" class="d-tab" data-tr-period="30d">30 days</button><button type="button" class="d-tab d-on" data-tr-period="all">All time</button><button type="button" class="d-tab" data-tr-period="custom">Custom</button>
+      </div>
+      <div class="d-dates" id="trDates" hidden><label>From <input type="date" id="trFrom"></label><label>To <input type="date" id="trTo"></label></div>
+      <p class="d-hint" id="trPeriodLine"></p>
+      <div class="d-stats" id="trCounters"></div>
+      <div class="d-card d-prog" id="trProgress"></div>
+      <div class="d-three d-two" id="trTypes"></div>
+      <div class="d-filters">
+        <label class="d-search"><svg viewBox="0 0 24 24" id="i-search2"></svg><input type="search" id="trSearch" placeholder="Search company, job or contact" autocomplete="off" aria-label="Search applications"></label>
+        <select id="trStatus" aria-label="Status" class="d-selfix"></select>
+      </div>
+      <div class="d-tabs" id="trFilter" role="group" aria-label="Type">
+        <button type="button" class="d-tab d-on" data-tr-type="all">All</button><button type="button" class="d-tab" data-tr-type="job">Job ad</button><button type="button" class="d-tab" data-tr-type="initiativ">Initiativ</button>
+      </div>
+      <div id="trCards"><p class="d-hint">Loading…</p></div>
+      <div id="trReview"></div>
+    </section>
 
+    <div class="nd d-srctabs" id="srcTabs" hidden></div>
+
+    <div class="legacy" id="mainScroll">
         <section id="tab-links" hidden>
           <div class="page-head page-head--row">
             <div><h1 class="page-title">Watched links</h1><div class="summary" id="linksSummary"></div></div>
@@ -165,34 +157,6 @@
           <p class="shortcuts cov-legend"><span><strong>Watched</strong> careers page, read every day at 19:00</span><span><strong>Initiativ</strong> IT jobs but no student job (careers page read every day at 19:00 too), or a small IT company without a careers page (email from its Impressum)</span><span><strong>No careers page</strong> none found</span><span><strong>Skipped</strong> shop, restaurant, craft, care or staffing business, or closed</span><span><strong>Waiting</strong> still in line for the nightly run</span></p>
         </section>
 
-        <section id="tab-apps" hidden>
-          <div class="page-head page-head--row">
-            <div><h1 class="page-title">Applications</h1><div class="summary" id="trSummary"><span>Built from your Gmail by itself</span></div></div>
-            <button type="button" class="btn btn--sm" id="trCheck"><svg data-icon="mail"></svg><span>Check Gmail now</span></button>
-          </div>
-          <div class="tr-wrap">
-            <div class="tr-period">
-              <div class="tr-seg" id="trPeriod" role="group" aria-label="Period">
-                <button type="button" data-tr-period="today">Today</button><button type="button" data-tr-period="2d">2 days</button><button type="button" data-tr-period="3d">3 days</button><button type="button" data-tr-period="week">This week</button><button type="button" data-tr-period="lastweek">Last week</button><button type="button" data-tr-period="30d">30 days</button><button type="button" data-tr-period="all" class="is-on">All</button><button type="button" data-tr-period="custom">Custom</button>
-              </div>
-              <span class="tr-dates" id="trDates" hidden><label>From <input type="date" id="trFrom"></label><label>To <input type="date" id="trTo"></label></span>
-              <span class="list-sub" id="trPeriodLine"></span>
-            </div>
-            <div class="tr-counters" id="trCounters"></div>
-            <div class="tr-progress" id="trProgress"></div>
-            <div class="tr-types" id="trTypes"></div>
-            <div class="tr-tools">
-              <label class="tr-search"><svg data-icon="search"></svg><input type="search" id="trSearch" placeholder="Search company, job or contact" aria-label="Search applications"></label>
-              <div class="tr-seg" id="trFilter" role="group" aria-label="Type">
-                <button type="button" data-tr-type="all" class="is-on">All</button><button type="button" data-tr-type="job">Job ad</button><button type="button" data-tr-type="initiativ">Initiativ</button>
-              </div>
-              <select class="co-select" id="trStatus" aria-label="Status"></select>
-            </div>
-            <div class="tr-cards" id="trCards"><p class="co-sub">Loading…</p></div>
-            <div id="trReview"></div>
-          </div>
-        </section>
-
         <section id="tab-timeline" hidden>
           <div class="page-head"><h1 class="page-title">Timeline</h1><div class="summary" id="timelineSummary"><span>What Job Radar does, German time</span></div></div>
           <div class="tl-top">
@@ -234,10 +198,13 @@
           <div class="list-panel" id="settingsList"></div>
           <p class="shortcuts" style="padding-top:0">To change these, edit config.yaml (keys in .env) and restart Job Radar.</p>
         </section>
-      </div>
-    </main>
-  </div>
+    </div>
+  </section>
+</div>
+</div>
+<nav class="nd d-tabbar" id="tabbar" aria-label="Main"></nav>
 
+<div class="app-toast-host">
   <div class="toast" id="toast" role="status">
     <span class="toast-msg" id="toastMsg"></span>
     <button type="button" class="toast-action" id="toastAction">Undo</button>
