@@ -84,6 +84,9 @@ SCAM = re.compile(
     r"vorkasse|vorab\s+(?:bezahl|zahl|überweis|ueberweis)|(?:geb(?:ü|ue)hr|kaution|startkapital|kosten)\s+(?:vorab|im\s+voraus)|"
     r"(?:ihr|dein|euer)\s*(?:e|en|em|er)?\s*(?:eigene[nmrs]?\s+|privat\w*\s+)?(?:bank)?konto\s+(?:zur\s+verf|nutzen|bereit|zu\s+nutzen)|"
     r"eigene[nmrs]?\s+(?:bank)?konto|konto\s+(?:f(?:ü|ue)r\s+(?:zahlungen|transaktionen)|zur\s+verf(?:ü|ue)gung)|"
+    # your own account / your own money (v14.3): reselling schemes that post ads from YOUR eBay Kleinanzeigen account
+    r"eigene[nmrs]?\s+[\w\s-]{0,30}?(?:konto|account)|(?:ebay[\s-]*)?kleinanzeigen[\s-]*(?:konto|account)|verkaufskonto|"
+    r"\bkaution\b|\bstartkapital\b|(?:equipment|ausr(?:ü|ue)stung|material|ware)\s+selbst\s+(?:kaufen|bezahlen|besorgen|finanzieren)|"
     r"(?:finanzagent|zahlungsagent|geldw(?:ä|ae)sche)|zahlungen?\s+weiter(?:leiten|geben)|geld\s+weiter(?:leiten|geben)|"
     r"(?:paket|waren)\s*(?:annahme|weiterleit)|reshipping|"
     r"\b[1-9]\d{2,3}\s*(?:€|euro|eur)\s*(?:pro|am|je|/)\s*tag|t(?:ä|ae)glich\s+(?:bis\s+zu\s+)?\d{3,4}\s*(?:€|euro|eur)|"
@@ -150,6 +153,42 @@ def check(title: str, description: str, *, flag_minijob: bool = False, flag_remo
     if amounts:
         return Verdict(False, f"Pay above Minijob limit ({amounts[0]:g} EUR per month)", "pay", f"{amounts[0]:g} EUR monthly")
     return Verdict(True, "Minijob + 100% home office")
+
+
+# ---- score caps (v14.3): the ad is kept, but its AI score may not go above the cap (see minijob.py) ----------------
+
+# Commission / brokerage jobs: the pay depends on sales or placements. A negated "keine Provision" does not count.
+BROKER = re.compile(r"vermittler\w*|variable[rnms]?\s+verg(?:ü|ue)tung|provision(?:s\w*|en)?(?![\wäöüß])|vertriebspartner\w*", I)
+# Words in front of "/ Homeoffice" that are NOT a place ("Minijob / Homeoffice", "Teilzeit, Remote")
+NOT_A_PLACE = {"minijob", "mini-job", "teilzeit", "vollzeit", "tz", "vz", "büro", "buero", "flexibel", "flexible", "mobil",
+               "mobiles", "arbeiten", "komplett", "vollständig", "deutschland", "deutschlandweit", "bundesweit", "germany",
+               "mwd", "remote", "homeoffice", "home-office", "home", "office", "minijobber", "aushilfe", "nebenjob"}
+HYBRID_PAIR = re.compile(r"([\wäöüß.-]{3,})\s*[/|·,–]\s*(home[\s-]?office|remote)|"
+                         r"(home[\s-]?office|remote)\s*[/|·,–]\s*([\wäöüß.-]{3,})", I)
+# A place that already says it is remote (the alert email's location line)
+REMOTE_PLACE = re.compile(r"home[\s-]?office|remote|von\s+zu\s?hause|mobil\w*\s+arbeit|deutschland|bundesweit", I)
+
+
+def broker_word(text: str) -> str | None:
+    """The first commission / brokerage word that is used positively, or None."""
+    for m in BROKER.finditer(text):
+        before = re.split(r"[.;:!?\n]", text[max(0, m.start() - 40):m.start()])[-1]
+        if not NEGATED_BEFORE.search(before):
+            return m[0]
+    return None
+
+
+def alert_not_full_remote(title: str, location: str | None) -> bool:
+    """Alert-email ad whose place is a real city and whose title does not say 100% remote, or a title like
+    "München / Homeoffice" (= hybrid): True. A location that says Home Office / Remote keeps the ad."""
+    if full_remote(title):
+        return False
+    for m in HYBRID_PAIR.finditer(title):
+        word = m.group(1) or m.group(4)
+        if word[0].isupper() and word.lower() not in NOT_A_PLACE:
+            return True
+    loc = (location or "").strip()
+    return bool(loc) and not REMOTE_PLACE.search(loc)
 
 
 def check_unverified(title: str) -> Verdict:

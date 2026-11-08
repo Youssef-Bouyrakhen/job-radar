@@ -212,7 +212,8 @@ CREATE TABLE IF NOT EXISTS minijobs (
     ai_attempts   INTEGER NOT NULL DEFAULT 0,
     notified      INTEGER NOT NULL DEFAULT 0,   -- 1 sent to Telegram, 2 could not be sent
     unverified    INTEGER NOT NULL DEFAULT 0,   -- 1 = from an alert email: Minijob + home office not checked in the ad
-    max_score     INTEGER                       -- the AI score may not go above this (e.g. "Vollzeit/Teilzeit/Minijob" ads)
+    max_score     INTEGER,                      -- the AI score may not go above this (e.g. "Vollzeit/Teilzeit/Minijob" ads)
+    status        TEXT NOT NULL DEFAULT ''      -- '' / saved / applied / hidden (the buttons on the Minijob page)
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -265,7 +266,8 @@ MIGRATIONS["app_emails"] = {
 }
 
 # Cloudflare's free limit is counted in "neurons" (its own unit of AI work), not requests
-MIGRATIONS["minijobs"] = {"unverified": "INTEGER NOT NULL DEFAULT 0", "max_score": "INTEGER"}
+MIGRATIONS["minijobs"] = {"unverified": "INTEGER NOT NULL DEFAULT 0", "max_score": "INTEGER",
+                          "status": "TEXT NOT NULL DEFAULT ''"}
 MIGRATIONS["ai_usage"] = {"neurons": "REAL NOT NULL DEFAULT 0"}
 
 # When a column is first added, run this once. Jobs found before Telegram existed

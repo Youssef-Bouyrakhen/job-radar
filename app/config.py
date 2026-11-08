@@ -24,6 +24,7 @@ DEFAULTS = {
     "minijob": {
         "enabled": True,
         "min_score": 7,                 # Telegram only from this AI score
+        "min_score_unverified": 6,      # ... for the unverified alert-email ads (they are capped at 7 anyway)
         "searches": ["Homeoffice", "100% Homeoffice", "Remote", "von zuhause", "Heimarbeit"],
         # More search words that were tried and can be added later (they find more ads, but mostly ones the filter drops):
         # "Büroassistenz", "Backoffice", "Kundenservice schriftlich", "Chat Support", "Dateneingabe",

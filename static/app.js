@@ -12,6 +12,7 @@ const ENDPOINTS = {
   job:         id => ['GET',    `/api/jobs/${id}`],        // one job incl. description
   info:        () => ['GET',    '/api/info'],
   minijobs:    () => ['GET',    '/api/minijobs'],
+  mjStatus:    id => ['POST',   `/api/minijobs/${id}/status`], // { status: ''|saved|applied|hidden }
   links:       () => ['GET',    '/api/links'],
   settings:    () => ['GET',    '/api/settings'],
   setStatus:   id => ['POST',   `/api/jobs/${id}/status`], // { status: ''|saved|applied|hidden }
@@ -1561,13 +1562,14 @@ const TL_LANES = [  // one row per kind of work; color = a CSS token
   { key: 'auto',     label: 'Auto-resume',     color: '--tl-auto',  sub: 'every 5 min, if work is left' },
   { key: 'night',    color: '--tl-night' },
   { key: 'drafts',   color: '--tl-drafts' },
+  { key: 'minijob',  color: '--tl-drafts' },
   { key: 'linkedin', color: '--tl-linkedin' },
   { key: 'midday',   color: '--tl-busy',    off: 'No 13:00 read on this day' },
   { key: 'evening',  color: '--tl-evening' },
   { key: 'ai',       label: 'AI limits reset', color: '--tl-ai',    sub: 'new free AI day' },
   { key: 'deploy',   label: "Don't deploy",    color: '--tl-stop',  sub: 'a restart would stop a run' }
 ];
-const FIXED_RUNS = ['night', 'drafts', 'linkedin', 'midday', 'evening'];
+const FIXED_RUNS = ['night', 'drafts', 'minijob', 'linkedin', 'midday', 'evening'];
 const hmText = m => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.floor(m % 60)).padStart(2, '0')}`;
 const pct = m => (Math.max(0, Math.min(1440, m)) / 1440 * 100).toFixed(3) + '%';
 const capital = s => s.replace(/^./, c => c.toUpperCase());
@@ -1602,6 +1604,7 @@ function tlLaneHead(L, days) {
   if (L.key === 'hourly') return { label: L.label, sub: `${tl.hourly.links} watched links, Arbeitsagentur, Gmail` };
   if (L.key === 'night') return ev && { label: `${hmText(ev.minute)} night run`, sub: 'the queue; all areas on Sundays' };
   if (L.key === 'drafts') return ev && { label: `${hmText(ev.minute)} Initiativ drafts`, sub: 'Gmail drafts, you send them' };
+  if (L.key === 'minijob') return ev && { label: `${hmText(ev.minute)} Minijob night`, sub: '30 days back + Remotely site' };
   if (L.key === 'linkedin') return ev && { label: `${hmText(ev.minute)} LinkedIn`, sub: 'new hiring companies' };
   if (L.key === 'midday') return ev && { label: capital(ev.label), sub: 'busy companies, Mon–Fri' };
   if (L.key === 'evening') return ev && { label: capital(ev.label), sub: 'busy daily, quiet every few days' };
@@ -1645,6 +1648,9 @@ function tlRows(day, isToday) {
   rows.push({ from: 0, to: 1440, all: true, time: `Every ${tl.hourly.interval} min`, color: '--tl-hourly',
     text: `Your ${tl.hourly.links} watched links, the Arbeitsagentur and Gmail job alerts. Telegram alerts go out right away, day and night.`,
     extra: lastLine('hourly') + (isToday && new Date(tl.hourly.next_check) > nowMs() ? `<div class="tl-last">Next check ${fmtTime(tl.hourly.next_check)}</div>` : '') });
+  rows.push({ from: 0, to: 1440, all: true, time: 'Every 60 min', color: '--tl-drafts',
+    text: 'Minijob check: Arbeitsagentur, Arbeitnow and your Minijob Gmail label, then the AI score and the Minijob Telegram channel.',
+    extra: lastLine('minijob') });
   rows.push({ from: 0, to: 1440, all: true, time: 'Every 5 min', color: '--tl-auto',
     text: `Auto-resume checks new companies when work is left. It pauses ${tl.auto_before} min before the fixed runs and while they run.`,
     extra: (isToday && tl.auto?.text ? `<div class="tl-last">Now: ${esc(tl.auto.text.replace(/^Auto-resume: /, ''))}</div>` : '') + lastLine('auto') });
@@ -1756,8 +1762,11 @@ async function loadMinijobs() {
 }
 function renderMinijobs() {
   if (!mj) return;
-  $('#mjSummary').innerHTML = `<span>${mj.total_passed} Minijob${mj.total_passed === 1 ? '' : 's'} shown · ${mj.dropped} dropped by the filter</span>`
-    + `<span>${mj.telegram ? 'Telegram channel on' : 'Telegram channel off (MINIJOB_TELEGRAM_CHAT_ID missing in .env)'}</span>`;
+  const parts = [`${mj.total_passed} Minijob${mj.total_passed === 1 ? '' : 's'} shown`, `${mj.dropped} dropped by the filter`];
+  if (mj.hidden) parts.push(`${mj.hidden} hidden by you`);
+  parts.push(!mj.ai ? 'AI scoring is off' : mj.waiting_ai ? `${mj.waiting_ai} waiting for the AI` : 'all scored by the AI');
+  parts.push(mj.telegram ? 'Telegram channel on' : 'Telegram channel off (MINIJOB_TELEGRAM_CHAT_ID missing in .env)');
+  $('#mjSummary').textContent = parts.join(' · ');
   const rows = mj.jobs.map(j => {
     const n = j.ai_score, cls = n == null ? 'd-weak' : n >= 9 ? 'd-hi' : n >= mj.min_score ? 'd-mid' : 'd-weak';
     const box = n == null ? `<div class="d-score d-weak" title="${mj.ai ? 'Waiting for the AI' : 'AI scoring is off'}"><b>–</b><span>No score</span></div>`
@@ -1768,11 +1777,21 @@ function renderMinijobs() {
         ${j.unverified ? '<p class="d-sm"><b>⚠ From an alert email: check the ad yourself (Minijob and home office not verified)</b></p>' : ''}
         ${j.ai_reason ? `<p class="d-sm">${esc(j.ai_reason)}</p>` : ''}
         <p class="d-sm">${esc(j.source || '')} · found ${fmtDate(j.first_seen)}</p></div>
-      <div class="d-right"><a class="d-btn" href="${esc(j.url)}" target="_blank" rel="noopener">Open</a></div></div></div>`;
+      <div class="d-right"><a class="d-btn" href="${esc(j.url)}" target="_blank" rel="noopener">Open</a>
+        <button type="button" class="d-btn${j.status === 'saved' ? ' d-done' : ''}" data-mj="${j.id}" data-set="${j.status === 'saved' ? '' : 'saved'}">${j.status === 'saved' ? 'Saved ✓' : 'Save'}</button>
+        <button type="button" class="d-btn${j.status === 'applied' ? ' d-done' : ''}" data-mj="${j.id}" data-set="${j.status === 'applied' ? '' : 'applied'}">${j.status === 'applied' ? 'Applied ✓' : 'Applied'}</button>
+        <button type="button" class="d-btn d-icon" data-mj="${j.id}" data-set="hidden" title="Hide this Minijob">Hide</button></div></div></div>`;
   }).join('');
   $('#mjList').innerHTML = mj.jobs.length ? `<div class="d-card d-rows">${rows}</div>`
     : '<div class="d-empty">No Minijobs yet. The first check runs a few minutes after Job Radar starts, then every hour.</div>';
 }
+
+$('#mjList').addEventListener('click', async e => {   // Save / Applied / Hide on one Minijob
+  const b = e.target.closest('[data-mj]'); if (!b) return;
+  const id = +b.dataset.mj, status = b.dataset.set;
+  try { mj = await api('mjStatus', id, { status: status || '' }); renderMinijobs(); if (status === 'hidden') toast('Hidden', { label: 'Undo', fn: async () => { mj = await api('mjStatus', id, { status: '' }); renderMinijobs(); } }); }
+  catch (err) { toast('Could not save: ' + err.message); }
+});
 
 function setTab(tab) {
   state.tab = tab;

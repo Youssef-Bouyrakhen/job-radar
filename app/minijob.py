@@ -19,7 +19,8 @@ from . import ai, arbeitsagentur, clock, db, dedup, minijob_sources, telegram
 from .config import CONFIG
 from .extractors import clean, html_to_text, to_iso
 from .fetcher import fetch_api
-from .minijob_filter import MIXED_TYPE, Verdict, check as filter_check, check_unverified
+from .minijob_filter import (MIXED_TYPE, SCAM, Verdict, alert_not_full_remote, broker_word, check as filter_check,
+                             check_unverified)
 
 log = logging.getLogger("jobradar")
 
@@ -32,7 +33,14 @@ QUALIFICATION_MAX_SCORE = 4   # the ad requires a formal qualification or licenc
 MIXED_MAX_SCORE = 6        # offered as "Vollzeit/Teilzeit/Minijob" together: never above 6
 MAX_AGE_DAYS = {"Remotely": 30}   # a source whose page shows a date: older ads are skipped
 UNVERIFIED_MAX_SCORE = 7   # an ad from an alert email was never checked for Minijob / home office: never above 7
+BROKER_MAX_SCORE = 3       # commission / brokerage jobs (Vermittler, Provision, variable Vergütung, Vertriebspartner)
+ALERT_CITY_MAX_SCORE = 3   # alert-email ad in a real city without "100% remote" in the title (or "City / Homeoffice" = hybrid)
 _lock = threading.Lock()  # one collect + score + notify round at a time
+last_round: dict = {}     # the last finished round, for the Timeline page: {"finished_at", "seconds", "text"}
+
+
+def running() -> bool:
+    return _lock.locked()
 
 
 def cfg() -> dict:
@@ -124,6 +132,16 @@ def is_mixed(job: dict) -> bool:
     return bool(job.get("mixed_type") or MIXED_TYPE.search(job["title"]))
 
 
+def score_cap(job: dict) -> int | None:
+    """The highest AI score this ad may get (None = no cap). The ad is kept, the score just cannot go above it."""
+    caps = [MIXED_MAX_SCORE] if is_mixed(job) else []
+    if job.get("unverified") and alert_not_full_remote(job["title"], job.get("location")):
+        caps.append(ALERT_CITY_MAX_SCORE)
+    if broker_word(f"{job['title']}\n{job.get('description') or ''}"):
+        caps.append(BROKER_MAX_SCORE)
+    return min(caps) if caps else None
+
+
 def evaluate(job: dict):
     """The filter's Verdict (passed, reason, code, words) for one collected ad."""
     if job.get("unverified"):
@@ -182,7 +200,7 @@ def process(candidates: list[dict]) -> dict:
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                          (job["url"], job["source"], job["title"], job["company"], job["location"],
                           job["description"][:8000], job["posted_at"], db.now(), int(passed), reason,
-                          int(bool(job.get("unverified"))), MIXED_MAX_SCORE if is_mixed(job) else None))
+                          int(bool(job.get("unverified"))), score_cap(job)))
     return counts
 
 
@@ -202,7 +220,9 @@ SCORE (whole number 1-10)
 7-8   Good, with a small doubt (vague tasks, unknown company, unclear hours).
 4-6   Doubtful: unclear if it is really home office, or the company looks thin, or the tasks are vague.
 1-3   Any of these: not really a Minijob; home office only partly or "possible"; customer calls / phone work are part
-      of the duties; looks like a scam, pyramid or reselling scheme, or asks for money or a private bank account.
+      of the duties; looks like a scam, pyramid or reselling scheme, or asks for money or a private bank account;
+      commission / brokerage work where the pay depends on sales or placements (Vermittler, Finanzierungsvermittler,
+      Personalvermittler, variable Vergütung, Provision, Vertriebspartner): at most 3.
 
 CHECKS (true/false)
 - customer_calls: calling or answering customers / leads by phone is part of the duties (a phone number as a contact
@@ -221,6 +241,8 @@ needs_qualification.
 UNVERIFIED ads (they have a "note"): they come from a job-alert email, so only the title, company and place are known.
 Judge by title and company only. Do not guess home office or Minijob status; do not mark not_remote / not_minijob just
 because the text is missing. Give such an ad at most 7.
+Exception: if the "location" is a real city (not Home Office / Remote) and the title does not say 100% remote /
+komplett Homeoffice, or the title says "City / Homeoffice" (that is hybrid), give at most 3.
 
 JOBS (JSON)
 {jobs}
@@ -302,7 +324,8 @@ def message(job: dict) -> str:
 
 
 def notify_pending(limit: int | None = None) -> int:
-    """Send good scored ads (score >= minijob.min_score) to the Minijob channel. Returns how many."""
+    """Send good scored ads to the Minijob channel: score >= min_score, for unverified alert-email ads
+    score >= min_score_unverified (6). Hidden ads are not sent. Returns how many."""
     # needs the bot token and MINIJOB_TELEGRAM_CHAT_ID; the dashboard's Telegram switch and config.yaml apply too
     if not (chat_id() and os.environ.get("TELEGRAM_BOT_TOKEN") and CONFIG["telegram"].get("enabled", True)
             and not telegram.paused()):
@@ -310,9 +333,11 @@ def notify_pending(limit: int | None = None) -> int:
     ai_on = ai.enabled()
     with db.connect() as conn:
         rows = [dict(r) for r in conn.execute(
-            f"""SELECT * FROM minijobs WHERE passed = 1 AND notified = 0
-                AND {"ai_score >= ?" if ai_on else "? IS NOT NULL"} ORDER BY ai_score DESC, first_seen DESC LIMIT ?""",
-            (cfg()["min_score"] if ai_on else 0, limit or cfg()["max_messages_per_run"]))]
+            f"""SELECT * FROM minijobs WHERE passed = 1 AND notified = 0 AND status != 'hidden'
+                AND {"ai_score >= CASE WHEN unverified = 1 THEN ? ELSE ? END" if ai_on else "? IS NOT NULL AND ? IS NOT NULL"}
+                ORDER BY ai_score DESC, first_seen DESC LIMIT ?""",
+            (cfg()["min_score_unverified"] if ai_on else 0, cfg()["min_score"] if ai_on else 0,
+             limit or cfg()["max_messages_per_run"]))]
     sent = 0
     for job in rows:
         try:
@@ -342,6 +367,7 @@ def run(deep: bool = False, notify: bool = True) -> dict:
         return {"skipped": "off"}
     if not _lock.acquire(blocking=False):
         return {"skipped": "already running"}
+    started = time.time()
     try:
         days, pages = (30 if deep else cfg()["days_back"]), cfg()["pages"]
         candidates, errors = [], []
@@ -368,6 +394,10 @@ def run(deep: bool = False, notify: bool = True) -> dict:
         counts["sent"] = notify_pending() if notify else 0
         counts["errors"] = errors
         log.info("Minijob round: %s", counts)
+        last_round.update({"finished_at": db.now(), "seconds": round(time.time() - started),
+                           "text": f"{'night round' if deep else 'hourly round'}: {counts['candidates']} ads looked at, "
+                                   f"{counts['new']} new, {counts['passed']} passed the filter, {counts['scored']} scored, "
+                                   f"{counts['sent']} sent to Telegram" + (f", errors: {', '.join(errors)}" if errors else "")})
         return counts
     finally:
         _lock.release()
@@ -386,9 +416,56 @@ def scheduled_night() -> None:
 def listing(limit: int = 300) -> dict:
     with db.connect() as conn:
         rows = [dict(r) for r in conn.execute(
-            """SELECT id, url, source, title, company, location, posted_at, first_seen, ai_score, ai_reason, unverified
-               FROM minijobs WHERE passed = 1
+            """SELECT id, url, source, title, company, location, posted_at, first_seen, ai_score, ai_reason, unverified, status
+               FROM minijobs WHERE passed = 1 AND status != 'hidden'
                ORDER BY COALESCE(ai_score, 0) DESC, first_seen DESC LIMIT ?""", (limit,))]
-        total, dropped = (conn.execute("SELECT SUM(passed), COUNT(*) - SUM(passed) FROM minijobs").fetchone())
-    return {"jobs": rows, "total_passed": total or 0, "dropped": dropped or 0, "min_score": cfg()["min_score"],
+        total, dropped = (conn.execute("SELECT SUM(passed AND status != 'hidden'), COUNT(*) - SUM(passed) FROM minijobs").fetchone())
+        hidden = conn.execute("SELECT COUNT(*) FROM minijobs WHERE passed = 1 AND status = 'hidden'").fetchone()[0]
+        waiting = conn.execute("SELECT COUNT(*) FROM minijobs WHERE passed = 1 AND status != 'hidden' "
+                               "AND ai_score IS NULL AND ai_attempts < 3").fetchone()[0]
+    return {"jobs": rows, "total_passed": total or 0, "dropped": dropped or 0, "hidden": hidden, "waiting_ai": waiting,
+            "min_score": cfg()["min_score"], "min_score_unverified": cfg()["min_score_unverified"],
             "telegram": bool(chat_id()), "ai": ai.enabled()}
+
+
+def reapply_rules(dry: bool = False) -> list[dict]:
+    """Startup migration (no AI): the scam words and the score caps of today's rules, applied to the rows already saved.
+    Safe to repeat: a second run finds nothing to change. A row that is now a scam sign is dropped (passed = 0); a row
+    that has a cap gets max_score set and its AI score lowered to the cap. Rows already sent stay sent.
+    dry=True only returns what would change. Returns [{"id", "title", "change"}]."""
+    changes = []
+    with db.connect() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT id, title, company, location, description, unverified, max_score, ai_score, notified "
+            "FROM minijobs WHERE passed = 1")]
+        for r in rows:
+            text = r["title"] if r["unverified"] else f"{r['title']}\n{r['description'] or ''}"
+            if scam := SCAM.search(text):
+                what = f"Scam sign ('{scam[0].strip()}')"
+                changes.append({"id": r["id"], "title": r["title"], "notified": r["notified"], "old_score": r["ai_score"],
+                                "change": f"dropped: {what}"})
+                if not dry:
+                    conn.execute("UPDATE minijobs SET passed = 0, filter_reason = ? WHERE id = ?", (what, r["id"]))
+                continue
+            cap = score_cap(r)
+            if cap is None or (r["max_score"] is not None and r["max_score"] <= cap
+                               and (r["ai_score"] is None or r["ai_score"] <= cap)):
+                continue
+            new = None if r["ai_score"] is None else min(r["ai_score"], cap)
+            changes.append({"id": r["id"], "title": r["title"], "notified": r["notified"], "old_score": r["ai_score"],
+                            "change": f"cap {cap}" + (f", score {r['ai_score']} -> {new}" if new != r["ai_score"] else "")})
+            if not dry:
+                conn.execute("UPDATE minijobs SET max_score = ?, ai_score = ? WHERE id = ?",
+                             (min(cap, r["max_score"] or cap), new, r["id"]))
+    if changes and not dry:
+        log.info("Minijob rules applied to saved ads: %d changed (%s)", len(changes), ", ".join(str(c["id"]) for c in changes))
+    return changes
+
+
+STATUSES = ("", "saved", "applied", "hidden")
+
+
+def set_status(job_id: int, status: str) -> None:
+    """Saved / Applied / Hidden for one Minijob ("" = undo). Nothing else changes."""
+    with db.connect() as conn:
+        conn.execute("UPDATE minijobs SET status = ? WHERE id = ?", (status, job_id))

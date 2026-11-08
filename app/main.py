@@ -37,6 +37,7 @@ async def lifespan(app: FastAPI):
     must_apply.prepare()  # once: recent good jobs are scored again with the blocker check
     region.skip_staffing()  # staffing agencies with a careers page stay Skipped (some were Watched in v9.9)
     categories.apply_rules()  # no AI: every company the name / jobs make clear gets its category right away
+    minijob.reapply_rules()  # no AI: today's scam words and score caps for the Minijobs already saved (safe to repeat)
     ai.requeue_unscored()  # once: jobs the AI gave up on wait for a score again
     company_jobs.release_first_reads()  # once: good jobs from companies' first reads can go to Telegram
     logging.getLogger("jobradar").info(
@@ -516,6 +517,18 @@ def skip_suggestion(suggestion_id: int):
 @app.get("/api/minijobs")
 def minijobs():
     """The Minijob page: 100% home office Minijobs that passed the filter (separate from the Werkstudent jobs)."""
+    return minijob.listing()
+
+
+class MinijobStatus(BaseModel):
+    status: str  # "saved", "applied", "hidden" or "" (undo)
+
+
+@app.post("/api/minijobs/{job_id}/status")
+def set_minijob_status(job_id: int, body: MinijobStatus):
+    if body.status not in minijob.STATUSES:
+        raise HTTPException(400, f"status must be one of {list(minijob.STATUSES)}")
+    minijob.set_status(job_id, body.status)
     return minijob.listing()
 
 

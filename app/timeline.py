@@ -8,14 +8,14 @@ for the countdowns.
 import math
 from datetime import date, datetime, time, timedelta, timezone
 
-from . import ai, auto_resume, companies, company_jobs, db, initiativ_mail, linkedin, schedule, scheduler
+from . import ai, auto_resume, companies, company_jobs, db, initiativ_mail, linkedin, minijob, schedule, scheduler
 from .checker import checking_all
 from .clock import GERMANY
 from .config import CONFIG
 
 # How long a fixed run usually takes (minutes) until it has run once; a longer last run counts instead.
 # Also the "don't deploy" windows: DEPLOY_BEFORE minutes before a run until this long after its start.
-USUAL = {"night": 30, "night_full": 60, "linkedin": 15, "midday": 30, "evening": 45, "drafts": 5}
+USUAL = {"night": 30, "night_full": 60, "linkedin": 15, "midday": 30, "evening": 45, "drafts": 5, "minijob": 10}
 DEPLOY_BEFORE = 15
 DAY = 24 * 60
 
@@ -86,6 +86,8 @@ def last_results() -> dict:
         found["drafts"] = {"finished_at": r["finished_at"], "seconds": _seconds_between(r["at"], r["finished_at"]),
                            "text": text}
     found["hourly"] = _hourly_result()
+    if minijob.last_round.get("finished_at"):  # hourly and night Minijob rounds (kept in memory since the last restart)
+        found["minijob"] = dict(minijob.last_round)
     return found
 
 
@@ -118,6 +120,11 @@ def _ai_resets(day: date) -> list[dict]:
             if at.date() == day:
                 resets.setdefault(at, []).append(name)
     return [{"at": _iso(at), "minute": _minute(at), "name": " + ".join(names)} for at, names in sorted(resets.items())]
+
+
+def night_hour() -> int:
+    """The hour of the Minijob night round (same hour as the night run, at :20; scheduler.py)."""
+    return CONFIG["companies"].get("daily_run_hour", 3)
 
 
 def _span(start: int, end: int) -> list[int]:
@@ -158,6 +165,13 @@ def plan_day(day: date, last: dict) -> dict:
                        "auto_pause": None if key == "drafts" else
                        _span(minute - int(auto_resume.BEFORE_FIXED.total_seconds() // 60), end),
                        "no_deploy": _span(minute - DEPLOY_BEFORE, end)})
+    if CONFIG["minijob"].get("enabled", True):  # the Minijob night round (30 days back + Remotely), see scheduler.py
+        at = datetime.combine(day, time(night_hour(), 20), GERMANY)
+        minute, length = _minute(at), _minutes("minijob", last)
+        events.append({"key": "minijob", "label": f"{at:%H:%M} Minijob night round", "at": _iso(at), "minute": minute,
+                       "minutes": length, "until": None, "auto_pause": None,
+                       "note": "Minijob ads 30 days back, and the Remotely site is read once",
+                       "no_deploy": _span(minute - DEPLOY_BEFORE, minute + length)})
     events.sort(key=lambda e: e["minute"])
     weekly = CONFIG["companies"].get("weekly_summary") or {}
     extra = []
@@ -189,6 +203,8 @@ def running_now() -> list[dict]:
         s = linkedin.now_searching
         found.append({"key": "linkedin", "label": "LinkedIn search", "step": f"\"{s['word']}\"" if s["word"] else "",
                       "done": s["done"], "total": s["total"], "started_at": None})
+    if minijob.running():  # the hourly or the night Minijob round
+        found.append({"key": "minijob", "label": "Minijob round", "step": "", "done": 0, "total": 0, "started_at": None})
     if checking_all():
         found.append({"key": "hourly", "label": "Checking all watched links", "step": "", "done": 0, "total": 0,
                       "started_at": None})
@@ -210,7 +226,7 @@ def status() -> dict:
         if span[0] <= minute < span[1]:
             blocked = {"why": f"the {e['label']}", "until": _iso(datetime.combine(now.date(), time(), GERMANY)
                                                                    + timedelta(minutes=span[1]))}
-    fixed = [g for g in going if g["key"] in ("night", "linkedin", "midday", "evening", "drafts")]
+    fixed = [g for g in going if g["key"] in ("night", "linkedin", "midday", "evening", "drafts", "minijob")]
     if fixed and not blocked:
         blocked = {"why": f"the {fixed[0]['label']} is running", "until": None}
     return {
