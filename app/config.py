@@ -20,6 +20,26 @@ DEFAULTS = {
                      "ignore_senders": ["vaia.com", "studysmarter.de", "jobagent.stepstone.de", "shop-apotheke.com",
                                         "freelance.de", "jobseeker.com", "match.indeed.com", "updates-noreply@linkedin.com",
                                         "notifications-noreply@linkedin.com"]},
+    # Minijob section (app/minijob*.py): 100% home office Minijobs anywhere in Germany. Separate from the Werkstudent flow.
+    "minijob": {
+        "enabled": True,
+        "min_score": 7,                 # Telegram only from this AI score
+        "searches": ["Homeoffice", "100% Homeoffice", "Remote", "von zuhause", "Heimarbeit"],
+        # More search words that were tried and can be added later (they find more ads, but mostly ones the filter drops):
+        # "Büroassistenz", "Backoffice", "Kundenservice schriftlich", "Chat Support", "Dateneingabe",
+        # "Datenpflege", "Online-Shop", "Content", "Korrekturlesen", "Nachhilfe online", "Recherche"
+        "pages": 3,                     # pages of 100 ads per search word (stops early when a page is not full)
+        "days_back": 3,                 # hourly check: ads from the last N days (the night run looks 30 days back)
+        "arbeitnow": True,
+        "gmail_label": "JobRadar-Minijob",  # your Gmail label with Minijob alert emails (read-only; "" = off)
+        "gmail_days_back": 14,
+        "gmail_max_emails": 30,
+        "remotely": True,               # remotely.de: two list pages, once a day (night run), only new ads are read
+        "max_new_per_run": 40,          # new ads read in full per run (one request each)
+        "max_messages_per_run": 10,
+        "batch_size": 8,
+        "max_monthly_pay": 650,         # a clear MONTHLY amount above this is not a Minijob
+    },
     "filter": {"enabled": True},
     "telegram": {"enabled": True, "max_messages_per_run": 15},
     "gemini": {
@@ -53,7 +73,7 @@ DEFAULTS = {
         "daily_requests": {"Gemini": 20, "Groq": 1000, "OpenRouter": 50, "GitHub": 150, "Mistral": 300, "Cerebras": 300},
         # % of each provider's day: scoring keeps score_reserved for itself, careers pages at most careers,
         # categories and everything else together at most other
-        "shares": {"score_reserved": 30, "careers": 60, "other": 10},
+        "shares": {"score_reserved": 30, "careers": 60, "other": 10, "minijob": 10},
     },
     "companies": {
         "radius_km": 25,

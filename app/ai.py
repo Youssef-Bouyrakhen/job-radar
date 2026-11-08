@@ -169,11 +169,13 @@ REPORT_TTL = 3600  # a provider's own numbers (Groq, OpenRouter) count this many
 #   "score":      scoring jobs (incl. the Must apply blocker check): score_reserved % (30) nothing else may use,
 #                 and whatever the others leave
 #   "careers":    reading careers pages without a feed: at most careers % (60)
+#   "minijob":    the Minijob section: at most minijob % (10), never from the score_reserved part
 #   "categories", "other" (application emails, websites, company sizes, Initiativ reasons, imports, look-alikes):
 #                 together at most other % (10)
 # A purpose whose share is used up on every provider waits for the next reset (BudgetSaved).
-PURPOSES = ("score", "careers", "categories", "other")
-PURPOSE_NAMES = {"score": "scoring", "careers": "careers pages", "categories": "categories", "other": "other"}
+PURPOSES = ("score", "careers", "categories", "other", "minijob")
+PURPOSE_NAMES = {"score": "scoring", "careers": "careers pages", "categories": "categories", "other": "other",
+                 "minijob": "Minijob"}
 
 
 class BudgetSaved(RateLimited):
@@ -477,7 +479,9 @@ def share_left(name: str, purpose: str) -> float:
         return left
     sh = shares()
     room = budget * (100 - sh["score_reserved"]) / 100 - sum(v for k, v in per.items() if k != "score")
-    mine, cap = (per["careers"], sh["careers"]) if purpose == "careers" else (per["categories"] + per["other"], sh["other"])
+    mine, cap = ((per["careers"], sh["careers"]) if purpose == "careers"
+                 else (per["minijob"], sh["minijob"]) if purpose == "minijob"  # the Minijob section: its own fixed 10%
+                 else (per["categories"] + per["other"], sh["other"]))
     return min(left, room, budget * cap / 100 - mine)
 
 

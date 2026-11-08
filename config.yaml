@@ -293,7 +293,7 @@ ai_budget:
   # scoring jobs (+ Must apply blocker check) always keeps score_reserved for itself and may also use what the others
   # leave; reading careers pages at most careers; categories, application emails, websites, company sizes,
   # Initiativ reasons and imports together at most other. A share that is used up waits for the next reset.
-  shares: {score_reserved: 30, careers: 60, other: 10}
+  shares: {score_reserved: 30, careers: 60, other: 10, minijob: 10}  # minijob: the Minijob section's own 10%, never from score_reserved
 
 # Telegram: one message per good new job (score >= gemini.min_score, or every keyword
 # match if Gemini is off). Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env.

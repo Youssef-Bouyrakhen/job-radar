@@ -11,6 +11,7 @@ const ENDPOINTS = {
   jobs:        () => ['GET',    '/api/jobs?view=everything'],
   job:         id => ['GET',    `/api/jobs/${id}`],        // one job incl. description
   info:        () => ['GET',    '/api/info'],
+  minijobs:    () => ['GET',    '/api/minijobs'],
   links:       () => ['GET',    '/api/links'],
   settings:    () => ['GET',    '/api/settings'],
   setStatus:   id => ['POST',   `/api/jobs/${id}/status`], // { status: ''|saved|applied|hidden }
@@ -385,7 +386,7 @@ function srcTag(j) {
 
 /* RENDER */
 // The 5 pages of the new design. Watched links, Companies and Coverage are tabs of "Sources".
-const PAGES = [['jobs', 'Jobs', 'Jobs to look at', 'jobs'], ['apps', 'Applications', 'What you sent', 'inbox'], ['sources', 'Sources', 'Links and companies', 'link'],
+const PAGES = [['jobs', 'Jobs', 'Jobs to look at', 'jobs'], ['apps', 'Applications', 'What you sent', 'inbox'], ['minijob', 'Minijob', '100% home office', 'jobs'], ['sources', 'Sources', 'Links and companies', 'link'],
   ['timeline', 'Schedule', 'What runs when', 'cal'], ['settings', 'Settings', 'What it looks for', 'set']];
 const SRC_TABS = ['links', 'companies', 'coverage'];
 const pageOf = tab => SRC_TABS.includes(tab) ? 'sources' : tab;
@@ -620,7 +621,7 @@ function renderSettings() {
 // AI services: a pill in the top bar ("2 AI working, 1 at limit") that opens a list of all of them with today's use.
 // Red after the provider answered "limit reached" (or Job Radar's count is used up) until its own real reset.
 const AI_UI = { active: ['Working', 'd-ok'], next: ['Waiting', 'd-wait'], paused: ['Paused', 'd-wait'], empty: ['Used up', 'd-bad'], limit: ['Limit reached', 'd-bad'] };
-const AI_USES = { score: 'scoring', careers: 'careers pages', categories: 'categories', other: 'other' };
+const AI_USES = { score: 'scoring', careers: 'careers pages', categories: 'categories', other: 'other', minijob: 'Minijob' };
 const clockOf = iso => fmtTime(iso) || '–';
 function renderAiBar() {
   const btn = $('#aiBtn'), pop = $('#aiPop'), ai = state.ai;
@@ -1746,9 +1747,37 @@ function tlTick() {
 setInterval(tlTick, 1000);
 $('#tlDays').addEventListener('click', e => { const b = e.target.closest('[data-tl-day]'); if (b) { tlDay = +b.dataset.tlDay; renderTimeline(); } });
 
+/* MINIJOB PAGE (GET /api/minijobs): own table, own filter, own Telegram channel; nothing to do with the Werkstudent jobs */
+let mj = null;
+async function loadMinijobs() {
+  if (state.demo) { $('#mjList').innerHTML = '<div class="d-empty">Demo data: connect the backend to see Minijobs.</div>'; return; }
+  try { mj = await api('minijobs'); } catch (e) { $('#mjList').innerHTML = `<div class="d-empty">Could not load: ${esc(e.message)}</div>`; return; }
+  renderMinijobs();
+}
+function renderMinijobs() {
+  if (!mj) return;
+  $('#mjSummary').innerHTML = `<span>${mj.total_passed} Minijob${mj.total_passed === 1 ? '' : 's'} shown · ${mj.dropped} dropped by the filter</span>`
+    + `<span>${mj.telegram ? 'Telegram channel on' : 'Telegram channel off (MINIJOB_TELEGRAM_CHAT_ID missing in .env)'}</span>`;
+  const rows = mj.jobs.map(j => {
+    const n = j.ai_score, cls = n == null ? 'd-weak' : n >= 9 ? 'd-hi' : n >= mj.min_score ? 'd-mid' : 'd-weak';
+    const box = n == null ? `<div class="d-score d-weak" title="${mj.ai ? 'Waiting for the AI' : 'AI scoring is off'}"><b>–</b><span>No score</span></div>`
+      : `<div class="d-score ${cls}" title="AI score ${n}/10"><b>${n}<small>/10</small></b></div>`;
+    return `<div class="d-approw"><div class="d-rowi">${box}
+      <div class="d-grow"><h4><a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></h4>
+        <p>${esc(j.company || 'Company unknown')}${j.location ? ' · ' + esc(j.location) : ''}</p>
+        ${j.unverified ? '<p class="d-sm"><b>⚠ From an alert email: check the ad yourself (Minijob and home office not verified)</b></p>' : ''}
+        ${j.ai_reason ? `<p class="d-sm">${esc(j.ai_reason)}</p>` : ''}
+        <p class="d-sm">${esc(j.source || '')} · found ${fmtDate(j.first_seen)}</p></div>
+      <div class="d-right"><a class="d-btn" href="${esc(j.url)}" target="_blank" rel="noopener">Open</a></div></div></div>`;
+  }).join('');
+  $('#mjList').innerHTML = mj.jobs.length ? `<div class="d-card d-rows">${rows}</div>`
+    : '<div class="d-empty">No Minijobs yet. The first check runs a few minutes after Job Radar starts, then every hour.</div>';
+}
+
 function setTab(tab) {
   state.tab = tab;
-  ['jobs', 'apps', 'links', 'companies', 'coverage', 'timeline', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== tab);
+  ['jobs', 'apps', 'minijob', 'links', 'companies', 'coverage', 'timeline', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== tab);
+  if (tab === 'minijob' && !state.loading) loadMinijobs();
   if (tab === 'apps') { renderTracker(); if (!state.loading) loadApps(true); }
   if (tab === 'links' && !state.loading) loadSuggestions();
   if (tab === 'companies' && !state.loading) loadCompanies();

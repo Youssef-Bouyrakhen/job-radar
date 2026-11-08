@@ -193,6 +193,28 @@ CREATE TABLE IF NOT EXISTS initiativ_drafts (
     note        TEXT
 );
 
+-- Minijob section (app/minijob.py): its own jobs, separate from the Werkstudent "jobs" table.
+-- Every ad that was read is kept (passed = 0 with the reason why it was dropped), so it is not read twice.
+CREATE TABLE IF NOT EXISTS minijobs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    url           TEXT NOT NULL UNIQUE,
+    source        TEXT,
+    title         TEXT NOT NULL,
+    company       TEXT,
+    location      TEXT,
+    description   TEXT,
+    posted_at     TEXT,
+    first_seen    TEXT NOT NULL,       -- UTC
+    passed        INTEGER NOT NULL DEFAULT 0,   -- 1 = passed the free filter
+    filter_reason TEXT,
+    ai_score      INTEGER,
+    ai_reason     TEXT,
+    ai_attempts   INTEGER NOT NULL DEFAULT 0,
+    notified      INTEGER NOT NULL DEFAULT 0,   -- 1 sent to Telegram, 2 could not be sent
+    unverified    INTEGER NOT NULL DEFAULT 0,   -- 1 = from an alert email: Minijob + home office not checked in the ad
+    max_score     INTEGER                       -- the AI score may not go above this (e.g. "Vollzeit/Teilzeit/Minijob" ads)
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,      -- switches you flip in the dashboard, e.g. "telegram_paused"
     value TEXT NOT NULL
@@ -243,6 +265,7 @@ MIGRATIONS["app_emails"] = {
 }
 
 # Cloudflare's free limit is counted in "neurons" (its own unit of AI work), not requests
+MIGRATIONS["minijobs"] = {"unverified": "INTEGER NOT NULL DEFAULT 0", "max_score": "INTEGER"}
 MIGRATIONS["ai_usage"] = {"neurons": "REAL NOT NULL DEFAULT 0"}
 
 # When a column is first added, run this once. Jobs found before Telegram existed

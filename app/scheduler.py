@@ -46,6 +46,12 @@ def start() -> None:
         from . import weekly as summary
         scheduler.add_job(summary.scheduled, "cron", day_of_week=weekly["day"], hour=weekly.get("hour", 19),
                           minute=0, id="weekly_summary", coalesce=True, misfire_grace_time=3 * 3600, timezone=GERMANY)
+    if CONFIG["minijob"].get("enabled", True):  # Minijob section: every hour, and a deeper look in the night run
+        from . import minijob
+        scheduler.add_job(minijob.scheduled, "interval", minutes=60, id="minijob", max_instances=1, coalesce=True,
+                          next_run_time=now() + timedelta(minutes=2))
+        scheduler.add_job(minijob.scheduled_night, "cron", hour=CONFIG["companies"].get("daily_run_hour", 3), minute=20,
+                          id="minijob_night", max_instances=1, coalesce=True, misfire_grace_time=3600, timezone=GERMANY)
     scheduler.start()
 
 

@@ -41,13 +41,15 @@ def set_paused(value: bool) -> None:
     db.set_setting("telegram_paused", "1" if value else "0")
 
 
-def send(text: str) -> None:
-    """Send one message. Raises TelegramError with a readable reason if it fails."""
-    if not configured():
+def send(text: str, chat_id: str | None = None) -> None:
+    """Send one message (chat_id: another chat than TELEGRAM_CHAT_ID, e.g. the Minijob channel).
+    Raises TelegramError with a readable reason if it fails."""
+    chat = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
+    if not os.environ.get("TELEGRAM_BOT_TOKEN") or not chat:
         raise TelegramError("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing in .env")
     try:
         r = httpx.post(API.format(token=os.environ["TELEGRAM_BOT_TOKEN"], method="sendMessage"),
-                       json={"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text, "parse_mode": "HTML",
+                       json={"chat_id": chat, "text": text, "parse_mode": "HTML",
                              "link_preview_options": {"is_disabled": True}},
                        timeout=20)
     except httpx.HTTPError as e:

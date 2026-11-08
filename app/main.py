@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, diagnosis, landing, must_apply, discover, gmail, initiativ_mail, linkedin,
-               region, schedule, scheduler, telegram, timeline, weekly)
+               minijob, region, schedule, scheduler, telegram, timeline, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all, recheck_hours,
                       ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
 from .config import CONFIG, ROOT
@@ -512,6 +512,12 @@ def skip_suggestion(suggestion_id: int):
 
 
 # ---- jobs --------------------------------------------------------------------
+
+@app.get("/api/minijobs")
+def minijobs():
+    """The Minijob page: 100% home office Minijobs that passed the filter (separate from the Werkstudent jobs)."""
+    return minijob.listing()
+
 
 @app.get("/api/jobs")
 def list_jobs(view: str = "all"):
