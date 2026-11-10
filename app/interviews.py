@@ -21,6 +21,7 @@ import threading
 from datetime import date, datetime, timedelta, timezone
 from email import message_from_bytes, policy
 from email.utils import parseaddr, parsedate_to_datetime
+from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 from . import ai, applications, clock, db, gmail
@@ -39,7 +40,7 @@ DEFAULT_LENGTH = timedelta(hours=1)  # an interview without an end time counts a
 MAX_PROMPT_CHARS = 9000
 MAX_PER_MESSAGE = 1400
 
-RULE_VERSION = "2"
+RULE_VERSION = "3"
 _lock = threading.Lock()
 _last: dict = {}
 _misses: dict[str, int] = {}
@@ -59,7 +60,7 @@ def last_result() -> dict:
 
 # ---- 1. reading an email, short -------------------------------------------------------------
 
-MEETING_LINK = re.compile(r"https?://(?:[\w-]+\.)?(?:teams\.microsoft\.com/l/meetup-join|teams\.live\.com/meet|zoom\.us/[jw]|"
+MEETING_LINK = re.compile(r"https?://(?:[\w-]+\.)?(?:teams\.microsoft\.com/(?:l/meetup-join|meet)|teams\.live\.com/meet|zoom\.us/[jw]|"
                           r"meet\.google\.com|[\w-]+\.webex\.com|calendly\.com|whereby\.com)/[^\s<>\")\]]+", re.I)
 QUOTE_START = re.compile(r"^\s*(am .{5,140} schrieb|on .{5,140} wrote|-{2,}\s*(original|urspr|weitergeleitet|forwarded)|"
                          r"von:\s|from:\s|gesendet:|sent:|_{5,}|\*{0,2}von:)", re.I)
@@ -151,6 +152,18 @@ def _calendar_invites(msg) -> list[str]:
     return out
 
 
+def _calendar_raw(msg) -> str:
+    out = []
+    for part in msg.walk():
+        if part.get_content_type() in ("text/calendar", "application/ics"):
+            try:
+                c = part.get_content()
+            except Exception:
+                continue
+            out.append(re.sub(r"\r?\n[ \t]", "", c.decode("utf-8", "ignore") if isinstance(c, bytes) else c))
+    return " ".join(out)
+
+
 def read_message(raw: bytes) -> dict:
     msg = message_from_bytes(raw, policy=policy.default)
     try:
@@ -169,7 +182,9 @@ def read_message(raw: bytes) -> dict:
             content = _html_to_text(content)
         full = html.unescape(content)
         text = _short(full)
-    links = list(dict.fromkeys(MEETING_LINK.findall(full + " " + hrefs)))[:2]
+    # links also from the buttons (href), from Outlook "safelinks" (the real link is URL-encoded inside) and from invites
+    haystack = full + " " + hrefs + " " + _calendar_raw(msg)
+    links = list(dict.fromkeys(MEETING_LINK.findall(haystack + " " + unquote(haystack))))[:2]
     invites = _calendar_invites(msg)
     sender = str(msg.get("From", ""))
     return {"sent": sent, "sender": sender, "mine": parseaddr(sender)[1].lower() == applications._me(),
@@ -648,6 +663,8 @@ def overview() -> dict:
     items = []
     for r in _merged(db.interviews()):
         raw = json.loads(r["slots"]) if r["proposal"] and r["slots"] else [[r["start_at"], r["end_at"]]]
+        coming = [x for x in raw if datetime.fromisoformat(x[1] or x[0]) >= now]  # a proposed time that is over is no option any more
+        raw = coming or raw
         slots = []
         for st, en in raw:
             s, e = clock.german(datetime.fromisoformat(st)), clock.german(datetime.fromisoformat(en)) if en else None
