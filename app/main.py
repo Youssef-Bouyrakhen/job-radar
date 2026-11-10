@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, diagnosis, landing, must_apply, discover, gmail, initiativ_mail, linkedin,
+from . import (VERSION, ai, applications, auto_resume, categories, clock, companies, company_jobs, db, diagnosis, landing, must_apply, discover, gmail, initiativ_mail, interviews, linkedin,
                minijob, region, schedule, scheduler, telegram, timeline, weekly)
 from .checker import (AlreadyRunning, check_all_in_background, check_link, checking_all, recheck_hours,
                       ensure_builtin_sources, hide_old_duplicates, min_score, recheck_no_jobs, refilter_all_jobs)
@@ -563,6 +563,22 @@ def set_job_status(job_id: int, body: JobStatus):
         applications.rematch_review()
         applications.refresh_statuses()
     return db.count_jobs(min_score())
+
+
+# ---- interviews (interviews.py: interview dates read from your emails, shown in the calendar popup) ----------
+
+@app.get("/api/interviews")
+def interview_overview():
+    return interviews.overview()
+
+
+@app.post("/api/interviews/check")
+def check_interviews():
+    """Read the interview threads now (a few seconds; the first time and with many new emails a minute or two)."""
+    result = interviews.check()
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("note") or "Could not read the emails")
+    return interviews.overview()
 
 
 # ---- application tracker (applications.py: your Sent folder and the replies in Gmail) ----------

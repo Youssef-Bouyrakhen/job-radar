@@ -49,6 +49,8 @@ const ENDPOINTS = {
   timeline:    () => ['GET',    '/api/timeline'],           // -> { days, running, last, hourly, auto, deploy }
   applications:() => ['GET',    '/api/applications'],       // -> { applications, stats, review, jobs: {id: {timeline}}, ... }
   appCheck:    () => ['POST',   '/api/applications/check'],
+  interviews:  () => ['GET',    '/api/interviews'],         // -> { upcoming, today, interviews: [{company, job_title, date, start, end, kind_label, status, gmail_url ...}], last }
+  interviewsRead: () => ['POST', '/api/interviews/check'],
   assignEmail: id => ['POST',   `/api/applications/emails/${id}/assign`],   // { job_id|null, kind }
   unassignEmail:id => ['POST',  `/api/applications/emails/${id}/unassign`],
   changeApp:   id => ['POST',   `/api/applications/${id}`]   // { status } or { hidden }
@@ -305,7 +307,10 @@ const DI = {
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
   moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
-  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  close: '<path d="M18 6 6 18M6 6l12 12"/>',
+  chevl: '<path d="m15 18-6-6 6-6"/>',
+  chevr: '<path d="m9 18 6-6-6-6"/>'
 };
 const di = n => `<svg viewBox="0 0 24 24" aria-hidden="true">${DI[n]}</svg>`;
 const initials = c => (c || '?').replace(/[^A-Za-zÄÖÜäöü ]/g, ' ').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
@@ -706,6 +711,7 @@ async function loadAll() {
   loadCompanies();
   loadCoverage();
   loadApps();
+  loadInterviews();
 }
 function applyInfo(i) {
   if (!i) return;
@@ -737,7 +743,98 @@ async function refreshQuiet() {
     applyInfo(i); renderAiBar(); renderStatus(); renderNav(); renderHead(); renderFilters(); if (!state.openId) renderList();
   } catch (e) {}
   loadApps(true);
+  loadInterviews(true);
 }
+
+/* INTERVIEWS: the "Interviews" button at the top and the calendar popup. Everything comes from the server
+   (interviews.py reads the emails); dates and times arrive as German-time text, so no time zone maths here. */
+const iv = { data: null, month: null, day: null, open: false, reading: false };
+const IV_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const IV_STATUS = { confirmed: 'Confirmed', waiting: 'Waiting for confirmation', past: 'Past' };
+async function loadInterviews(quiet) {
+  if (state.demo) return;
+  try { iv.data = await api('interviews'); } catch (e) { if (!quiet) iv.data = null; }
+  renderIvBtn();
+  if (iv.open) renderIvModal();
+}
+function renderIvBtn() {
+  const btn = $('#ivBtn'), d = iv.data;
+  btn.hidden = state.demo || !d || !d.enabled;
+  if (btn.hidden) return;
+  btn.innerHTML = `${di('cal')}<span>Interviews</span><span class="d-ivcount${d.upcoming ? '' : ' d-zero'}">${d.upcoming} upcoming</span>`;
+}
+const ivDay = (y, m, d) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+const ivDate = iso => { const [y, m, d] = iso.split('-').map(Number); return `${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${y}`; };
+const ivWeekday = iso => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(iso + 'T12:00:00Z').getUTCDay()];
+function openIvModal() {
+  const d = iv.data; if (!d) return;
+  const next = d.interviews.find(i => i.status !== 'past') || d.interviews[d.interviews.length - 1];
+  const [y, m] = (next ? next.date : d.today).split('-').map(Number);
+  iv.month = { y, m: m - 1 }; iv.day = null; iv.open = true;
+  $('#ivModal').hidden = false;
+  renderIvModal(); $('#ivClose').focus();
+}
+function closeIvModal() { iv.open = false; $('#ivModal').hidden = true; $('#ivBtn').focus(); }
+function ivCard(i, today) {
+  const when = `${ivWeekday(i.date)} ${ivDate(i.date)} · ${i.start}${i.end ? '–' + i.end : ''}`;
+  const link = /^https?:\/\//.test(i.place) ? `<a href="${esc(i.place)}" target="_blank" rel="noopener noreferrer">Open meeting link</a>` : esc(i.place);
+  return `<article class="d-iv d-iv-${i.status}${i.date === today ? ' d-iv-today' : ''}">
+    <div class="d-iv1"><b>${esc(i.company)}</b><span class="d-ivtag d-chip-${i.status}">${IV_STATUS[i.status]}</span></div>
+    ${i.job_title ? `<div class="d-ivmeta">${esc(i.job_title)}</div>` : ''}
+    <div class="d-ivwhen">${esc(when)} <span class="d-ivkind">${esc(i.kind_label)}</span>${i.date === today ? ' <span class="d-ivtag d-ivtoday">Today</span>' : ''}</div>
+    ${link ? `<div class="d-ivmeta">${link}</div>` : ''}
+    ${i.confidence === 'low' ? `<div class="d-ivwarn">${di('warn')}Check the email: ${esc(i.note || 'the date is not clearly written in it')}</div>` : i.note ? `<div class="d-ivmeta">${esc(i.note)}</div>` : ''}
+    ${i.gmail_url ? `<a class="d-ivmail" href="${esc(i.gmail_url)}" target="_blank" rel="noopener noreferrer">${di('mail')}Open email thread in Gmail</a>` : ''}
+  </article>`;
+}
+function renderIvModal() {
+  const d = iv.data; if (!d) return;
+  const { y, m } = iv.month, last = d.last || {};
+  $('#ivSub').textContent = `${d.upcoming ? d.upcoming + ' upcoming' : 'No upcoming interviews'} · German time · read from your Gmail "Bewerbungen" label`;
+  $('#ivRead').innerHTML = di('ref') + (iv.reading ? 'Reading…' : 'Read Gmail now'); $('#ivRead').disabled = iv.reading;
+  $('#ivClose').innerHTML = di('close'); $('#ivPrev').innerHTML = di('chevl'); $('#ivNext').innerHTML = di('chevr');
+  $('#ivMonth').textContent = `${IV_MONTHS[m]} ${y}`;
+  const byDay = {};
+  d.interviews.forEach(i => (byDay[i.date] = byDay[i.date] || []).push(i));
+  const lead = (new Date(Date.UTC(y, m, 1)).getUTCDay() + 6) % 7, days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  let cells = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(n => `<div class="d-calh">${n}</div>`).join('');
+  for (let i = 0; i < lead; i++) cells += '<div class="d-cald d-out"></div>';
+  for (let n = 1; n <= days; n++) {
+    const key = ivDay(y, m, n), list = byDay[key] || [];
+    const chips = list.slice(0, 2).map(i => `<span class="d-chip d-chip-${i.status}" title="${esc(i.company)}">${esc(i.start)} ${esc(i.company)}</span>`).join('')
+      + (list.length > 2 ? `<span class="d-more">+${list.length - 2}</span>` : '');
+    cells += `<button type="button" class="d-cald${key === d.today ? ' d-today' : ''}${key === iv.day ? ' d-sel' : ''}${list.length ? ' d-has' : ''}" data-ivday="${key}" aria-label="${n} ${IV_MONTHS[m]}${list.length ? ', ' + list.length + (list.length > 1 ? ' interviews' : ' interview') : ''}"><b>${n}</b>${chips}</button>`;
+  }
+  $('#ivCal').innerHTML = cells;
+  const shown = iv.day ? d.interviews.filter(i => i.date === iv.day) : d.interviews.filter(i => i.status !== 'past');
+  const past = iv.day ? [] : d.interviews.filter(i => i.status === 'past').slice(-3).reverse();
+  let html = `<div class="d-ivhead"><h3>${iv.day ? ivWeekday(iv.day) + ' ' + ivDate(iv.day) : 'Next interviews'}</h3>${iv.day ? '<button type="button" class="d-btn" data-ivday="">Show all</button>' : ''}</div>`;
+  html += shown.length ? shown.map(i => ivCard(i, d.today)).join('')
+    : `<p class="d-hint">${iv.day ? 'No interview on this day.' : 'No upcoming interviews. They appear here by themselves when an email with a date arrives.'}</p>`;
+  if (past.length) html += `<div class="d-ivhead"><h3>Recently past</h3></div>` + past.map(i => ivCard(i, d.today)).join('');
+  html += `<p class="d-hint">${last.at ? `Last read ${esc(fmtTime(last.at) || '')}` : 'Not read yet: the first read starts a few minutes after Job Radar starts'}${last.note ? ' · ' + esc(last.note) : ''}${last.waiting_for_ai ? ` · ${last.waiting_for_ai} thread(s) waiting for the AI` : ''}. Read every hour.</p>`;
+  $('#ivList').innerHTML = html;
+}
+async function readInterviews() {
+  if (iv.reading) return;
+  iv.reading = true; renderIvModal();
+  try { iv.data = await api('interviewsRead'); renderIvBtn(); toast('Interview emails read'); }
+  catch (e) { toast('Could not read: ' + e.message); }
+  iv.reading = false; if (iv.open) renderIvModal();
+}
+$('#ivBtn').addEventListener('click', openIvModal);
+$('#ivClose').addEventListener('click', closeIvModal);
+$('#ivRead').addEventListener('click', readInterviews);
+$('#ivModal').addEventListener('click', e => {
+  if (e.target.id === 'ivModal') return closeIvModal();
+  const day = e.target.closest('[data-ivday]');
+  if (day) { iv.day = day.dataset.ivday && day.dataset.ivday !== iv.day ? day.dataset.ivday : null; renderIvModal(); }
+});
+const ivStep = n => { let { y, m } = iv.month; m += n; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } iv.month = { y, m }; renderIvModal(); };
+$('#ivPrev').addEventListener('click', () => ivStep(-1));
+$('#ivNext').addEventListener('click', () => ivStep(1));
+$('#ivToday').addEventListener('click', () => { const [y, m] = iv.data.today.split('-').map(Number); iv.month = { y, m: m - 1 }; iv.day = null; renderIvModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && iv.open) closeIvModal(); });
 
 /* ACTIONS */
 const byId = id => jobs.find(j => String(j.id) === String(id));

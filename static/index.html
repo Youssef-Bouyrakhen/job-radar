@@ -27,6 +27,7 @@
     <header class="nd d-top">
       <div class="d-status" data-check><span class="d-dot"></span><span data-check-text>Loading…</span></div>
       <svg class="d-mlogo" viewBox="0 0 24 24"><path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>
+      <button type="button" class="d-pill d-ivbtn" id="ivBtn" aria-haspopup="dialog" hidden></button>
       <button type="button" class="d-pill" id="aiBtn" aria-haspopup="true" hidden></button>
       <button type="button" class="d-checkbtn" id="checkNow" aria-label="Check all sources now" title="Check all sources now"><svg viewBox="0 0 24 24" id="i-ref"></svg><span>Check now</span></button>
       <button type="button" class="d-iconbtn" data-theme-toggle aria-label="Light / dark" title="Light / dark"></button>
@@ -210,6 +211,27 @@
 </div>
 </div>
 <nav class="nd d-tabbar" id="tabbar" aria-label="Main"></nav>
+
+<div class="nd d-modal" id="ivModal" role="dialog" aria-modal="true" aria-labelledby="ivTitle" hidden>
+  <div class="d-modalbox">
+    <div class="d-modalhead">
+      <div><h2 id="ivTitle">Interviews</h2><p class="d-sub" id="ivSub"></p></div>
+      <div class="d-modalacts">
+        <button type="button" class="d-btn" id="ivRead" title="Read your interview emails now"></button>
+        <button type="button" class="d-btn d-icon" id="ivClose" aria-label="Close" title="Close (Esc)"></button>
+      </div>
+    </div>
+    <div class="d-calnav">
+      <button type="button" class="d-btn d-icon" id="ivPrev" aria-label="Previous month"></button>
+      <b id="ivMonth"></b>
+      <button type="button" class="d-btn d-icon" id="ivNext" aria-label="Next month"></button>
+      <button type="button" class="d-btn" id="ivToday">Today</button>
+      <span class="d-calkey"><i class="d-k d-k-confirmed"></i>Confirmed <i class="d-k d-k-waiting"></i>Waiting <i class="d-k d-k-past"></i>Past</span>
+    </div>
+    <div class="d-cal" id="ivCal"></div>
+    <div class="d-ivlist" id="ivList"></div>
+  </div>
+</div>
 
 <div class="app-toast-host">
   <div class="toast" id="toast" role="status">

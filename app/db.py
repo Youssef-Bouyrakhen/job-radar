@@ -216,6 +216,26 @@ CREATE TABLE IF NOT EXISTS minijobs (
     status        TEXT NOT NULL DEFAULT ''      -- '' / saved / applied / hidden (the buttons on the Minijob page)
 );
 
+-- Interviews (app/interviews.py): one row per Gmail thread that was read for an interview date.
+-- state: ok = an interview is in it, none = no concrete interview (kept so the thread is not asked again).
+-- Times are UTC like everywhere else; fingerprint = which emails the thread had when it was last read.
+CREATE TABLE IF NOT EXISTS interviews (
+    thread_id   TEXT PRIMARY KEY,    -- Gmail's thread (X-GM-THRID)
+    fingerprint TEXT NOT NULL,
+    state       TEXT NOT NULL,
+    company     TEXT,
+    job_title   TEXT,
+    start_at    TEXT,
+    end_at      TEXT,
+    kind        TEXT,                -- teams / video / phone / in_person / unknown
+    place       TEXT,                -- meeting link, address or phone number
+    status      TEXT,                -- confirmed / waiting (past is worked out when shown)
+    confidence  TEXT,                -- high / medium / low (low: the date is not clearly in the emails)
+    note        TEXT,
+    subject     TEXT,
+    read_at     TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,      -- switches you flip in the dashboard, e.g. "telegram_paused"
     value TEXT NOT NULL
@@ -925,6 +945,39 @@ def update_application(app_id: int, fields: dict) -> None:
     with connect() as conn:
         conn.execute(f"UPDATE applications SET {', '.join(f'{k} = :{k}' for k in fields)} WHERE id = :id",
                      {**fields, "id": app_id})
+
+
+# ---- interviews (interviews.py) ---------------------------------------------------------
+
+INTERVIEW_COLUMNS = ("thread_id", "fingerprint", "state", "company", "job_title", "start_at", "end_at", "kind",
+                     "place", "status", "confidence", "note", "subject")
+
+
+def interview_fingerprints() -> dict[str, str]:
+    with connect() as conn:
+        return {r[0]: r[1] for r in conn.execute("SELECT thread_id, fingerprint FROM interviews")}
+
+
+def save_interview(row: dict) -> None:
+    with connect() as conn:
+        conn.execute(f"""INSERT OR REPLACE INTO interviews ({', '.join(INTERVIEW_COLUMNS)}, read_at)
+                         VALUES ({', '.join(':' + c for c in INTERVIEW_COLUMNS)}, :read_at)""",
+                     {**{c: row.get(c) for c in INTERVIEW_COLUMNS}, "read_at": now()})
+
+
+def interviews() -> list[dict]:
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM interviews WHERE state = 'ok' ORDER BY start_at")]
+
+
+def interview_threads_from_tracker() -> set[str]:
+    """Threads the application tracker already sorted as interview emails (candidates for the interview reader)."""
+    with connect() as conn:
+        rows = conn.execute("SELECT DISTINCT thread_id FROM app_emails WHERE kind = 'interview' "
+                            "AND thread_id IS NOT NULL AND thread_id != '' AND state != 'dismissed'").fetchall()
+        rows += conn.execute("SELECT DISTINCT thread_id FROM applications WHERE status = 'interview' "
+                             "AND thread_id IS NOT NULL AND thread_id != '' AND hidden = 0").fetchall()
+    return {r[0] for r in rows}
 
 
 def known_sent(gmail_ids: list[str]) -> set[str]:

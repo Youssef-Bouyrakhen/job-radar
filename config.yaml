@@ -64,6 +64,15 @@ applications:
     - updates-noreply@linkedin.com
     - notifications-noreply@linkedin.com
 
+# Interviews: Job Radar reads your interview emails in the "Bewerbungen" label (whole threads, read-only, the same
+# Gmail reader as the application tracker) and shows them in the calendar popup (the "Interviews" button at the top).
+# The free AI reads each thread once (again only when a new email arrives in it); nothing is typed by hand.
+interviews:
+  enabled: true
+  check_every_minutes: 60
+  max_threads_per_run: 12       # threads read by the AI per round; the rest follows in the next round
+  max_messages_per_thread: 14
+
 # Layer 1 filter: decides which jobs show up in your job list.
 # Jobs that don't pass are still saved; you can see them under "Filtered out" in the dashboard.
 #

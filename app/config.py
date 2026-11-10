@@ -20,6 +20,8 @@ DEFAULTS = {
                      "ignore_senders": ["vaia.com", "studysmarter.de", "jobagent.stepstone.de", "shop-apotheke.com",
                                         "freelance.de", "jobseeker.com", "match.indeed.com", "updates-noreply@linkedin.com",
                                         "notifications-noreply@linkedin.com"]},
+    # Interviews (app/interviews.py): interview dates read from the "Bewerbungen" label, shown in the calendar popup
+    "interviews": {"enabled": True, "check_every_minutes": 60, "max_threads_per_run": 12, "max_messages_per_thread": 14},
     # Minijob section (app/minijob*.py): 100% home office Minijobs anywhere in Germany. Separate from the Werkstudent flow.
     "minijob": {
         "enabled": True,

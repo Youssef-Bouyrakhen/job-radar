@@ -25,6 +25,10 @@ def start() -> None:
         from . import applications
         scheduler.add_job(applications.scheduled, "interval", minutes=apps["check_every_minutes"], id="applications",
                           max_instances=1, coalesce=True, next_run_time=now() + timedelta(seconds=60))
+    if (CONFIG.get("interviews") or {}).get("enabled", True):  # interview dates from the same label, every hour
+        from . import interviews
+        scheduler.add_job(interviews.scheduled, "interval", minutes=CONFIG["interviews"]["check_every_minutes"],
+                          id="interviews", max_instances=1, coalesce=True, next_run_time=now() + timedelta(minutes=4))
     # The fixed runs of the day plan (schedule.py): 08:00 LinkedIn, 13:00 read (Monday to Friday), 19:00 read,
     # 03:00 night run. Imported here: companies needs the checker's modules first
     from . import companies, company_jobs, initiativ_mail, linkedin, schedule
