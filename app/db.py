@@ -244,6 +244,11 @@ CREATE TABLE IF NOT EXISTS settings (
 
 # Columns added after Phase 1. Existing databases get them automatically.
 MIGRATIONS = {
+    "interviews": {
+        "link": "TEXT",                                       # the Teams / Zoom link (the only "place" of an online meeting)
+        "slots": "TEXT",                                      # JSON [[start, end|null], ...] UTC: the times YOU proposed
+        "proposal": "INTEGER NOT NULL DEFAULT 0",             # 1 = only proposed by you, nothing agreed yet
+    },
     "links": {
         "kind": "TEXT NOT NULL DEFAULT 'url'",               # 'url' or 'arbeitsagentur'
         "baseline_done": "INTEGER NOT NULL DEFAULT 0",       # 1 after the first successful check
@@ -950,7 +955,7 @@ def update_application(app_id: int, fields: dict) -> None:
 # ---- interviews (interviews.py) ---------------------------------------------------------
 
 INTERVIEW_COLUMNS = ("thread_id", "fingerprint", "state", "company", "job_title", "start_at", "end_at", "kind",
-                     "place", "status", "confidence", "note", "subject")
+                     "place", "status", "confidence", "note", "subject", "link", "slots", "proposal")
 
 
 def interview_fingerprints() -> dict[str, str]:
@@ -963,6 +968,12 @@ def save_interview(row: dict) -> None:
         conn.execute(f"""INSERT OR REPLACE INTO interviews ({', '.join(INTERVIEW_COLUMNS)}, read_at)
                          VALUES ({', '.join(':' + c for c in INTERVIEW_COLUMNS)}, :read_at)""",
                      {**{c: row.get(c) for c in INTERVIEW_COLUMNS}, "read_at": now()})
+
+
+def clear_interviews() -> None:
+    """New reading rules: every thread is read again (the old answers were made with the old rules)."""
+    with connect() as conn:
+        conn.execute("DELETE FROM interviews")
 
 
 def interviews() -> list[dict]:

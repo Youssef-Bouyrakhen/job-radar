@@ -776,12 +776,16 @@ function openIvModal() {
 }
 function closeIvModal() { iv.open = false; $('#ivModal').hidden = true; $('#ivBtn').focus(); }
 function ivCard(i, today) {
-  const when = `${ivWeekday(i.date)} ${ivDate(i.date)} · ${i.start}${i.end ? '–' + i.end : ''}`;
-  const link = /^https?:\/\//.test(i.place) ? `<a href="${esc(i.place)}" target="_blank" rel="noopener noreferrer">Open meeting link</a>` : esc(i.place);
-  return `<article class="d-iv d-iv-${i.status}${i.date === today ? ' d-iv-today' : ''}">
-    <div class="d-iv1"><b>${esc(i.company)}</b><span class="d-ivtag d-chip-${i.status}">${IV_STATUS[i.status]}</span></div>
+  const fmt = sl => `${ivWeekday(sl.date)} ${ivDate(sl.date)} · ${sl.start}${sl.end ? '–' + sl.end : ''}`;
+  const when = i.proposal ? '' : fmt(i.slots[0]);
+  const link = i.link ? `<a href="${esc(i.link)}" target="_blank" rel="noopener noreferrer">Open ${i.kind === 'teams' ? 'Teams' : 'meeting'} link</a>` : '';
+  const isToday = i.slots.some(sl => sl.date === today);
+  return `<article class="d-iv d-iv-${i.status}${isToday ? ' d-iv-today' : ''}">
+    <div class="d-iv1"><b>${esc(i.company)}</b><span class="d-ivtag d-chip-${i.status}">${i.proposal ? 'Waiting · proposed by you' : IV_STATUS[i.status]}</span></div>
     ${i.job_title ? `<div class="d-ivmeta">${esc(i.job_title)}</div>` : ''}
-    <div class="d-ivwhen">${esc(when)} <span class="d-ivkind">${esc(i.kind_label)}</span>${i.date === today ? ' <span class="d-ivtag d-ivtoday">Today</span>' : ''}</div>
+    ${i.proposal ? `<div class="d-ivmeta">Not agreed yet. The company has not answered. Times you proposed:</div>${i.slots.map(sl => `<div class="d-ivwhen">${esc(fmt(sl))}</div>`).join('')}<div class="d-ivwhen"><span class="d-ivkind">${esc(i.kind_label)}</span></div>`
+      : `<div class="d-ivwhen">${esc(when)} <span class="d-ivkind">${esc(i.kind_label)}</span>${isToday ? ' <span class="d-ivtag d-ivtoday">Today</span>' : ''}</div>`}
+    ${i.place ? `<div class="d-ivmeta">${esc(i.place)}</div>` : ''}
     ${link ? `<div class="d-ivmeta">${link}</div>` : ''}
     ${i.confidence === 'low' ? `<div class="d-ivwarn">${di('warn')}Check the email: ${esc(i.note || 'the date is not clearly written in it')}</div>` : i.note ? `<div class="d-ivmeta">${esc(i.note)}</div>` : ''}
     ${i.gmail_url ? `<a class="d-ivmail" href="${esc(i.gmail_url)}" target="_blank" rel="noopener noreferrer">${di('mail')}Open email thread in Gmail</a>` : ''}
@@ -795,7 +799,7 @@ function renderIvModal() {
   $('#ivClose').innerHTML = di('close'); $('#ivPrev').innerHTML = di('chevl'); $('#ivNext').innerHTML = di('chevr');
   $('#ivMonth').textContent = `${IV_MONTHS[m]} ${y}`;
   const byDay = {};
-  d.interviews.forEach(i => (byDay[i.date] = byDay[i.date] || []).push(i));
+  d.interviews.forEach(i => i.slots.forEach(sl => (byDay[sl.date] = byDay[sl.date] || []).push({ ...i, start: sl.start })));
   const lead = (new Date(Date.UTC(y, m, 1)).getUTCDay() + 6) % 7, days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
   let cells = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(n => `<div class="d-calh">${n}</div>`).join('');
   for (let i = 0; i < lead; i++) cells += '<div class="d-cald d-out"></div>';
@@ -806,7 +810,7 @@ function renderIvModal() {
     cells += `<button type="button" class="d-cald${key === d.today ? ' d-today' : ''}${key === iv.day ? ' d-sel' : ''}${list.length ? ' d-has' : ''}" data-ivday="${key}" aria-label="${n} ${IV_MONTHS[m]}${list.length ? ', ' + list.length + (list.length > 1 ? ' interviews' : ' interview') : ''}"><b>${n}</b>${chips}</button>`;
   }
   $('#ivCal').innerHTML = cells;
-  const shown = iv.day ? d.interviews.filter(i => i.date === iv.day) : d.interviews.filter(i => i.status !== 'past');
+  const shown = iv.day ? d.interviews.filter(i => i.slots.some(sl => sl.date === iv.day)) : d.interviews.filter(i => i.status !== 'past');
   const past = iv.day ? [] : d.interviews.filter(i => i.status === 'past').slice(-3).reverse();
   let html = `<div class="d-ivhead"><h3>${iv.day ? ivWeekday(iv.day) + ' ' + ivDate(iv.day) : 'Next interviews'}</h3>${iv.day ? '<button type="button" class="d-btn" data-ivday="">Show all</button>' : ''}</div>`;
   html += shown.length ? shown.map(i => ivCard(i, d.today)).join('')

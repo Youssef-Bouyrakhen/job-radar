@@ -39,6 +39,7 @@ DEFAULT_LENGTH = timedelta(hours=1)  # an interview without an end time counts a
 MAX_PROMPT_CHARS = 9000
 MAX_PER_MESSAGE = 1400
 
+RULE_VERSION = "2"
 _lock = threading.Lock()
 _last: dict = {}
 _misses: dict[str, int] = {}
@@ -157,17 +158,18 @@ def read_message(raw: bytes) -> dict:
     except (TypeError, ValueError):
         sent = clock.now()
     body = msg.get_body(preferencelist=("plain", "html"))
-    text, full = "", ""
+    text, full, hrefs = "", "", ""
     if body is not None:
         try:
             content = body.get_content()
         except Exception:
             content = ""
         if body.get_content_type() == "text/html":
+            hrefs = " ".join(html.unescape(h) for h in re.findall(r"""href\s*=\s*["']([^"']+)""", content, re.I))
             content = _html_to_text(content)
         full = html.unescape(content)
         text = _short(full)
-    links = list(dict.fromkeys(MEETING_LINK.findall(full)))[:2]
+    links = list(dict.fromkeys(MEETING_LINK.findall(full + " " + hrefs)))[:2]
     invites = _calendar_invites(msg)
     sender = str(msg.get("From", ""))
     return {"sent": sent, "sender": sender, "mine": parseaddr(sender)[1].lower() == applications._me(),
@@ -203,6 +205,8 @@ AI_SCHEMA = {
             "job_title": {"type": "STRING"},
             "start": {"type": "STRING"},
             "end": {"type": "STRING"},
+            "origin": {"type": "STRING", "enum": ["me", "company"]},
+            "proposed_slots": {"type": "STRING"},
             "type": {"type": "STRING", "enum": list(KINDS)},
             "location_or_link": {"type": "STRING"},
             "status": {"type": "STRING", "enum": ["confirmed", "waiting"]},
@@ -210,7 +214,7 @@ AI_SCHEMA = {
             "confidence": {"type": "STRING", "enum": ["high", "medium", "low"]},
             "note": {"type": "STRING"},
         },
-        "required": ["id", "is_interview", "cancelled", "company", "job_title", "start", "end", "type",
+        "required": ["id", "is_interview", "cancelled", "company", "job_title", "start", "end", "origin", "proposed_slots", "type",
                      "location_or_link", "status", "proof", "confidence", "note"],
     },
 }
@@ -224,14 +228,21 @@ For each thread return one object:
 - is_interview: true only if a CONCRETE date and time for an interview was proposed, offered or agreed in the emails.
   false for: only "we will get back to you", rejections, application confirmations, newsletters, no date given.
 - cancelled: true if the interview was cancelled / called off and no new time was agreed.
-- company, job_title: as written in the emails ("" if unknown).
+- company: the EMPLOYER's name. Never a person's name, a team / department name or a mailbox name from a sender
+  display name ("Team Recruiting", "Koordination"). Take it from the job title, the signature or the sender's email
+  domain (deutschebahn.com = Deutsche Bahn). "" if unknown.
+- job_title: as written in the emails ("" if unknown).
 - start: "YYYY-MM-DD HH:MM" (24 hours). The LAST agreed time wins: a later email beats an earlier one. Example: the
   company proposed Thu 12.11. 09:00, then offered an alternative Fri 13.11. 13:00, and ME accepted: start = 13.11. 13:00.
   If a date has no year, use the next such date after the email it stands in. If nothing is agreed yet, use the company's
   newest proposal; if ME proposed several times and none is chosen, use the earliest one and say so in note. "" if none.
+- origin: who named the time in start: "me" (the student suggested it) or "company".
+- proposed_slots: ONLY when origin is "me" and the company has not agreed to one of the times: every time ME offered,
+  as "YYYY-MM-DD HH:MM-HH:MM; YYYY-MM-DD HH:MM-HH:MM" (end part only if written), else "". start = the first one.
 - end: "YYYY-MM-DD HH:MM" only if an end time or a length ("30 Minuten", "bis 14 Uhr") is stated, else "".
 - type: teams (Microsoft Teams), video (Zoom, Google Meet, other video call), phone, in_person, unknown.
-- location_or_link: the meeting link, address or phone number from the emails ("" if none). Never invent one.
+- location_or_link: a street address or phone number from the emails ("" if none). For Teams / Zoom / Meet leave it
+  "" (the link is read separately). Never a button or link text like "Jetzt teilnehmen". Never invent one.
 - status:
   "confirmed" = the company proposed or agreed a time AND ME replied that it fits, OR the company sent a
   "Terminbestaetigung" / calendar invite / "hiermit bestaetigen wir".
@@ -361,6 +372,48 @@ def _confirmed_possible(messages: list[dict]) -> bool:
                           " ".join(m["text"] for m in messages), re.I))
 
 
+BUTTON_LABEL = re.compile(r"\b(teilnehmen|beitreten|join (now|the|meeting)|click|klick|hier klicken|an der besprechung|"
+                          r"meeting beitreten|besprechung beitreten)\b|^https?://", re.I)
+BAD_COMPANY = re.compile(r"\b(team|abteilung|koordination|recruiting|bewerbung|personalabteilung|human resources|"
+                         r"hr|karriere|kontakt|noreply|no-reply|info)\b", re.I)
+SLOT = re.compile(r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})(?:\s*[-\u2013]\s*(\d{2}:\d{2}))?")
+
+
+def _slots(text: str) -> list[tuple[datetime, datetime | None]]:
+    out = []
+    for day, start, end in SLOT.findall(text or ""):
+        s0 = _parse_local(f"{day} {start}")
+        e0 = _parse_local(f"{day} {end}") if end else None
+        if s0:
+            out.append((s0, e0 if e0 and e0 > s0 else None))
+    return sorted(dict.fromkeys(out), key=lambda x: x[0])
+
+
+def _company(name: str, messages: list[dict], thread_id: str) -> str:
+    """The employer. The AI's answer is dropped when it is only a sender's display name or a team / mailbox word:
+    then the application the tracker made for this thread, then the sender's email domain."""
+    name = (name or "").strip()
+    senders = {_norm(applications.sender_name(m["sender"])) for m in messages if not m["mine"]}
+    senders.discard("")
+    if name and _norm(name) not in senders and not BAD_COMPANY.search(name):
+        return name[:120]
+    for a in db.applications():
+        if a.get("thread_id") == thread_id and a.get("company"):
+            return a["company"][:120]
+    known = [a["company"] for a in db.applications() if a.get("company")] + [r["company"] for r in db.interviews() if r["company"]]
+    for m in reversed(messages):
+        if not m["mine"]:
+            key = applications.contact_key(parseaddr(m["sender"])[1])
+            label = _norm((key or "").split("@")[-1].split(".")[0]) if key else ""
+            # a company name you already know that matches the domain: "deutschebahn.com" = "Deutsche Bahn"
+            match = next((c for c in known if label and len(label) > 3 and _norm(c).startswith(label)
+                          and not BAD_COMPANY.search(c)), "")
+            from_domain = match or applications._name_from_key(key)
+            if from_domain:
+                return from_domain[:120]
+    return name[:120]
+
+
 def build_row(thread_id: str, fingerprint: str, a: dict | None, messages: list[dict]) -> dict:
     """The database row for one thread, from the AI's answer (None: the emails do not look like an interview)."""
     row = {"thread_id": thread_id, "fingerprint": fingerprint, "state": "none", "subject": messages[-1]["subject"]}
@@ -372,20 +425,50 @@ def build_row(thread_id: str, fingerprint: str, a: dict | None, messages: list[d
     end = _parse_local(a.get("end", ""))
     if end and end <= start:
         end = None
+    all_text = " ".join(m["subject"] + " " + m["text"] for m in messages)
+    # Only a proposal: the last email is yours, the time came from you, and no company email or invite agreed to it.
+    # Nothing is agreed then: never "confirmed", never "past".
+    proposal = (messages[-1]["mine"] and not any(m["invites"] for m in messages)
+                and (a.get("origin") == "me" or a.get("status") == "waiting"))
+    slots = [(start, end)]
+    if proposal:
+        slots = _slots(a.get("proposed_slots", "")) or slots
+        start, end = slots[0]
+        a = {**a, "start": f"{start:%Y-%m-%d %H:%M}"}
     confidence, warning = verify(a, messages)
+    if proposal:
+        text = "\n".join(m["text"] for m in messages)
+        known_days, known_times = dates_in(text), times_in(text)
+        if any((s0.month, s0.day) not in known_days or (s0.hour, s0.minute) not in known_times for s0, _ in slots):
+            confidence = "low"
+            warning = "; ".join(x for x in (warning, "A proposed time is not written in the emails") if x)
+    # Type and place: a Teams link (or "Microsoft Teams" in the mail, no other platform) = Teams
     kind = a.get("type") if a.get("type") in KINDS else "unknown"
     links = [link for m in messages for link in m["links"]]
-    place = str(a.get("location_or_link") or "").strip()[:200] or (links[-1] if links else "")
-    if kind == "unknown" and links:
-        kind = "teams" if "teams." in links[-1] else "video"
+    teams_link = next((link for link in reversed(links) if "teams." in link), "")
+    link = teams_link or (links[-1] if links else "")
+    others = re.search(r"zoom|google meet|meet\.google|webex|whereby", all_text, re.I)
+    if kind in ("teams", "video", "unknown") and (teams_link or (re.search(r"microsoft teams|teams-?(meeting|besprechung|call|link)|\b(via|in|per|[uü]ber) teams\b", all_text, re.I) and not others)):
+        kind = "teams"
+    elif kind == "unknown" and link:
+        kind = "video"
+    ai_place = str(a.get("location_or_link") or "").strip()[:200]
+    if kind in ("teams", "video") or BUTTON_LABEL.search(ai_place):
+        place = ""  # an online meeting has its link, no place; link texts and button labels are never a place
+    elif kind == "phone":
+        place = ai_place if len(re.findall(r"\d", ai_place)) >= 6 else ""
+    else:
+        place = ai_place
     status = a.get("status") if a.get("status") in ("confirmed", "waiting") else "waiting"
-    if status == "confirmed" and not _confirmed_possible(messages):
+    if proposal or (status == "confirmed" and not _confirmed_possible(messages)):
         status = "waiting"
     note = "; ".join(x for x in (str(a.get("note") or "").strip()[:120], warning) if x)
     to_utc = lambda d: d.replace(tzinfo=clock.GERMANY).astimezone(timezone.utc).isoformat(timespec="seconds")
-    row.update(state="ok", company=str(a.get("company") or "").strip()[:120], job_title=str(a.get("job_title") or "").strip()[:160],
-               start_at=to_utc(start), end_at=to_utc(end) if end else None, kind=kind, place=place, status=status,
-               confidence=confidence, note=note)
+    row.update(state="ok", company=_company(str(a.get("company") or ""), messages, thread_id),
+               job_title=str(a.get("job_title") or "").strip()[:160],
+               start_at=to_utc(start), end_at=to_utc(end) if end else None, kind=kind, place=place, link=link[:300],
+               status=status, confidence=confidence, note=note, proposal=int(proposal),
+               slots=json.dumps([[to_utc(x), to_utc(y) if y else None] for x, y in slots]) if proposal else None)
     return row
 
 
@@ -455,6 +538,9 @@ def check() -> dict:
 
 def _check() -> dict:
     counts = {"ok": True, "threads": 0, "read": 0, "interviews": 0, "waiting_for_ai": 0, "note": ""}
+    if db.get_setting("interviews_rule") != RULE_VERSION:  # new reading rules: all threads are read again once
+        db.clear_interviews()
+        db.set_setting("interviews_rule", RULE_VERSION)
     known = db.interview_fingerprints()
     todo = []
     imap = gmail.open_folder("All")  # read-only: EXAMINE, BODY.PEEK
@@ -541,20 +627,40 @@ def _gmail_link(thread_id: str) -> str:
         return ""
 
 
+def _merged(rows: list[dict]) -> list[dict]:
+    """The same job title at the same time in two threads is one interview: the confirmed one is kept."""
+    best: dict[tuple, dict] = {}
+    out = []
+    for r in sorted(rows, key=lambda r: (r["status"] != "confirmed", {"high": 0, "medium": 1, "low": 2}.get(r["confidence"], 3),
+                                        r["read_at"] or "")):
+        title = _norm(r["job_title"] or "")
+        key = (title, r["start_at"]) if title and not r["proposal"] else None
+        if key and key in best:
+            continue
+        if key:
+            best[key] = r
+        out.append(r)
+    return out
+
+
 def overview() -> dict:
     now = datetime.now(timezone.utc)
     items = []
-    for r in db.interviews():
-        start = datetime.fromisoformat(r["start_at"])
-        end = datetime.fromisoformat(r["end_at"]) if r["end_at"] else None
-        over = (end or start + DEFAULT_LENGTH) < now
-        s, e = clock.german(start), clock.german(end) if end else None
+    for r in _merged(db.interviews()):
+        raw = json.loads(r["slots"]) if r["proposal"] and r["slots"] else [[r["start_at"], r["end_at"]]]
+        slots = []
+        for st, en in raw:
+            s, e = clock.german(datetime.fromisoformat(st)), clock.german(datetime.fromisoformat(en)) if en else None
+            slots.append({"date": f"{s:%Y-%m-%d}", "start": f"{s:%H:%M}", "end": f"{e:%H:%M}" if e else None})
+        start = datetime.fromisoformat(raw[0][0])
+        end = datetime.fromisoformat(raw[0][1]) if raw[0][1] else None
+        over = not r["proposal"] and (end or start + DEFAULT_LENGTH) < now  # a proposed time is never "past"
         items.append({"thread_id": r["thread_id"], "company": r["company"] or "Unknown company", "job_title": r["job_title"] or "",
-                      "date": f"{s:%Y-%m-%d}", "start": f"{s:%H:%M}", "end": f"{e:%H:%M}" if e else None,
-                      "end_date": f"{e:%Y-%m-%d}" if e else None, "kind": r["kind"], "kind_label": KIND_LABELS.get(r["kind"], "Type unknown"),
-                      "place": r["place"] or "", "status": "past" if over else r["status"], "agreed": r["status"],
-                      "confidence": r["confidence"], "note": r["note"] or "", "subject": r["subject"] or "",
-                      "gmail_url": _gmail_link(r["thread_id"])})
+                      "date": slots[0]["date"], "start": slots[0]["start"], "end": slots[0]["end"], "slots": slots,
+                      "proposal": bool(r["proposal"]), "kind": r["kind"], "kind_label": KIND_LABELS.get(r["kind"], "Type unknown"),
+                      "place": r["place"] or "", "link": r["link"] or "", "status": "past" if over else r["status"],
+                      "agreed": r["status"], "confidence": r["confidence"], "note": r["note"] or "",
+                      "subject": r["subject"] or "", "gmail_url": _gmail_link(r["thread_id"])})
     items.sort(key=lambda i: (i["date"], i["start"]))
     german_now = clock.now()
     return {"enabled": enabled(), "today": f"{german_now:%Y-%m-%d}", "now": f"{german_now:%H:%M}",
