@@ -349,9 +349,9 @@ def _posted_days(job: Job) -> int | None:
     return (today() - day).days
 
 
-def save_jobs(c: dict, jobs: list[Job]) -> tuple[dict, list[dict]]:
+def save_jobs(c: dict, jobs: list[Job], baseline: bool = False) -> tuple[dict, list[dict]]:
     """Run the jobs through filter + duplicates and save the ones in the area.
-    Returns (the company's job numbers, the new jobs)."""
+    baseline: the jobs were already there (never sent to Telegram). Returns (the company's job numbers, the new jobs)."""
     jf = get_filter()
     stats = Counter(total=len(jobs))
     it_titles, rows = [], []
@@ -383,7 +383,7 @@ def save_jobs(c: dict, jobs: list[Job]) -> tuple[dict, list[dict]]:
         rows.append({**asdict(j), "dedup_key": dedup_key(j.title, j.company), "hours": verdict.hours,
                      "filter_passed": verdict.passed, "filter_reason": verdict.reason})
     source = {"id": None, "name": f"{c['name']} (Companies)", "url": c["career_url"] or ""}
-    new = db.insert_new_jobs(source, rows, baseline=False)
+    new = db.insert_new_jobs(source, rows, baseline=baseline)
     fields = {"jobs_total": stats["total"], "jobs_near": stats["near"], "it_jobs": stats["it"],
               "student_jobs": stats["student"], "good_jobs": stats["good"], "fresh_jobs": stats["fresh"],
               "it_titles": json.dumps(it_titles, ensure_ascii=False),
@@ -761,7 +761,9 @@ def read_jobs(todo: list[dict], progress: dict, stop=lambda: False, ai_pages: in
                 log.warning("Companies: the AI could not read the job list of %s (%s)", c["name"], str(e)[:160])
                 waiting.add(c["id"])
                 continue
-        fields, new = save_jobs(c, r["jobs"])
+        # The first read with the JOIN reader (v14.8) finds jobs that were there long before: not sent to Telegram
+        first_join = r.get("method") == "Join feed" and c.get("jobs_method") != "Join feed"
+        fields, new = save_jobs(c, r["jobs"], baseline=first_join)
         if r.get("feed_url"):  # an applicant system Jina Reader found: read directly next time
             fields["feed_url"] = r["feed_url"]
         if fields["jobs_total"]:

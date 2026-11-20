@@ -181,6 +181,7 @@ def board_url(b: ats.Board) -> str | None:
         "Lever": lambda: f"https://jobs.{'eu.' if b.extra.get('eu') else ''}lever.co/{b.key}",
         "SmartRecruiters": lambda: f"https://jobs.smartrecruiters.com/{b.key}",
         "Recruitee": lambda: f"https://{b.key}.recruitee.com",
+        "Join": lambda: f"https://join.com/companies/{b.key}",
         "Workday": lambda: f"https://{b.key}.{b.extra['wd']}.myworkdayjobs.com/"
                            + (f"{b.extra['lang']}/" if b.extra.get("lang") else "") + b.extra["site"],
         "PowerApps": lambda: b.extra["page"],

@@ -46,6 +46,8 @@ def detect(text: str) -> Board | None:
         return Board("SmartRecruiters", m[1])
     if m := re.search(r"\b(?!www\.|app\.|api\.)([a-z0-9-]+)\.recruitee\.com", text, re.I):
         return Board("Recruitee", m[1].lower())
+    if m := re.search(r"\bjoin\.com/companies/([\w-]+)", text, re.I):
+        return Board("Join", m[1].lower())
     for m in re.finditer(r"([\w-]+)\.(wd\d+)\.myworkdayjobs\.com/(?:([a-z]{2}-[A-Z]{2})/)?([\w-]+)", text):
         if m[4] != "wday":
             return Board("Workday", m[1], {"wd": m[2], "lang": m[3] or "", "site": m[4]})
@@ -225,6 +227,41 @@ def _polite_get(client: httpx.Client, url: str) -> httpx.Response:
     return r
 
 
+JOIN_DATA = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
+JOIN_MAX_PAGES = 10  # 5 jobs a page: at most 50 jobs per company (big lists are far away anyway)
+
+
+def _join(b: Board, search: str) -> list[Job]:
+    """JOIN (join.com): its company page carries the job list as data in the page itself (no feed address,
+    no JavaScript needed). 5 jobs a page, read page by page; 2 s between the requests to join.com."""
+    base = f"https://join.com/companies/{b.key}"
+    jobs = []
+    with httpx.Client(headers=API_HEADERS, timeout=30, follow_redirects=True) as client:
+        for number in range(1, JOIN_MAX_PAGES + 1):
+            page = _polite_get(client, base if number == 1 else f"{base}?page={number}")
+            data = JOIN_DATA.search(page.text)
+            if not data:
+                raise ValueError("The JOIN page has no job data (the page changed?)")
+            info = json.loads(data[1])["props"]["pageProps"]["pageData"]
+            company = clean(((info.get("company") or {}).get("name") or "").split(" | ")[0])
+            listing = info.get("jobs") or {}
+            for j in listing.get("items") or []:
+                if not j.get("title") or not j.get("idParam"):
+                    continue
+                city = j.get("city") or {}
+                place = ", ".join(filter(None, [city.get("cityName"), city.get("countryName")]))
+                kind = {"REMOTE": "Remote", "HYBRID": "Hybrid"}.get(j.get("workplaceType") or "")
+                jobs.append(Job(
+                    title=clean(j["title"]), url=f"{base}/{j['idParam']}", company=company,
+                    location=f"{place} ({kind})" if kind and place else kind or place,
+                    employment=(j.get("employmentType") or {}).get("name") or "",
+                    posted=to_iso(j.get("createdAt")),
+                ))
+            if number >= ((listing.get("pagination") or {}).get("pageCount") or 0):
+                break
+    return jobs
+
+
 GRID = re.compile(r"<div[^>]*class=\"entity-grid entitylist\"[^>]*>")
 
 
@@ -328,6 +365,7 @@ FETCHERS = {
     "Lever": _lever,
     "SmartRecruiters": _smartrecruiters,
     "Recruitee": _recruitee,
+    "Join": _join,
     "Workday": _workday,
     "PowerApps": _powerapps,
     "Oracle": _oracle,

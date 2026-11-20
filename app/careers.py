@@ -237,6 +237,8 @@ def find_systems(html: str, url: str = "") -> list[tuple[str, str, list[str]]]:
             found.append((board.system, key, _feeds_of_known_board(board)))
     text = html.replace("\\/", "/")
     for system, pattern, templates in EXTRA_SYSTEMS:
+        if found and found[0][0] == system:  # Join: a known system now (ats.detect), already in the list
+            continue
         for m in re.finditer(pattern, text, re.I):
             key = m[1].rstrip("/")
             if key.lower() in NOT_A_BOARD_ID:

@@ -89,7 +89,9 @@ def check_link(link_id: int) -> dict:
                                            f"{j.company} | {link['name'] or ''} | {link['url']} | {j.url}")
                 jobs.append({**asdict(j), "dedup_key": dedup_key(j.title, j.company), "hours": verdict.hours,
                              "filter_passed": verdict.passed, "filter_reason": verdict.reason})
-            new = db.insert_new_jobs(link, jobs, baseline=not link["baseline_done"])
+            # The first read with the JOIN reader (v14.8) finds jobs that were there long before: not sent either
+            first_join = result.method == "Join feed" and link.get("method") != "Join feed"
+            new = db.insert_new_jobs(link, jobs, baseline=not link["baseline_done"] or first_join)
             db.remember_emails(result.read_emails)  # only after their jobs are saved
         matching = sum(1 for j in new if j["filter_passed"])
         db.save_check_result(link_id, result.status, result.reason, result.method, result.name,
