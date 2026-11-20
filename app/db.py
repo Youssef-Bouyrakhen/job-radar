@@ -403,6 +403,9 @@ def init_db() -> None:
         # Texts saved before the grammar fix ("Found 1 job postings")
         conn.execute("UPDATE links SET reason = REPLACE(reason, 'Found 1 job postings', 'Found 1 job posting') "
                      "WHERE reason LIKE 'Found 1 job postings%'")
+        # Jobs with an unknown place are sent to Telegram since v14.7, but only those found from then on
+        # (the older ones waiting in the database are not sent in one go). Set once, on the first start.
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('unknown_place_since', ?)", (now(),))
 
 
 # ---- links -------------------------------------------------------------------
@@ -870,18 +873,20 @@ def link_kinds() -> dict[int, dict]:
 
 def jobs_to_notify(min_score: int | None, ai_on: bool, limit: int) -> list[dict]:
     """Good new jobs not sent yet. Not sent: jobs from the very first check of a link
-    (that would be a flood), jobs outside your area or with an unknown place (only shown in the list; sent
-    later if their place turns out to be near), and - while Gemini is on - jobs still waiting for a score."""
+    (that would be a flood), jobs outside your area, and - while Gemini is on - jobs still waiting for a score.
+    A job with an unknown place counts as "maybe near": it is sent with a "Place unknown" note, but only
+    if it was found after `unknown_place_since` (set on the first start of v14.7)."""
     waiting_for_ai = "AND (ai_score IS NOT NULL OR ai_attempts >= 3)" if ai_on else ""
     with connect() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'unknown_place_since'").fetchone()
         rows = conn.execute(
             f"""SELECT id, url, title, company, location, hours, posted_at, first_seen, source,
                        ai_score, ai_reason, area
                 FROM jobs
                 WHERE {shown_sql(min_score)} AND notified = 0 AND baseline = 0 {waiting_for_ai}
-                AND area IN ('near', 'remote')
+                AND (area IN ('near', 'remote') OR (area = 'unknown' AND first_seen >= ?))
                 ORDER BY COALESCE(ai_score, 0) DESC, first_seen DESC LIMIT ?""",
-            (limit,),
+            (row[0] if row else now(), limit),
         ).fetchall()
     return [dict(r) for r in rows]
 

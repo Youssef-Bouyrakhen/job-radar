@@ -106,6 +106,8 @@ def job_message(job: dict) -> str:
     where = " · ".join(filter(None, [job.get("company"), job.get("location") or "Location unknown"]))
     if where:
         lines.append(f"🏢 {e(where)}")
+    if job.get("area") == "unknown":
+        lines.append("📍 <b>Place unknown - check it</b>")
     if job.get("hours"):
         lines.append(f"⏱ {e(job['hours'])}")
     if job.get("posted_at"):

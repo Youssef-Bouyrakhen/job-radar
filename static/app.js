@@ -491,7 +491,7 @@ function jobRow(j, sameCo) {
   const reason = hidden && j.filter_reason ? j.filter_reason : shortReason(j.ai_reason);
   const skills = skillsOf(j);
   const where = pl.kind === 'unknown'
-    ? `<span class="d-warn-s" title="The ad has no place Job Radar could find. Open the ad to check.">${di('warn')}Location unknown${sc.lowered ? ` (was ${sc.raw})` : ''}</span>`
+    ? `<span class="d-warn-s" title="The ad has no place Job Radar could find. Open the ad to check.">${di('warn')}Place unknown - check it${sc.lowered ? ` (AI score ${sc.raw})` : ''}</span>`
     : `<span${pl.title ? ` title="${esc(pl.title)}"` : ''}>${di('pin')}${esc(pl.text)}${pl.km != null ? ` · ${pl.km < 1 ? '<1' : pl.km} km` : ''}${pl.outside ? ' <span class="d-outside">· outside your area</span>' : ''}</span>`;
   const tags = (!j.seen && !hidden ? '<span class="d-tag">New</span>' : '')
     + (applied ? appTagD(j.app_status) : saved && state.view !== 'saved' ? '<span class="d-tag d-grey">Saved</span>' : '')
